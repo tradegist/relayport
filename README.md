@@ -302,6 +302,16 @@ source .env && curl -s -X POST "https://${TRADE_DOMAIN}/ibkr/run-poll" \
   | python3 -m json.tool
 ```
 
+You can optionally override the Flex token and query ID in the request body (defaults to the env vars if omitted):
+
+```bash
+curl -s -X POST "https://trade.example.com/ibkr/run-poll" \
+  -H "Authorization: Bearer <API_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"ibkr_flex_token": "abc", "ibkr_flex_query_id": "123"}' \
+  | python3 -m json.tool
+```
+
 ## SSH Access
 
 The SSH key is saved automatically during deployment. To SSH into the droplet:

@@ -114,14 +114,16 @@ API_PORT = int(os.environ.get("POLLER_API_PORT", "8000"))
 # ---------------------------------------------------------------------------
 # Flex Web Service
 # ---------------------------------------------------------------------------
-def fetch_flex_report():
+def fetch_flex_report(flex_token=None, flex_query_id=None):
     """Two-step Flex Web Service: SendRequest -> GetStatement."""
+    token = flex_token or FLEX_TOKEN
+    query_id = flex_query_id or FLEX_QUERY_ID
     headers = {"User-Agent": USER_AGENT}
 
     # Step 1: request report generation
     resp = httpx.get(
         f"{FLEX_BASE}/SendRequest",
-        params={"t": FLEX_TOKEN, "q": FLEX_QUERY_ID, "v": "3"},
+        params={"t": token, "q": query_id, "v": "3"},
         headers=headers,
         timeout=30.0,
     )
@@ -142,7 +144,7 @@ def fetch_flex_report():
         time.sleep(wait)
         resp = httpx.get(
             f"{FLEX_BASE}/GetStatement",
-            params={"t": FLEX_TOKEN, "q": ref_code, "v": "3"},
+            params={"t": token, "q": ref_code, "v": "3"},
             headers=headers,
             timeout=60.0,
         )
@@ -283,7 +285,7 @@ def aggregate_by_order(trades):
 # ---------------------------------------------------------------------------
 # Poll cycle
 # ---------------------------------------------------------------------------
-def poll_once(conn=None):
+def poll_once(conn=None, flex_token=None, flex_query_id=None):
     """Run a single poll. Returns list of new aggregated orders."""
     close_conn = conn is None
     if close_conn:
@@ -291,7 +293,7 @@ def poll_once(conn=None):
 
     try:
         log.info("Polling Flex Web Service...")
-        xml_text = fetch_flex_report()
+        xml_text = fetch_flex_report(flex_token=flex_token, flex_query_id=flex_query_id)
         if xml_text is None:
             return []
 
@@ -365,11 +367,23 @@ class PollHandler(BaseHTTPRequestHandler):
             self._reply(401, {"error": "Unauthorized"})
             return
 
+        # Read optional JSON body for token/query overrides
+        flex_token = None
+        flex_query_id = None
+        content_len = int(self.headers.get("Content-Length", 0))
+        if content_len > 0:
+            try:
+                body = json.loads(self.rfile.read(content_len))
+                flex_token = body.get("ibkr_flex_token") or None
+                flex_query_id = body.get("ibkr_flex_query_id") or None
+            except (json.JSONDecodeError, Exception):
+                pass  # ignore malformed body, fall back to env vars
+
         if not _poll_lock.acquire(blocking=False):
             self._reply(409, {"error": "Poll already in progress"})
             return
         try:
-            orders = poll_once(_db_conn)
+            orders = poll_once(_db_conn, flex_token=flex_token, flex_query_id=flex_query_id)
             result = orders if isinstance(orders, list) else []
             self._reply(200, {"trades": result})
         except Exception as exc:
