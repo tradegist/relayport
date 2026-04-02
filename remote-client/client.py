@@ -64,7 +64,17 @@ def on_disconnect():
 
 async def reconnect():
     await asyncio.sleep(retry_delay)
-    await connect()
+    if not ib.isConnected():
+        await connect()
+
+
+async def watchdog():
+    """Periodically check the connection and reconnect if stale."""
+    while True:
+        await asyncio.sleep(30)
+        if not ib.isConnected():
+            log.warning("Watchdog: connection lost — reconnecting")
+            await connect()
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +195,9 @@ async def amain():
     await connect()
 
     ib.disconnectedEvent += on_disconnect
+
+    # Start watchdog to detect stale connections
+    asyncio.ensure_future(watchdog())
 
     log.info("Remote client ready. Starting HTTP API on port %d ...", API_PORT)
 
