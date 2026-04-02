@@ -1,12 +1,83 @@
 # IBKR Webhook Relay
 
-One-script deployment of a headless **Interactive Brokers Gateway** with two services: a **remote client** connected to the IB API (for future order placement), and a **Flex poller** that monitors trade confirmations and fires signed webhooks. Runs on a DigitalOcean droplet with browser-based 2FA via noVNC.
+Deploy a fully functional **Interactive Brokers Gateway API** to your own server with a few environment variables and one command.
+
+## Why This Project?
+
+IBKR has a notoriously difficult API. To automate anything — placing orders, getting fill confirmations — you need to run their Java-based Gateway or TWS application. That means either keeping it running on your local machine (impractical for web apps or any always-on service) or setting it up on a remote server (surprisingly painful to get right).
+
+Thankfully, amazing open-source projects like [`ib_async`](https://github.com/ib-api-reloaded/ib_async), [`ib-gateway-docker`](https://github.com/gnzsnz/ib-gateway-docker), and others have made the core pieces much more accessible. This project wouldn't exist without them.
+
+But even with those libraries, you still need to **build a Python app, deploy it somewhere, handle HTTPS, 2FA, reconnections, and webhooks**. That's where this project comes in — it bundles everything into a single `make deploy` that provisions a DigitalOcean droplet (starting at $12/month) with:
+
+- **An HTTPS endpoint to place orders** via a simple REST API
+- **A poller** that checks for trade fills every 10 minutes and sends them to your webhook URL
+
+> **Only one endpoint for now?** Yes — more APIs will be exposed as the need arises. PRs welcome.
+
+> **Why a poller instead of listening for events through the Gateway API?** Because IBKR only allows **one active session per user**. If the Gateway is connected and listening for fills, you can't use the IBKR Client Portal or mobile app at the same time. With the poller approach, you can **close the gateway** when you don't need programmatic order placement, trade normally via web/mobile, and know that ~10 minutes later the poller will detect and forward any fills to your webhook. The poller uses the [Flex Web Service](https://www.interactivebrokers.com/en/software/am/am/reports/activityflexqueries.htm) (a REST API), so it **does not require an active Gateway session**.
+
+## Table of Contents
+
+- [API Endpoints](#api-endpoints)
+- [Architecture](#architecture)
+- [Quick Start](#quick-start-local-deploy)
+- [Configuration](#configuration)
+- [Domains & HTTPS](#domains--https)
+- [Memory & Droplet Sizing](#memory--droplet-sizing)
+- [Gateway Management](#gateway-management)
+- [Placing Orders](#placing-orders)
+- [Webhook Payload](#webhook-payload)
+- [Flex Web Service Setup](#flex-web-service-setup)
+- [On-Demand Poll](#on-demand-poll)
+- [Commands](#commands)
+- [Pause & Resume](#pause--resume)
+- [Security](#security)
+- [GitHub Actions](#github-actions-fork--deploy)
+- [Project Structure](#project-structure)
+- [Current Status](#current-status)
+
+## API Endpoints
+
+All endpoints require `Authorization: Bearer <API_TOKEN>` header.
+
+#### Place an order
+
+```
+POST /ibkr/order
+```
+
+```json
+{
+  "quantity": 2,
+  "symbol": "TSLA",
+  "orderType": "MKT"
+}
+```
+
+Optional fields: `limitPrice` (required for `LMT`), `currency` (default `USD`), `exchange` (default `SMART`).
+
+#### Trigger a poll
+
+```
+POST /ibkr/run-poll
+```
+
+No body required. Immediately polls the Flex Web Service for new fills and sends them to the configured webhook.
+
+#### Health check
+
+```
+GET /health
+```
+
+Returns `{"connected": true}` when the relay has an active connection to IB Gateway, `false` during reconnection (e.g. after a gateway restart). No auth required.
 
 ## Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  DigitalOcean Droplet (auto-sized based on JAVA_HEAP_SIZE)    │
+│  DigitalOcean Droplet (auto-sized based on JAVA_HEAP_SIZE)   │
 │                                                              │
 │  ┌─────────────────┐   Docker    ┌─────────────────────────┐ │
 │  │  ib-gateway     │  Network   │  remote-client           │ │
@@ -228,9 +299,9 @@ Examples:
 ```bash
 make deploy                                    # provision droplet + start containers
 make sync S=gateway                            # update IBKR credentials on the droplet
-make order Q=2 SYM=TSLA T=MKT                 # buy 2 TSLA at market
-make order Q=-2 SYM=TSLA T=LMT P=380          # sell 2 TSLA limit $380
-make order Q=10 SYM=CSPX T=LMT P=590 CUR=EUR  # buy European ETF in EUR
+make order Q=2 SYM=TSLA T=MKT                  # buy 2 TSLA at market
+make order Q=-2 SYM=TSLA T=LMT P=380           # sell 2 TSLA limit $380
+make order Q=10 SYM=CSPX T=LMT P=590 CUR=EUR   # buy European ETF in EUR
 make poll                                      # trigger immediate Flex poll
 make logs                                      # stream poller logs
 make logs S=webhook-relay                      # stream relay logs
@@ -277,17 +348,6 @@ make resume                          # restore from snapshot
     ├── requirements.txt   # httpx
     └── poller.py          # Flex trade poller + webhook sender
 ```
-
-## Key Design Decisions
-
-- **No Firestore/GCP dependency** — all config via `.env` file for true portability
-- **`ib_async`** (not `ib_insync`) — `ib_insync` is archived; `ib_async` is the maintained fork with the same API
-- **IBKR API ports not externally exposed** — the relay connects over the Docker bridge network; no attack surface
-- **Secrets via Terraform `file` provisioner** — transferred over SSH, not embedded in cloud-init `user_data` (which is readable from the DO metadata API)
-- **SSH keypair auto-generated** — Terraform creates an ED25519 key and uploads it to DO; no user setup needed
-- **Exponential backoff reconnection** — handles IBKR's daily gateway reset (~11:45 PM ET)
-- **Flex Web Service for fill monitoring** — polls trade confirmations via REST, no session conflict with web/mobile trading
-- **SQLite deduplication** — each fill's `transactionID` is stored; only new fills trigger webhooks
 
 ## Flex Web Service Setup
 
