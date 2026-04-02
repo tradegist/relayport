@@ -9,16 +9,16 @@ One-script deployment of a headless **Interactive Brokers Gateway** with two ser
 │  DigitalOcean Droplet (s-1vcpu-2gb, $12/mo)                  │
 │                                                              │
 │  ┌─────────────────┐   Docker    ┌─────────────────────────┐ │
-│  │  ib-gateway      │  Network   │  remote-client          │ │
-│  │  gnzsnz/ib-gw    │◄──────────►│  Python 3.11            │ │
-│  │  API: 4003/4004  │            │  ib_async + HTTP API    │ │
-│  │  VNC: 5900       │            │  (order placement)      │ │
-│  └────────┬─────────┘            └──────────▲──────────────┘ │
+│  │  ib-gateway     │  Network   │  remote-client           │ │
+│  │  gnzsnz/ib-gw   │◄──────────►│  Python 3.11             │ │
+│  │  API: 4003/4004 │            │  ib_async + HTTP API     │ │
+│  │  VNC: 5900      │            │  (order placement)       │ │
+│  └────────┬────────┘            └───────────▲──────────────┘ │
 │           │                                 │                │
 │  ┌────────▼─────────┐            ┌──────────┴──────────────┐ │
-│  │  novnc            │           │  poller                 │ │
-│  │  Browser VNC      │           │  Flex Web Service       │ │
-│  │  (2FA access)     │           │  → Webhook POST         │ │
+│  │  novnc           │            │  poller                 │ │
+│  │  Browser VNC     │            │  Flex Web Service       │ │
+│  │  (2FA access)    │            │  → Webhook POST         │ │
 │  └────────▲─────────┘            │  SQLite dedup           │ │
 │           │                      └─────────────────────────┘ │
 │  ┌────────┴─────────────────────────────────┐                │
