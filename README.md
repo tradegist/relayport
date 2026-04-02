@@ -278,7 +278,7 @@ If `TARGET_WEBHOOK_URL` is empty, the relay logs the payload to stdout (dry-run 
 
 ## Commands
 
-All operations are available via `make`. Run `make help` to see the full list:
+All operations are available via `make` or the Python CLI directly. Run `make help` to see the full list:
 
 ```
   make deploy      Deploy infrastructure (Terraform + Docker)
@@ -294,7 +294,21 @@ All operations are available via `make`. Run `make help` to see the full list:
   make ssh         SSH into the droplet
 ```
 
-Examples:
+You can also invoke the CLI directly with `python3 -m cli <command>` — useful on Windows or when Make is not available:
+
+```bash
+python3 -m cli deploy
+python3 -m cli sync gateway
+python3 -m cli order 2 TSLA MKT
+python3 -m cli order -2 TSLA LMT 380
+python3 -m cli poll
+python3 -m cli poll 2 # second poller
+python3 -m cli pause
+python3 -m cli resume
+python3 -m cli destroy
+```
+
+`make` examples:
 
 ```bash
 make deploy                                    # provision droplet + start containers
@@ -313,14 +327,17 @@ make resume                          # restore from snapshot
 ## Project Structure
 
 ```
-├── Makefile               # CLI commands (make deploy, make sync, etc.)
-├── deploy.sh              # Local deployment script
-├── destroy.sh             # Teardown script (permanent)
-├── pause.sh               # Snapshot + delete droplet (save costs)
-├── resume.sh              # Restore droplet from snapshot
-├── sync-env.sh            # Push .env + restart services
-├── order.sh               # Place orders via HTTPS API
-├── poll-now.sh            # Trigger an immediate Flex poll
+├── Makefile               # CLI shortcuts (make deploy, make sync, etc.)
+├── cli/                   # Python CLI (replaces shell scripts)
+│   ├── __init__.py        # Shared helpers (env loading, SSH, DO API, validation)
+│   ├── __main__.py        # Entry point (python3 -m cli <command>)
+│   ├── deploy.py          # Terraform init + apply
+│   ├── destroy.py         # Terraform destroy
+│   ├── pause.py           # Snapshot + delete droplet
+│   ├── resume.py          # Restore from snapshot
+│   ├── sync.py            # Push .env + restart services
+│   ├── order.py           # Place orders via HTTPS API
+│   └── poll.py            # Trigger an immediate Flex poll
 ├── .env.example           # Configuration template
 ├── .github/workflows/
 │   └── deploy.yml         # GitHub Actions workflow
@@ -391,22 +408,22 @@ Place stock orders from your local machine:
 
 ```bash
 # Buy 2 shares of TSLA at market
-./order.sh 2 TSLA MKT
+python3 -m cli order 2 TSLA MKT
 
 # Sell 2 shares of TSLA at market
-./order.sh -2 TSLA MKT
+python3 -m cli order -- -2 TSLA MKT
 
 # Buy 2 shares of TSLA with a limit at $352.50
-./order.sh 2 TSLA LMT 352.5
+python3 -m cli order 2 TSLA LMT 352.5
 
 # Sell 2 shares of TSLA with a limit at $380
-./order.sh -2 TSLA LMT 380
+python3 -m cli order -- -2 TSLA LMT 380
 
 # Buy a European ETF in EUR
-./order.sh 10 CSPX LMT 590 EUR
+python3 -m cli order 10 CSPX LMT 590 EUR
 
 # Buy on a specific exchange
-./order.sh 10 CSPX LMT 590 EUR LSE
+python3 -m cli order 10 CSPX LMT 590 EUR LSE
 ```
 
 Or via `make`:
@@ -470,7 +487,7 @@ Trigger an immediate poll without waiting for the next interval:
 make poll
 ```
 
-Or call the endpoint directly with `curl` (useful from machines where `poll-now.sh` is not available):
+Or call the endpoint directly with `curl`:
 
 ```bash
 source .env && curl -s -X POST "https://${TRADE_DOMAIN}/ibkr/run-poll" \

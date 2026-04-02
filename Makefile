@@ -4,28 +4,28 @@ help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  make %-12s %s\n", $$1, $$2}'
 
 deploy: ## Deploy infrastructure (Terraform + Docker)
-	./deploy.sh
+	python3 -m cli deploy
 
 destroy: ## Permanently destroy all infrastructure
-	./destroy.sh
+	python3 -m cli destroy
 
 pause: ## Snapshot droplet + delete (save costs)
-	./pause.sh
+	python3 -m cli pause
 
 resume: ## Restore droplet from snapshot
-	./resume.sh
+	python3 -m cli resume
 
 sync: ## Push .env + restart all services (or: make sync S=gateway)
-	./sync-env.sh $(S)
+	python3 -m cli sync $(S)
 
 order: ## Place an order (e.g. make order Q=2 SYM=TSLA T=MKT [P=] [CUR=EUR] [EX=LSE])
-	./order.sh $(Q) $(SYM) $(T) $(P) $(CUR) $(EX)
+	python3 -m cli order $(Q) $(SYM) $(T) $(P) $(CUR) $(EX)
 
 poll: ## Trigger an immediate Flex poll
-	./poll-now.sh
+	python3 -m cli poll
 
 poll2: ## Trigger an immediate Flex poll (second poller)
-	./poll-now.sh 2
+	python3 -m cli poll 2
 
 logs: ## Stream poller logs (Ctrl+C to stop)
 	@. ./.env && ssh -i $${SSH_KEY:-$$HOME/.ssh/ibkr-relay} root@$$DROPLET_IP \

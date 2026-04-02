@@ -30,7 +30,7 @@ Caddy reads `VNC_DOMAIN` and `TRADE_DOMAIN` from env vars — the Caddyfile uses
 
 - `JAVA_HEAP_SIZE` in `.env` controls IB Gateway's JVM heap (in MB, default 768, max 10240).
 - **Droplet size is auto-selected** by Terraform based on this value (see `locals` block in `main.tf`).
-- `resume.sh` mirrors the same size-selection logic in shell.
+- `cli/resume.py` mirrors the same size-selection logic in Python.
 
 ## Auth Pattern
 
@@ -48,10 +48,12 @@ Caddy reads `VNC_DOMAIN` and `TRADE_DOMAIN` from env vars — the Caddyfile uses
 ## Code Style
 
 - Python: `logging` module, f-strings, `aiohttp` for async HTTP in webhook-relay, `httpx` for sync HTTP in poller.
-- Shell: `set -euo pipefail`, read config from `.env` via `grep` or `source`, use `${VAR:?message}` for required vars.
+- CLI scripts: Python (`cli/` package), invoked via `python3 -m cli <command>` or `make`. Uses only stdlib (`subprocess`, `urllib.request`, `json`, `os`). No third-party dependencies.
 - Terraform: all secrets marked `sensitive = true` in `variables.tf`.
 
 ## Build & Deploy
+
+All commands available via `make` or `python3 -m cli <command>`:
 
 ```bash
 make deploy    # Terraform init + apply (reads .env)
@@ -59,6 +61,17 @@ make sync      # Push .env to droplet + restart services
 make destroy   # Terraform destroy
 make pause     # Snapshot + delete droplet (save costs)
 make resume    # Restore from snapshot
+make poll      # Trigger immediate Flex poll
+make order     # Place an order
+```
+
+Direct CLI (no Make required, works on Windows):
+
+```bash
+python3 -m cli deploy
+python3 -m cli sync gateway
+python3 -m cli order 2 TSLA MKT
+python3 -m cli poll 2
 ```
 
 ## File Structure
@@ -66,6 +79,16 @@ make resume    # Restore from snapshot
 ```
 .env.example            # Template — copy to .env and fill in real values
 docker-compose.yml      # All 6 services
+cli/                    # Python CLI (operator scripts)
+  __init__.py           # Shared helpers (env loading, SSH, DO API, validation)
+  __main__.py           # Entry point (python3 -m cli <command>)
+  deploy.py             # Terraform init + apply
+  destroy.py            # Terraform destroy
+  pause.py              # Snapshot + delete droplet
+  resume.py             # Restore from snapshot
+  sync.py               # Push .env + restart services
+  order.py              # Place orders via HTTPS API
+  poll.py               # Trigger immediate Flex poll
 caddy/Caddyfile         # Reverse proxy config (uses env vars for domains)
 remote-client/          # webhook-relay service (Python, aiohttp)
 poller/                 # Flex poller service (Python, httpx)
