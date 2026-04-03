@@ -10,6 +10,12 @@
 - **`.env` and `*.tfvars` are gitignored** — never commit them. Use `.env.example` with placeholder values as reference.
 - **Terraform state is gitignored** — `terraform.tfstate` contains SSH keys and IPs. Never commit it.
 
+## Type Safety (MANDATORY)
+
+- **Run `make typecheck` before copying ANY Python file to the droplet.** This is non-negotiable. If mypy fails, do NOT push the code.
+- When modifying any Python file (`.py`), always run `make typecheck` and confirm it passes before deploying.
+- After modifying any model in `models.py`, also run `make types` to regenerate the TypeScript definitions.
+
 ## Architecture
 
 Six Docker containers in a single Compose stack on a DigitalOcean droplet:
