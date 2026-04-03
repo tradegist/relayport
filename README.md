@@ -280,10 +280,19 @@ Each `Trade` includes **all fields** from the IBKR Flex XML (see [`models.py`](m
 The payload is signed with HMAC-SHA256. Verify using the `X-Signature-256` header:
 
 ```python
+# Python
 import hashlib, hmac
 
 expected = hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()
 assert header_value == f"sha256={expected}"
+```
+
+```js
+// Node.js
+const crypto = require("crypto");
+
+const expected = crypto.createHmac("sha256", secret).update(body).digest("hex");
+assert(headerValue === `sha256=${expected}`);
 ```
 
 If `TARGET_WEBHOOK_URL` is empty, the relay logs the payload to stdout (dry-run mode) instead of sending it.
