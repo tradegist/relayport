@@ -361,8 +361,6 @@ After changing a variable in `.env`, restart only the affected service:
 | `VNC_DOMAIN`, `TRADE_DOMAIN`                                                                                                          | caddy         | `make sync S=caddy`   |
 | Multiple services or unsure                                                                                                           | all           | `make sync`           |
 
-```
-
 ## Project Structure
 
 ```
@@ -407,7 +405,7 @@ After changing a variable in `.env`, restart only the affected service:
 ├── flex_parser.py # Flex XML parser (Activity + Trade Confirmation)
 └── poller.py # Flex trade poller + webhook sender
 
-````
+```
 
 ## Flex Web Service Setup
 
@@ -434,7 +432,7 @@ When you need the API again, restart the gateway using either method:
 
 ```bash
 make gateway    # starts the container, then open vnc.example.com for 2FA
-````
+```
 
 **From the browser:**
 
