@@ -1,4 +1,6 @@
-"""IBKR Flex Poller — polls Trade Confirmation Flex Queries and fires webhooks."""
+"""IBKR Flex Poller — polls Activity and Trade Confirmation Flex Queries and fires webhooks."""
+
+from __future__ import annotations
 
 import hashlib
 import hmac
@@ -11,8 +13,12 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from typing import Any
 
 import httpx
+
+from flex_parser import parse_fills, aggregate_fills, _dedup_id
+from models import Trade, WebhookPayload
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,7 +46,7 @@ USER_AGENT = "ibkr-relay/1.0"
 # ---------------------------------------------------------------------------
 # SQLite — deduplication of processed fills
 # ---------------------------------------------------------------------------
-def init_db():
+def init_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS processed_fills (
@@ -58,7 +64,7 @@ def init_db():
     return conn
 
 
-def get_last_poll_ts(conn):
+def get_last_poll_ts(conn: sqlite3.Connection) -> str:
     """Return the last processed trade timestamp, or empty string."""
     row = conn.execute(
         "SELECT value FROM metadata WHERE key = 'last_poll_ts'"
@@ -66,7 +72,7 @@ def get_last_poll_ts(conn):
     return row[0] if row else ""
 
 
-def set_last_poll_ts(conn, ts):
+def set_last_poll_ts(conn: sqlite3.Connection, ts: str) -> None:
     """Update the last processed trade timestamp."""
     conn.execute(
         "INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_poll_ts', ?)",
@@ -74,7 +80,7 @@ def set_last_poll_ts(conn, ts):
     )
 
 
-def get_processed_ids(conn, exec_ids):
+def get_processed_ids(conn: sqlite3.Connection, exec_ids: set[str]) -> set[str]:
     """Return the subset of exec_ids already in the DB."""
     if not exec_ids:
         return set()
@@ -86,7 +92,7 @@ def get_processed_ids(conn, exec_ids):
     return {r[0] for r in rows}
 
 
-def mark_processed(conn, exec_ids):
+def mark_processed(conn: sqlite3.Connection, exec_ids: list[str]) -> None:
     conn.executemany(
         "INSERT OR IGNORE INTO processed_fills (exec_id) VALUES (?)",
         [(eid,) for eid in exec_ids],
@@ -94,7 +100,7 @@ def mark_processed(conn, exec_ids):
     conn.commit()
 
 
-def prune_old(conn, days=30):
+def prune_old(conn: sqlite3.Connection, days: int = 30) -> None:
     conn.execute(
         "DELETE FROM processed_fills WHERE processed_at < datetime('now', ?)",
         (f"-{days} days",),
@@ -105,8 +111,8 @@ def prune_old(conn, days=30):
 # ---------------------------------------------------------------------------
 # Webhook delivery
 # ---------------------------------------------------------------------------
-def send_webhook(payload: dict) -> None:
-    body = json.dumps(payload, default=str, indent=2)
+def send_webhook(payload: WebhookPayload) -> None:
+    body = payload.model_dump_json(indent=2)
 
     if not TARGET_WEBHOOK_URL:
         log.info("Webhook payload (dry-run):\n%s", body)
@@ -142,7 +148,7 @@ API_PORT = int(os.environ.get("POLLER_API_PORT", "8000"))
 # ---------------------------------------------------------------------------
 # Flex Web Service
 # ---------------------------------------------------------------------------
-def fetch_flex_report(flex_token=None, flex_query_id=None):
+def fetch_flex_report(flex_token: str | None = None, flex_query_id: str | None = None) -> str | None:
     """Two-step Flex Web Service: SendRequest -> GetStatement."""
     token = flex_token or FLEX_TOKEN
     query_id = flex_query_id or FLEX_QUERY_ID
@@ -189,134 +195,28 @@ def fetch_flex_report(flex_token=None, flex_query_id=None):
             log.error("GetStatement failed: [%s] %s", err_code, msg)
             return None
 
-        return resp.text
+        return str(resp.text)
 
     log.error("Report generation timed out after retries")
     return None
 
 
-def parse_trades(xml_text):
-    """Parse Flex Query XML for trade records."""
-    root = ET.fromstring(xml_text)
-    trades = []
-    seen = set()
 
-    # Trade Confirmation queries use <TradeConfirmation>,
-    # Activity queries use <Trade> and <Order>. We only want <Trade> entries
-    # (individual fills), not <Order> (aggregated). Skip <Order> because it
-    # has no transactionID and duplicates the fill data.
-    for tag in ("TradeConfirmation", "TradeConfirm", "Trade"):
-        for el in root.iter(tag):
-            exec_id = el.get("transactionID", "") or el.get("ibExecID", "") or el.get("tradeID", "")
-            if not exec_id or exec_id in seen:
-                continue
-            seen.add(exec_id)
-
-            try:
-                qty = float(el.get("quantity", 0))
-            except (ValueError, TypeError):
-                qty = 0.0
-            try:
-                price = float(el.get("tradePrice", 0) or el.get("price", 0))
-            except (ValueError, TypeError):
-                price = 0.0
-            try:
-                commission = float(el.get("ibCommission", 0) or el.get("commission", 0))
-            except (ValueError, TypeError):
-                commission = 0.0
-
-            trades.append({
-                "event": "fill",
-                "symbol": el.get("symbol", ""),
-                "underlyingSymbol": el.get("underlyingSymbol", ""),
-                "secType": el.get("assetCategory", ""),
-                "exchange": el.get("listingExchange", "") or el.get("exchange", ""),
-                "op": el.get("buySell", ""),
-                "quantity": qty,
-                "price": price,
-                "tradeDate": el.get("tradeDate", ""),
-                "tradeTime": el.get("dateTime", ""),
-                "orderTime": el.get("orderTime", ""),
-                "orderId": el.get("ibOrderID", "") or el.get("orderID", ""),
-                "execId": exec_id,
-                "account": el.get("accountId", ""),
-                "commission": commission,
-                "commissionCurrency": el.get("ibCommissionCurrency", "") or el.get("commissionCurrency", ""),
-                "currency": el.get("currency", ""),
-                "orderType": el.get("orderType", ""),
-            })
-
-    return trades
-
-
-def _ibkr_dt_to_iso(dt_str):
-    """Convert IBKR datetime 'YYYYMMDD;HHmmss' to ISO 'YYYY-MM-DDTHH:MM:SS'."""
-    try:
-        d, t = dt_str.split(";")
-        return f"{d[:4]}-{d[4:6]}-{d[6:8]}T{t[:2]}:{t[2:4]}:{t[4:6]}"
-    except (ValueError, IndexError):
-        return dt_str
-
-
-def _ibkr_date_to_iso(d):
-    """Convert IBKR date 'YYYYMMDD' to ISO 'YYYY-MM-DD'."""
-    if len(d) == 8 and d.isdigit():
-        return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
-    return d
-
-
-def aggregate_by_order(trades):
-    """Group individual fills by orderId, compute weighted avg price."""
-    groups = {}
-    for t in trades:
-        oid = t["orderId"]
-        if not oid:
-            continue
-        groups.setdefault(oid, []).append(t)
-
-    results = []
-    for order_id, fills in groups.items():
-        total_qty = sum(f["quantity"] for f in fills)
-        abs_total = sum(abs(f["quantity"]) for f in fills)
-        avg_price = (
-            sum(abs(f["quantity"]) * f["price"] for f in fills) / abs_total
-            if abs_total else 0.0
-        )
-        total_commission = sum(f["commission"] for f in fills)
-
-        first = fills[0]
-        results.append({
-            "event": "fill",
-            "symbol": first["symbol"],
-            "underlyingSymbol": first["underlyingSymbol"],
-            "secType": first["secType"],
-            "exchange": first["exchange"],
-            "op": first["op"],
-            "quantity": total_qty,
-            "avgPrice": round(avg_price, 8),
-            "tradeDate": _ibkr_date_to_iso(max(f["tradeDate"] for f in fills)),
-            "lastFillTime": _ibkr_dt_to_iso(max(f["tradeTime"] for f in fills)),
-            "orderTime": _ibkr_dt_to_iso(first["orderTime"]),
-            "orderId": order_id,
-            "execIds": [f["execId"] for f in fills],
-            "account": first["account"],
-            "commission": round(total_commission, 4),
-            "commissionCurrency": first["commissionCurrency"],
-            "currency": first["currency"],
-            "orderType": first["orderType"],
-            "fillCount": len(fills),
-        })
-
-    return results
 
 
 # ---------------------------------------------------------------------------
 # Poll cycle
 # ---------------------------------------------------------------------------
-def poll_once(conn=None, flex_token=None, flex_query_id=None, debug=False, replay=0):
-    """Run a single poll. Returns list of new aggregated orders."""
+def poll_once(
+    conn: sqlite3.Connection | None = None,
+    flex_token: str | None = None,
+    flex_query_id: str | None = None,
+    debug: bool = False,
+    replay: int = 0,
+) -> list[Trade]:
+    """Run a single poll. Returns list of new aggregated trades."""
     close_conn = conn is None
-    if close_conn:
+    if conn is None:
         conn = init_db()
 
     try:
@@ -325,83 +225,86 @@ def poll_once(conn=None, flex_token=None, flex_query_id=None, debug=False, repla
         if xml_text is None:
             return []
 
-        all_trades = parse_trades(xml_text)
-        log.info("Parsed %d individual fill(s) from Flex report", len(all_trades))
+        all_fills, parse_errors = parse_fills(xml_text)
+        log.info("Parsed %d individual fill(s) from Flex report", len(all_fills))
+
+        if parse_errors:
+            for err in parse_errors:
+                log.warning("Parse: %s", err)
 
         if debug:
             print("--- Raw Flex XML ---")
             print(xml_text)
             print("--- End Raw Flex XML ---")
 
-        if all_trades:
-            trade_times = [t["tradeTime"] for t in all_trades]
-            log.info("Trade time range: %s to %s", min(trade_times), max(trade_times))
-            for t in all_trades:
-                log.info("  Fill: %s %s execId=%s tradeTime=%s",
-                         t["op"], t["symbol"], t["execId"], t["tradeTime"])
+        if all_fills:
+            fill_times = [f.dateTime for f in all_fills]
+            log.info("Trade time range: %s to %s", min(fill_times), max(fill_times))
+            for f in all_fills:
+                log.info("  Fill: %s %s dedup=%s dateTime=%s",
+                         f.buySell, f.symbol, _dedup_id(f), f.dateTime)
 
-        # Always show a sample of the first aggregated order for debugging
-        all_orders = aggregate_by_order(all_trades)
-        if all_orders:
-            log.info("Sample order (first):\n%s", json.dumps(all_orders[0], default=str, indent=2))
+        # Always show a sample of the first aggregated trade for debugging
+        all_trades = aggregate_fills(all_fills)
+        if all_trades:
+            log.info("Sample trade (first):\n%s", all_trades[0].model_dump_json(indent=2))
 
         # Pre-filter by timestamp watermark to reduce dedup work
         last_ts = get_last_poll_ts(conn)
         if last_ts:
-            # Keep trades with timestamp >= last_ts (equal to handle same-second fills)
-            candidates = [t for t in all_trades if t["tradeTime"] >= last_ts]
+            candidates = [f for f in all_fills if f.dateTime >= last_ts]
             log.info("Timestamp pre-filter: %d -> %d candidate(s) (watermark: %s)",
-                     len(all_trades), len(candidates), last_ts)
-            if len(candidates) < len(all_trades):
-                filtered = [t for t in all_trades if t["tradeTime"] < last_ts]
-                for t in filtered:
-                    log.info("  Filtered out: %s %s tradeTime=%s < watermark %s",
-                             t["op"], t["symbol"], t["tradeTime"], last_ts)
+                     len(all_fills), len(candidates), last_ts)
+            if len(candidates) < len(all_fills):
+                filtered = [f for f in all_fills if f.dateTime < last_ts]
+                for f in filtered:
+                    log.info("  Filtered out: %s %s dateTime=%s < watermark %s",
+                             f.buySell, f.symbol, f.dateTime, last_ts)
         else:
-            candidates = all_trades
+            candidates = all_fills
             log.info("No timestamp watermark — processing all %d fill(s)", len(candidates))
 
         # Dedup remaining candidates against stored exec IDs
-        candidate_ids = {t["execId"] for t in candidates}
+        candidate_ids = {_dedup_id(f) for f in candidates}
         already_seen = get_processed_ids(conn, candidate_ids)
-        new_trades = [t for t in candidates if t["execId"] not in already_seen]
-        log.info("%d new fill(s) after dedup", len(new_trades))
+        new_fills = [f for f in candidates if _dedup_id(f) not in already_seen]
+        log.info("%d new fill(s) after dedup", len(new_fills))
 
-        if not new_trades:
-            if replay and all_trades:
-                replay_trades = all_trades[:replay]
-                orders = aggregate_by_order(replay_trades)
-                log.info("Replay mode: resending %d fill(s) as %d order(s)", len(replay_trades), len(orders))
-                send_webhook({"trades": orders})
-                return orders
+        if not new_fills:
+            if replay and all_fills:
+                replay_fills = all_fills[:replay]
+                trades = aggregate_fills(replay_fills)
+                log.info("Replay mode: resending %d fill(s) as %d trade(s)", len(replay_fills), len(trades))
+                send_webhook(WebhookPayload(trades=trades, errors=parse_errors))
+                return trades
             log.info("No new fills")
             return []
 
         # Aggregate only the NEW fills by order
-        orders = aggregate_by_order(new_trades)
-        log.info("Aggregated into %d order(s)", len(orders))
+        trades = aggregate_fills(new_fills)
+        log.info("Aggregated into %d trade(s)", len(trades))
 
-        for order in orders:
+        for trade in trades:
             log.info(
-                "New fill: %s %s %s @ avgPrice %s (qty %s, %d fill(s))",
-                order["op"], order["symbol"], order["orderId"],
-                order["avgPrice"], order["quantity"], order["fillCount"],
+                "New trade: %s %s %s @ price %s (qty %s, %d fill(s))",
+                trade.buySell, trade.symbol, trade.orderId,
+                trade.price, trade.quantity, trade.fillCount,
             )
 
-        # Send a single webhook with all orders
-        send_webhook({"trades": orders})
+        # Send a single webhook with all trades
+        send_webhook(WebhookPayload(trades=trades, errors=parse_errors))
 
         # Mark all fills as processed after successful webhook
-        all_new_exec_ids = [eid for o in orders for eid in o["execIds"]]
-        mark_processed(conn, all_new_exec_ids)
+        all_new_ids = [did for t in trades for did in t.execIds]
+        mark_processed(conn, all_new_ids)
 
         # Update timestamp watermark to the latest trade time
-        max_ts = max(t["tradeTime"] for t in new_trades)
+        max_ts = max(f.dateTime for f in new_fills)
         set_last_poll_ts(conn, max_ts)
         log.info("Updated timestamp watermark to %s", max_ts)
 
-        log.info("Sent 1 webhook with %d trade(s)", len(orders))
-        return orders
+        log.info("Sent 1 webhook with %d trade(s)", len(trades))
+        return trades
     finally:
         if close_conn:
             conn.close()
@@ -418,10 +321,10 @@ _db_conn = None
 
 
 class PollHandler(BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args):
+    def log_message(self, fmt: str, *args: object) -> None:
         log.debug(fmt, *args)
 
-    def do_POST(self):
+    def do_POST(self) -> None:
         if self.path != "/ibkr/run-poll":
             self._reply(404, {"error": "Not found"})
             return
@@ -454,14 +357,14 @@ class PollHandler(BaseHTTPRequestHandler):
         try:
             orders = poll_once(_db_conn, flex_token=flex_token, flex_query_id=flex_query_id, replay=replay)
             result = orders if isinstance(orders, list) else []
-            self._reply(200, {"trades": result})
+            self._reply(200, {"trades": [o.model_dump() for o in result]})
         except Exception as exc:
             log.exception("On-demand poll failed")
             self._reply(500, {"error": str(exc)})
         finally:
             _poll_lock.release()
 
-    def _reply(self, status, body):
+    def _reply(self, status: int, body: dict[str, Any]) -> None:
         data = json.dumps(body, default=str, indent=2).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -470,7 +373,7 @@ class PollHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
-def start_api_server():
+def start_api_server() -> None:
     server = HTTPServer(("0.0.0.0", API_PORT), PollHandler)
     log.info("Poll API listening on 0.0.0.0:%d", API_PORT)
     server.serve_forever()
@@ -479,7 +382,7 @@ def start_api_server():
 # ---------------------------------------------------------------------------
 # Entry points
 # ---------------------------------------------------------------------------
-def main_loop():
+def main_loop() -> None:
     """Continuous polling loop with HTTP API for on-demand polls."""
     global _db_conn
     if not FLEX_TOKEN or not FLEX_QUERY_ID:
@@ -508,7 +411,7 @@ def main_loop():
         time.sleep(POLL_INTERVAL)
 
 
-def main_once():
+def main_once() -> None:
     """Single on-demand poll, then exit."""
     if not FLEX_TOKEN or not FLEX_QUERY_ID:
         log.error("IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID must be set")

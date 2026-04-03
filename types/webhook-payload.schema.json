@@ -1,0 +1,383 @@
+{
+  "$defs": {
+    "Trade": {
+      "additionalProperties": false,
+      "description": "Aggregated trade \u2014 one or more fills grouped by orderId.\n\nNumeric fields (quantity, price, commission, taxes, \u2026) are aggregated.\nString fields use the last fill's value.\n``price`` is the quantity-weighted average across fills.",
+      "properties": {
+        "accountId": {
+          "default": "",
+          "type": "string"
+        },
+        "acctAlias": {
+          "default": "",
+          "type": "string"
+        },
+        "model": {
+          "default": "",
+          "type": "string"
+        },
+        "currency": {
+          "default": "",
+          "type": "string"
+        },
+        "fxRateToBase": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "assetCategory": {
+          "default": "",
+          "type": "string"
+        },
+        "subCategory": {
+          "default": "",
+          "type": "string"
+        },
+        "symbol": {
+          "default": "",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "type": "string"
+        },
+        "conid": {
+          "default": "",
+          "type": "string"
+        },
+        "securityID": {
+          "default": "",
+          "type": "string"
+        },
+        "securityIDType": {
+          "default": "",
+          "type": "string"
+        },
+        "cusip": {
+          "default": "",
+          "type": "string"
+        },
+        "isin": {
+          "default": "",
+          "type": "string"
+        },
+        "figi": {
+          "default": "",
+          "type": "string"
+        },
+        "listingExchange": {
+          "default": "",
+          "type": "string"
+        },
+        "multiplier": {
+          "default": "",
+          "type": "string"
+        },
+        "underlyingConid": {
+          "default": "",
+          "type": "string"
+        },
+        "underlyingSymbol": {
+          "default": "",
+          "type": "string"
+        },
+        "underlyingSecurityID": {
+          "default": "",
+          "type": "string"
+        },
+        "underlyingListingExchange": {
+          "default": "",
+          "type": "string"
+        },
+        "issuer": {
+          "default": "",
+          "type": "string"
+        },
+        "issuerCountryCode": {
+          "default": "",
+          "type": "string"
+        },
+        "strike": {
+          "default": "",
+          "type": "string"
+        },
+        "expiry": {
+          "default": "",
+          "type": "string"
+        },
+        "putCall": {
+          "default": "",
+          "type": "string"
+        },
+        "tradeID": {
+          "default": "",
+          "type": "string"
+        },
+        "transactionId": {
+          "default": "",
+          "type": "string"
+        },
+        "ibExecId": {
+          "default": "",
+          "type": "string"
+        },
+        "brokerageOrderID": {
+          "default": "",
+          "type": "string"
+        },
+        "exchOrderId": {
+          "default": "",
+          "type": "string"
+        },
+        "extExecID": {
+          "default": "",
+          "type": "string"
+        },
+        "orderId": {
+          "default": "",
+          "type": "string"
+        },
+        "orderTime": {
+          "default": "",
+          "type": "string"
+        },
+        "orderType": {
+          "default": "",
+          "type": "string"
+        },
+        "orderReference": {
+          "default": "",
+          "type": "string"
+        },
+        "transactionType": {
+          "default": "",
+          "type": "string"
+        },
+        "exchange": {
+          "default": "",
+          "type": "string"
+        },
+        "buySell": {
+          "default": "",
+          "type": "string"
+        },
+        "quantity": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "price": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "taxes": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "commission": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "commissionCurrency": {
+          "default": "",
+          "type": "string"
+        },
+        "cost": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "fifoPnlRealized": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "tradeMoney": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "proceeds": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "netCash": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "closePrice": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "mtmPnl": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "accruedInt": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "dateTime": {
+          "default": "",
+          "type": "string"
+        },
+        "tradeDate": {
+          "default": "",
+          "type": "string"
+        },
+        "reportDate": {
+          "default": "",
+          "type": "string"
+        },
+        "settleDateTarget": {
+          "default": "",
+          "type": "string"
+        },
+        "openCloseIndicator": {
+          "default": "",
+          "type": "string"
+        },
+        "notes": {
+          "default": "",
+          "type": "string"
+        },
+        "origTradePrice": {
+          "default": "",
+          "type": "string"
+        },
+        "origTradeDate": {
+          "default": "",
+          "type": "string"
+        },
+        "origTradeID": {
+          "default": "",
+          "type": "string"
+        },
+        "origOrderID": {
+          "default": "",
+          "type": "string"
+        },
+        "origTransactionID": {
+          "default": "",
+          "type": "string"
+        },
+        "clearingFirmID": {
+          "default": "",
+          "type": "string"
+        },
+        "relatedTradeID": {
+          "default": "",
+          "type": "string"
+        },
+        "relatedTransactionID": {
+          "default": "",
+          "type": "string"
+        },
+        "rtn": {
+          "default": "",
+          "type": "string"
+        },
+        "volatilityOrderLink": {
+          "default": "",
+          "type": "string"
+        },
+        "openDateTime": {
+          "default": "",
+          "type": "string"
+        },
+        "holdingPeriodDateTime": {
+          "default": "",
+          "type": "string"
+        },
+        "whenRealized": {
+          "default": "",
+          "type": "string"
+        },
+        "whenReopened": {
+          "default": "",
+          "type": "string"
+        },
+        "levelOfDetail": {
+          "default": "",
+          "type": "string"
+        },
+        "changeInPrice": {
+          "default": "",
+          "type": "string"
+        },
+        "changeInQuantity": {
+          "default": "",
+          "type": "string"
+        },
+        "traderID": {
+          "default": "",
+          "type": "string"
+        },
+        "isAPIOrder": {
+          "default": "",
+          "type": "string"
+        },
+        "principalAdjustFactor": {
+          "default": "",
+          "type": "string"
+        },
+        "initialInvestment": {
+          "default": "",
+          "type": "string"
+        },
+        "positionActionID": {
+          "default": "",
+          "type": "string"
+        },
+        "serialNumber": {
+          "default": "",
+          "type": "string"
+        },
+        "deliveryType": {
+          "default": "",
+          "type": "string"
+        },
+        "commodityType": {
+          "default": "",
+          "type": "string"
+        },
+        "fineness": {
+          "default": "",
+          "type": "string"
+        },
+        "weight": {
+          "default": "",
+          "type": "string"
+        },
+        "execIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fillCount": {
+          "default": 0,
+          "type": "integer"
+        }
+      },
+      "title": "Trade",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "trades": {
+      "items": {
+        "$ref": "#/$defs/Trade"
+      },
+      "type": "array"
+    },
+    "errors": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "trades",
+    "errors"
+  ],
+  "title": "WebhookPayload",
+  "type": "object"
+}

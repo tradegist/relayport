@@ -10,6 +10,32 @@
 - **`.env` and `*.tfvars` are gitignored** — never commit them. Use `.env.example` with placeholder values as reference.
 - **Terraform state is gitignored** — `terraform.tfstate` contains SSH keys and IPs. Never commit it.
 
+## Type Safety (MANDATORY)
+
+- **Run `make typecheck` before copying ANY Python file to the droplet.** This is non-negotiable. If mypy fails, do NOT push the code.
+- **Run `make test` before assuming work is done and before copying ANY file to the droplet.** If tests fail, fix them first. Never deploy untested code.
+- When modifying any Python file (`.py`), always run `make test` and `make typecheck` and confirm both pass before deploying.
+- After modifying any model in `models.py`, also run `make types` to regenerate the TypeScript definitions.
+- **Always verify type safety by breaking it first.** After any refactor that touches types or model construction, deliberately introduce a type error (e.g. pass a `str` where `float` is expected), run `make typecheck`, and confirm it **fails**. Then revert and confirm it passes. Never assume mypy catches something — prove it.
+- **Avoid `dict[str, Any]` round-trips.** Never use `model_dump()` → `dict` → `Model(**data)` — mypy cannot type-check `**dict[str, Any]`. Use explicit keyword arguments or `model_copy(update=...)` instead.
+
+## Pydantic Best Practices
+
+- **Use `Field(default_factory=list)`** for mutable defaults (`list`, `dict`). Never use bare `[]` or `{}` as default values — it risks shared mutable state.
+- **Use `ConfigDict(extra="forbid")`** on models that define an external contract (e.g. webhook payloads, API responses). This produces `additionalProperties: false` in the JSON Schema, keeping generated TypeScript types strict (no `[k: string]: unknown`).
+- **Docstrings on `parse_fills()` and similar claim "never raises"** — ensure the implementation matches. Wrap any call that can throw (e.g. `ET.fromstring()`) in try/except and return errors in the result tuple.
+
+## Dependency Management
+
+- **Runtime deps (`poller/requirements.txt`, `remote-client/requirements.txt`)** use exact pins (`==`). These are deployed to production containers — builds must be reproducible.
+- **Dev deps (`requirements-dev.txt`)** use major-version constraints (`>=X,<X+1`). This allows minor/patch updates while preventing breaking changes.
+- **When adding a new dependency**, always pin it immediately — never leave it unpinned. Use exact pin for runtime, major-version constraint for dev.
+
+## Docker
+
+- **`.dockerignore` uses an allowlist** (`*` to exclude everything, then `!` to include only what the Dockerfile needs). This prevents `.env`, `.git/`, `terraform/`, and other sensitive files from leaking into the Docker build context.
+- When modifying a Dockerfile to COPY new files, update `.dockerignore` to allow them.
+
 ## Architecture
 
 Six Docker containers in a single Compose stack on a DigitalOcean droplet:

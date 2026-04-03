@@ -64,7 +64,9 @@ services:
       - "5000"
 
   poller:
-    build: ./poller
+    build:
+      context: .
+      dockerfile: poller/Dockerfile
     restart: always
     env_file: .env
     environment:
@@ -75,7 +77,9 @@ services:
       - poller-data:/data
 
   poller-2:
-    build: ./poller
+    build:
+      context: .
+      dockerfile: poller/Dockerfile
     restart: always
     profiles: ["poller2"]
     environment:

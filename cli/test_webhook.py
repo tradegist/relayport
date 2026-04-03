@@ -2,77 +2,77 @@
 
 import hashlib
 import hmac
-import json
 import urllib.request
 import urllib.error
 
 from cli import load_env, env, die
+from models import Trade, WebhookPayload
 
 
 SAMPLE_TRADES = [
-    {
-        "event": "fill",
-        "symbol": "AAPL",
-        "underlyingSymbol": "AAPL",
-        "secType": "STK",
-        "exchange": "NASDAQ",
-        "op": "BOT",
-        "quantity": 10.0,
-        "avgPrice": 187.5200,
-        "tradeDate": "2026-04-02",
-        "lastFillTime": "2026-04-02T14:30:15",
-        "orderTime": "2026-04-02T14:30:00",
-        "orderId": "1001",
-        "execIds": ["0000e001.fake0001.01.01"],
-        "account": "UXXXXXXX",
-        "commission": 1.0,
-        "commissionCurrency": "USD",
-        "currency": "USD",
-        "orderType": "MKT",
-        "fillCount": 1,
-    },
-    {
-        "event": "fill",
-        "symbol": "TSLA",
-        "underlyingSymbol": "TSLA",
-        "secType": "STK",
-        "exchange": "NASDAQ",
-        "op": "SLD",
-        "quantity": -5.0,
-        "avgPrice": 364.4400,
-        "tradeDate": "2026-04-02",
-        "lastFillTime": "2026-04-02T14:31:02",
-        "orderTime": "2026-04-02T14:30:45",
-        "orderId": "1002",
-        "execIds": ["0000e002.fake0002.01.01", "0000e002.fake0002.01.02"],
-        "account": "UXXXXXXX",
-        "commission": 1.78,
-        "commissionCurrency": "USD",
-        "currency": "USD",
-        "orderType": "LMT",
-        "fillCount": 2,
-    },
-    {
-        "event": "fill",
-        "symbol": "MSFT",
-        "underlyingSymbol": "MSFT",
-        "secType": "STK",
-        "exchange": "NYSE",
-        "op": "BOT",
-        "quantity": 3.0,
-        "avgPrice": 425.1000,
-        "tradeDate": "2026-04-02",
-        "lastFillTime": "2026-04-02T14:32:30",
-        "orderTime": "2026-04-02T14:32:10",
-        "orderId": "1003",
-        "execIds": ["0000e003.fake0003.01.01"],
-        "account": "UXXXXXXX",
-        "commission": 0.65,
-        "commissionCurrency": "USD",
-        "currency": "USD",
-        "orderType": "MKT",
-        "fillCount": 1,
-    },
+    Trade(
+        symbol="AAPL",
+        underlyingSymbol="AAPL",
+        assetCategory="STK",
+        listingExchange="NASDAQ",
+        buySell="BUY",
+        quantity=10.0,
+        price=187.5200,
+        tradeDate="20260402",
+        dateTime="20260402;143015",
+        orderTime="20260402;143000",
+        orderId="1001",
+        transactionId="0000e001.fake0001.01.01",
+        execIds=["0000e001.fake0001.01.01"],
+        accountId="UXXXXXXX",
+        commission=1.0,
+        commissionCurrency="USD",
+        currency="USD",
+        orderType="MKT",
+        fillCount=1,
+    ),
+    Trade(
+        symbol="TSLA",
+        underlyingSymbol="TSLA",
+        assetCategory="STK",
+        listingExchange="NASDAQ",
+        buySell="SELL",
+        quantity=-5.0,
+        price=364.4400,
+        tradeDate="20260402",
+        dateTime="20260402;143102",
+        orderTime="20260402;143045",
+        orderId="1002",
+        transactionId="0000e002.fake0002.01.02",
+        execIds=["0000e002.fake0002.01.01", "0000e002.fake0002.01.02"],
+        accountId="UXXXXXXX",
+        commission=1.78,
+        commissionCurrency="USD",
+        currency="USD",
+        orderType="LMT",
+        fillCount=2,
+    ),
+    Trade(
+        symbol="MSFT",
+        underlyingSymbol="MSFT",
+        assetCategory="STK",
+        listingExchange="NYSE",
+        buySell="BUY",
+        quantity=3.0,
+        price=425.1000,
+        tradeDate="20260402",
+        dateTime="20260402;143230",
+        orderTime="20260402;143210",
+        orderId="1003",
+        transactionId="0000e003.fake0003.01.01",
+        execIds=["0000e003.fake0003.01.01"],
+        accountId="UXXXXXXX",
+        commission=0.65,
+        commissionCurrency="USD",
+        currency="USD",
+        orderType="MKT",
+        fillCount=1,
+    ),
 ]
 
 
@@ -91,8 +91,8 @@ def run(args):
     if not secret:
         die(f"WEBHOOK_SECRET{suffix} is not set in .env")
 
-    payload = {"trades": SAMPLE_TRADES}
-    body = json.dumps(payload, default=str, indent=2)
+    payload = WebhookPayload(trades=SAMPLE_TRADES, errors=[])
+    body = payload.model_dump_json(indent=2)
 
     signature = hmac.new(
         secret.encode(), body.encode(), hashlib.sha256
