@@ -43,9 +43,9 @@ test-webhook: ## Send sample trades to webhook endpoint (make test-webhook [S=2]
 	$(CLI_RELAY_ENV) $(PYTHON) -m cli test-webhook $(S)
 
 types: ## Regenerate TypeScript types from Pydantic models
-	$(PYTHON) schema_gen.py models_poller > types/poller/types.schema.json
+	PYTHONPATH=poller:remote-client $(PYTHON) schema_gen.py models_poller > types/poller/types.schema.json
 	npx --yes json-schema-to-typescript types/poller/types.schema.json > types/poller/types.d.ts
-	$(PYTHON) schema_gen.py models_remote_client > types/http/types.schema.json
+	PYTHONPATH=poller:remote-client $(PYTHON) schema_gen.py models_remote_client > types/http/types.schema.json
 	npx --yes json-schema-to-typescript types/http/types.schema.json > types/http/types.d.ts
 	@echo "Generated types/poller/types.d.ts + types/http/types.d.ts"
 
