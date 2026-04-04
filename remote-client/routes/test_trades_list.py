@@ -1,6 +1,5 @@
 """Unit tests for routes/trades_list.py — GET /ibkr/trades error paths."""
 
-import os
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 from aiohttp import web
