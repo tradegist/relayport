@@ -20,9 +20,7 @@ jobs:
         run: pip install -r requirements-dev.txt -r poller/requirements.txt -r remote-client/requirements.txt
 
       - name: Run unit tests
-        run: PYTHONPATH=.:poller:remote-client python -m pytest -v
+        run: make test PYTHON=python3
 
       - name: Run type checking
-        run: |
-          MYPYPATH=poller python -m mypy poller/ cli/test_webhook.py
-          MYPYPATH=remote-client python -m mypy remote-client/
+        run: make typecheck PYTHON=python3
