@@ -6,6 +6,7 @@ from typing import cast
 
 from ib_async import IB
 from ib_async import Trade as IBTrade
+from ib_async.objects import Fill as IBFill
 
 from models_remote_client import (
     FillDetail,
@@ -27,10 +28,10 @@ def _lmt_price(value: float | Decimal | None) -> float | None:
     return float(value)
 
 
-def _map_fill(fill: object) -> FillDetail:
-    """Convert an ib_async Fill (NamedTuple) to FillDetail."""
-    ex = fill.execution  # type: ignore[attr-defined]
-    cr = fill.commissionReport  # type: ignore[attr-defined]
+def _map_fill(fill: IBFill) -> FillDetail:
+    """Convert an ib_async Fill to FillDetail."""
+    ex = fill.execution
+    cr = fill.commissionReport
     return FillDetail(
         execId=ex.execId,
         time=ex.time.isoformat() if ex.time else "",

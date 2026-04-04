@@ -1,19 +1,20 @@
+import argparse
 import json
 
 from cli import die, load_env, relay_api
 
 
-def run(args: object) -> None:
+def run(args: argparse.Namespace) -> None:
     load_env()
 
-    qty: int = args.quantity  # type: ignore[attr-defined]
-    symbol: str = args.symbol  # type: ignore[attr-defined]
-    order_type: str = args.order_type.upper()  # type: ignore[attr-defined]
-    limit_price: float | None = args.limit_price  # type: ignore[attr-defined]
-    currency: str = args.currency or "USD"  # type: ignore[attr-defined]
-    exchange: str = args.exchange or "SMART"  # type: ignore[attr-defined]
-    tif: str = args.tif.upper()  # type: ignore[attr-defined]
-    outside_rth: bool = args.outside_rth  # type: ignore[attr-defined]
+    qty: int = args.quantity
+    symbol: str = args.symbol
+    order_type: str = args.order_type.upper()
+    limit_price: float | None = args.limit_price
+    currency: str = args.currency or "USD"
+    exchange: str = args.exchange or "SMART"
+    tif: str = args.tif.upper()
+    outside_rth: bool = args.outside_rth
 
     if order_type == "LMT" and limit_price is None:
         die("lmtPrice required for LMT orders")
@@ -29,7 +30,7 @@ def run(args: object) -> None:
         "currency": currency,
     }
 
-    order = {
+    order: dict[str, str | int | float | bool] = {
         "action": action,
         "totalQuantity": abs_qty,
         "orderType": order_type,
@@ -38,7 +39,7 @@ def run(args: object) -> None:
     }
 
     if order_type == "LMT":
-        order["lmtPrice"] = limit_price  # type: ignore[assignment]
+        order["lmtPrice"] = limit_price  # validated non-None above
 
     payload = {"contract": contract, "order": order}
 

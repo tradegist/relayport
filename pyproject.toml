@@ -40,6 +40,7 @@ select = [
     "B",      # flake8-bugbear (common pitfalls)
     "SIM",    # flake8-simplify
     "RUF",    # Ruff-specific rules
+    "PGH003", # Blanket type: ignore without error code
 ]
 ignore = [
     "E501",   # line length — handled by formatter, not linter
