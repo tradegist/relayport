@@ -215,7 +215,7 @@ End-to-end tests run against a local Docker stack with a real IB Gateway connect
 1. Copy the template and fill in your paper account credentials:
 
    ```bash
-   cp remote-client/tests/e2e/.env.test.example remote-client/tests/e2e/.env.test
+   cp .env.test.example .env.test
    # Edit .env.test with your IBKR paper username and password
    ```
 
@@ -496,7 +496,7 @@ After changing a variable in `.env`, restart only the affected service:
 │   │   ├── __init__.py        # Route orchestrator (create_routes)
 │   │   ├── middlewares.py     # Auth middleware (Bearer token)
 │   │   ├── order_place.py     # POST /ibkr/order
-│   │   └── handlers.py        # GET /health
+│   │   └── health.py          # GET /health
 │   └── tests/e2e/             # E2E tests (paper account)
 │       ├── conftest.py        # httpx fixtures
 │       ├── .env.test.example  # Template for paper credentials

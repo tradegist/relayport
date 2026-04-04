@@ -19,3 +19,8 @@ ignore_errors = true
 module = "cli.test_webhook"
 disallow_untyped_defs = false
 disallow_untyped_calls = false
+
+[tool.pytest.ini_options]
+testpaths = ["poller", "remote-client"]
+norecursedirs = ["tests/e2e"]
+addopts = "--import-mode=importlib"

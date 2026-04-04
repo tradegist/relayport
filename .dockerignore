@@ -2,13 +2,8 @@
 
 *
 
-# Poller build needs these:
-
-!poller/models.py
-!poller/requirements.txt
-!poller/main.py
-!poller/poller/__init__.py
-!poller/poller/flex_parser.py
-!poller/routes/__init__.py
-!poller/routes/middlewares.py
-!poller/routes/run.py
+!poller/**
+poller/tests/
+poller/Dockerfile
+poller/**/test_*.py
+poller/**/__pycache__/

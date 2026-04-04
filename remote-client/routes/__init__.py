@@ -3,7 +3,7 @@
 from aiohttp import web
 
 from client import IBClient
-from routes.handlers import handle_health
+from routes.health import handle_health
 from routes.middlewares import auth_middleware
 from routes.order_place import handle_order
 

@@ -1,6 +1,6 @@
-# E2E test stack — paper account, no TLS, no poller, no VNC.
+# E2E test stack — paper account, no TLS, no VNC.
 # Usage: make e2e
-# Env file: remote-client/tests/e2e/.env.test
+# Env file: .env.test
 
 name: ibkr-relay-test
 
@@ -46,3 +46,34 @@ services:
       timeout: 5s
       retries: 20
       start_period: 10s
+
+  poller:
+    build:
+      context: .
+      dockerfile: poller/Dockerfile
+    restart: "no"
+    environment:
+      IBKR_FLEX_TOKEN: test-flex-token
+      IBKR_FLEX_QUERY_ID: "000000"
+      API_TOKEN: test-token
+      POLLER_API_PORT: "8000"
+    ports:
+      - "15001:8000"
+    volumes:
+      - ./poller:/app
+      - poller-test-data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+volumes:
+  poller-test-data:

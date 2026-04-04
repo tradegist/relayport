@@ -20,7 +20,11 @@
 - **Run `make typecheck` before copying ANY Python file to the droplet.** This is non-negotiable. If mypy fails, do NOT push the code.
 - **Run `make test` before assuming work is done and before copying ANY file to the droplet.** If tests fail, fix them first. Never deploy untested code.
 - **Run `make test` and `make typecheck` after every code change**, even refactors. Do not wait until the end — verify immediately.
-- **Run `make e2e` after adding or modifying any E2E test.** E2E tests require the Docker stack — `make test` (unit tests) does not run them. Never assume an E2E test passes without actually running the stack.
+- **Run E2E tests after adding or modifying any E2E test.** E2E tests require the Docker stack — `make test` (unit tests) does not run them. Never assume an E2E test passes without actually running the stack. The E2E workflow is:
+  1. `make e2e-up` — start the stack (idempotent, skips if already running).
+  2. `make e2e-run` — run the tests.
+  3. Fix code → `make e2e-run` → repeat until all tests pass. Volume mounts keep code in sync — no rebuild needed.
+  4. `make e2e-down` — tear down **only after all tests pass**. Never tear down between iterations.
 - When modifying any Python file (`.py`), always run `make test` and `make typecheck` and confirm both pass before deploying.
 - **Every Python file must be covered by `make typecheck`.** When adding a new Python service, package, or standalone script, immediately add it to the mypy invocation in the Makefile. No Python file may exist outside mypy's scope.
 - After modifying any model in `poller/models.py` or `remote-client/models.py`, also run `make types` to regenerate the TypeScript definitions.
@@ -57,8 +61,8 @@
 
 ## Docker
 
-- **`.dockerignore` uses an allowlist** (`*` to exclude everything, then `!` to include only what the Dockerfile needs). This prevents `.env`, `.git/`, `terraform/`, and other sensitive files from leaking into the Docker build context.
-- When modifying a Dockerfile to COPY new files, update `.dockerignore` to allow them.
+- **`.dockerignore` uses an allowlist** (`*` to exclude everything, then `!poller/**` to include the whole module). Tests, `__pycache__`, and the Dockerfile itself are re-excluded. This means adding new source files to `poller/` requires **no** `.dockerignore` or Dockerfile changes.
+- The poller Dockerfile uses directory COPYs (`COPY poller/poller/ ./poller/`, `COPY poller/routes/ ./routes/`) so new files are picked up automatically.
 
 ## Architecture
 
@@ -98,7 +102,7 @@ Caddy reads `VNC_DOMAIN` and `TRADE_DOMAIN` from env vars — the Caddyfile uses
 ## E2E Testing
 
 - **E2E tests run against a local Docker stack** with a real IB Gateway connected to a paper trading account. Real orders are placed in paper mode.
-- **Credentials live in `remote-client/tests/e2e/.env.test`** (gitignored). Template: `.env.test.example`.
+- **Credentials live in `.env.test`** (gitignored). Template: `.env.test.example`.
 - **`docker-compose.test.yml`** at project root defines the test stack (ib-gateway + webhook-relay only, no Caddy/poller/VNC).
 - **`make e2e`** starts the stack, waits for connection, runs pytest, then tears down. Always cleans up, even on test failure.
 - **`make e2e-up` / `make e2e-down`** for manual stack management during debugging.
@@ -121,7 +125,7 @@ remote-client/
     __init__.py            # Orchestrator: create_routes()
     middlewares.py         # Auth middleware (Bearer token)
     order_place.py         # POST /ibkr/order
-    handlers.py            # GET /health
+    health.py              # GET /health
   tests/e2e/               # E2E tests (paper account)
     conftest.py            # httpx fixtures (api + anon_api)
     .env.test.example      # Template for paper credentials

@@ -7,6 +7,7 @@ import sqlite3
 
 from aiohttp import web
 
+from routes.health import handle_health
 from routes.middlewares import auth_middleware
 from routes.run import handle_run_poll
 
@@ -23,6 +24,7 @@ def create_routes(
     app = web.Application(middlewares=[auth_middleware])
     app["db_conn"] = db_conn
     app["poll_lock"] = poll_lock
+    app.router.add_get("/health", handle_health)
     app.router.add_post("/ibkr/poller/run", handle_run_poll)
     return app
 
