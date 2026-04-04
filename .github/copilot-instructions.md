@@ -36,7 +36,8 @@
 
 ## Pydantic Best Practices
 
-- **Use `Field(default_factory=list)`** for mutable defaults (`list`, `dict`). Never use bare `[]` or `{}` as default values — it risks shared mutable state.
+- **Use `Field(default_factory=list)`** for mutable defaults (`list`, `dict`) **only when the field is genuinely optional.** Never use bare `[]` or `{}` as default values — it risks shared mutable state.
+- **Do not add defaults to fields that are always populated.** A default (`= 0`, `= ""`, `= Field(default_factory=list)`) makes the field optional in the generated JSON Schema and TypeScript types (e.g. `fillCount?: number`). If the construction code always provides the value, the field must be required (no default) so the schema reflects the true contract. Only use defaults for fields that are legitimately absent in some cases (e.g. XML attributes that may be missing).
 - **Use `ConfigDict(extra="forbid")`** on models that define an external contract (e.g. webhook payloads, API responses). This produces `additionalProperties: false` in the JSON Schema, keeping generated TypeScript types strict (no `[k: string]: unknown`).
 - **Docstrings on `parse_fills()` and similar claim "never raises"** — ensure the implementation matches. Wrap any call that can throw (e.g. `ET.fromstring()`) in try/except and return errors in the result tuple.
 

@@ -347,7 +347,8 @@
         "status",
         "filled",
         "remaining",
-        "avgFillPrice"
+        "avgFillPrice",
+        "fills"
       ],
       "title": "TradeDetail",
       "type": "object"

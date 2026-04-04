@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 
 class BuySell(str, Enum):
@@ -147,8 +147,8 @@ class Trade(Fill):
     ``price`` is the quantity-weighted average across fills.
     """
 
-    execIds: list[str] = Field(default_factory=list)
-    fillCount: int = 0
+    execIds: list[str]
+    fillCount: int
 
 
 # ── POST /ibkr/poller/run ────────────────────────────────────────────

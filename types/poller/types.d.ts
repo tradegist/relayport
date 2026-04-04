@@ -105,8 +105,8 @@ export interface Trade {
   commodityType?: string;
   fineness?: string;
   weight?: string;
-  execIds?: string[];
-  fillCount?: number;
+  execIds: string[];
+  fillCount: number;
 }
 export interface RunPollResponse {
   trades: Trade[];

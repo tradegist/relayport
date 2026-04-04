@@ -101,7 +101,7 @@ export interface TradeDetail {
   filled: number;
   remaining: number;
   avgFillPrice: number;
-  fills?: FillDetail[];
+  fills: FillDetail[];
 }
 /**
  * Single execution fill within a trade.

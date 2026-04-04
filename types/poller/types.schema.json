@@ -358,12 +358,13 @@
           "type": "array"
         },
         "fillCount": {
-          "default": 0,
           "type": "integer"
         }
       },
       "required": [
-        "buySell"
+        "buySell",
+        "execIds",
+        "fillCount"
       ],
       "title": "Trade",
       "type": "object"

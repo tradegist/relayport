@@ -122,7 +122,7 @@ class TradeDetail(BaseModel):
     avgFillPrice: float
 
     # Fills
-    fills: list[FillDetail] = Field(default_factory=list)
+    fills: list[FillDetail]
 
 
 class ListTradesResponse(BaseModel):
