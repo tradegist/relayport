@@ -1,8 +1,11 @@
 .env
+.env.test
 .pause-state
+.venv/
 terraform/.terraform/
 terraform/.terraform.lock.hcl
 terraform/terraform.tfstate
 terraform/terraform.tfstate.backup
 terraform/*.tfplan
 *.tfvars
+**/__pycache__/

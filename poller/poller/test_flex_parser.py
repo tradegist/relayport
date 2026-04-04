@@ -1,11 +1,9 @@
 """Comprehensive tests for poller/flex_parser.py."""
 
-from __future__ import annotations
-
 import pytest
 
-from flex_parser import _dedup_id, aggregate_fills, parse_fills
-from models import Fill, Trade
+from poller.flex_parser import _dedup_id, aggregate_fills, parse_fills
+from models_poller import BuySell, Fill, Trade
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -161,6 +159,20 @@ class TestParseFillsBasic:
         assert len(errors) == 1
         assert "Failed to parse Flex XML" in errors[0]
 
+    def test_missing_buySell_reports_error(self) -> None:
+        """buySell is required — a fill without it should be skipped with an error."""
+        xml = (
+            '<FlexQueryResponse><FlexStatements><FlexStatement>'
+            '<Trades>'
+            '<Trade transactionID="999" symbol="AAPL" quantity="1" tradePrice="150" />'
+            '</Trades>'
+            '</FlexStatement></FlexStatements></FlexQueryResponse>'
+        )
+        fills, errors = parse_fills(xml)
+        assert fills == []
+        assert len(errors) == 1
+        assert "Failed to create Fill" in errors[0]
+
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Alias / field normalization
@@ -301,7 +313,7 @@ class TestFloatParsing:
 
     def test_positive_float(self) -> None:
         xml = _wrap_af(
-            '<Trade transactionID="1" quantity="42.5" tradePrice="100.25" />'
+            '<Trade transactionID="1" buySell="BUY" quantity="42.5" tradePrice="100.25" />'
         )
         fills, errors = parse_fills(xml)
         assert fills[0].quantity == pytest.approx(42.5)
@@ -309,29 +321,29 @@ class TestFloatParsing:
 
     def test_negative_float(self) -> None:
         xml = _wrap_af(
-            '<Trade transactionID="1" ibCommission="-1.5" />'
+            '<Trade transactionID="1" buySell="BUY" ibCommission="-1.5" />'
         )
         fills, _ = parse_fills(xml)
         assert fills[0].commission == pytest.approx(-1.5)
 
     def test_zero(self) -> None:
-        xml = _wrap_af('<Trade transactionID="1" taxes="0" />')
+        xml = _wrap_af('<Trade transactionID="1" buySell="BUY" taxes="0" />')
         fills, _ = parse_fills(xml)
         assert fills[0].taxes == 0.0
 
     def test_empty_string_becomes_zero(self) -> None:
-        xml = _wrap_af('<Trade transactionID="1" quantity="" />')
+        xml = _wrap_af('<Trade transactionID="1" buySell="BUY" quantity="" />')
         fills, _ = parse_fills(xml)
         assert fills[0].quantity == 0.0
 
     def test_bad_float_reports_error(self) -> None:
-        xml = _wrap_af('<Trade transactionID="1" quantity="abc" />')
+        xml = _wrap_af('<Trade transactionID="1" buySell="BUY" quantity="abc" />')
         fills, errors = parse_fills(xml)
         assert fills[0].quantity == 0.0
         assert any("Bad float" in e and "quantity" in e for e in errors)
 
     def test_bad_float_includes_value_in_error(self) -> None:
-        xml = _wrap_af('<Trade transactionID="1" tradePrice="N/A" />')
+        xml = _wrap_af('<Trade transactionID="1" buySell="BUY" tradePrice="N/A" />')
         fills, errors = parse_fills(xml)
         assert any("N/A" in e for e in errors)
 
@@ -353,39 +365,39 @@ class TestDedup:
 
     def test_duplicate_transactionId_deduped(self) -> None:
         xml = _wrap_af(
-            '<Trade transactionID="999" symbol="AAPL" />',
-            '<Trade transactionID="999" symbol="AAPL" />',
+            '<Trade transactionID="999" buySell="BUY" symbol="AAPL" />',
+            '<Trade transactionID="999" buySell="BUY" symbol="AAPL" />',
         )
         fills, _ = parse_fills(xml)
         assert len(fills) == 1
 
     def test_duplicate_ibExecId_deduped(self) -> None:
         xml = _wrap_af(
-            '<Trade ibExecID="exec.001" symbol="X" />',
-            '<Trade ibExecID="exec.001" symbol="X" />',
+            '<Trade ibExecID="exec.001" buySell="BUY" symbol="X" />',
+            '<Trade ibExecID="exec.001" buySell="BUY" symbol="X" />',
         )
         fills, _ = parse_fills(xml)
         assert len(fills) == 1
 
     def test_duplicate_tradeID_deduped(self) -> None:
         xml = _wrap_af(
-            '<Trade tradeID="T1" symbol="X" />',
-            '<Trade tradeID="T1" symbol="X" />',
+            '<Trade tradeID="T1" buySell="BUY" symbol="X" />',
+            '<Trade tradeID="T1" buySell="BUY" symbol="X" />',
         )
         fills, _ = parse_fills(xml)
         assert len(fills) == 1
 
     def test_different_ids_not_deduped(self) -> None:
         xml = _wrap_af(
-            '<Trade transactionID="1" symbol="AAPL" />',
-            '<Trade transactionID="2" symbol="GOOG" />',
+            '<Trade transactionID="1" buySell="BUY" symbol="AAPL" />',
+            '<Trade transactionID="2" buySell="BUY" symbol="GOOG" />',
         )
         fills, _ = parse_fills(xml)
         assert len(fills) == 2
 
     def test_fill_with_no_id_skipped(self) -> None:
         """A fill with no transactionId, ibExecId, or tradeID is skipped."""
-        xml = _wrap_af('<Trade symbol="AAPL" />')
+        xml = _wrap_af('<Trade buySell="BUY" symbol="AAPL" />')
         fills, _ = parse_fills(xml)
         assert len(fills) == 0
 
@@ -394,10 +406,10 @@ class TestDedup:
         xml = (
             "<FlexQueryResponse><FlexStatements><FlexStatement>"
             "<Trades>"
-            '<Trade ibExecID="exec.001" symbol="AAPL" />'
+            '<Trade ibExecID="exec.001" buySell="BUY" symbol="AAPL" />'
             "</Trades>"
             "<TradeConfirms>"
-            '<TradeConfirm execID="exec.001" symbol="AAPL" />'
+            '<TradeConfirm execID="exec.001" buySell="BUY" symbol="AAPL" />'
             "</TradeConfirms>"
             "</FlexStatement></FlexStatements></FlexQueryResponse>"
         )
@@ -414,19 +426,19 @@ class TestDedupId:
     """_dedup_id returns the best available unique identifier."""
 
     def test_prefers_transactionId(self) -> None:
-        fill = Fill(transactionId="T1", ibExecId="E1", tradeID="X1")
+        fill = Fill(buySell=BuySell.BUY, transactionId="T1", ibExecId="E1", tradeID="X1")
         assert _dedup_id(fill) == "T1"
 
     def test_falls_back_to_ibExecId(self) -> None:
-        fill = Fill(transactionId="", ibExecId="E1", tradeID="X1")
+        fill = Fill(buySell=BuySell.BUY, transactionId="", ibExecId="E1", tradeID="X1")
         assert _dedup_id(fill) == "E1"
 
     def test_falls_back_to_tradeID(self) -> None:
-        fill = Fill(transactionId="", ibExecId="", tradeID="X1")
+        fill = Fill(buySell=BuySell.BUY, transactionId="", ibExecId="", tradeID="X1")
         assert _dedup_id(fill) == "X1"
 
     def test_empty_when_no_ids(self) -> None:
-        fill = Fill()
+        fill = Fill(buySell=BuySell.BUY)
         assert _dedup_id(fill) == ""
 
 
@@ -439,7 +451,7 @@ class TestUnknownAttributes:
 
     def test_unknown_attr_reported(self) -> None:
         xml = _wrap_af(
-            '<Trade transactionID="1" symbol="AAPL" fakeField="xyz" />'
+            '<Trade transactionID="1" buySell="BUY" symbol="AAPL" fakeField="xyz" />'
         )
         fills, errors = parse_fills(xml)
         assert len(fills) == 1
@@ -448,8 +460,8 @@ class TestUnknownAttributes:
     def test_unknown_attr_reported_once(self) -> None:
         """Same unknown field on multiple rows → reported only once."""
         xml = _wrap_af(
-            '<Trade transactionID="1" fakeField="a" />',
-            '<Trade transactionID="2" fakeField="b" />',
+            '<Trade transactionID="1" buySell="BUY" fakeField="a" />',
+            '<Trade transactionID="2" buySell="BUY" fakeField="b" />',
         )
         fills, errors = parse_fills(xml)
         count = sum(1 for e in errors if "fakeField" in e)
@@ -458,7 +470,7 @@ class TestUnknownAttributes:
     def test_tc_specific_fields_reported_as_unknown(self) -> None:
         """TC-only attributes (no model field) are correctly reported."""
         xml = _wrap_tc(
-            '<TradeConfirm tradeID="1" blockID="99" code="P" salesTax="0" />'
+            '<TradeConfirm tradeID="1" buySell="BUY" blockID="99" code="P" salesTax="0" />'
         )
         fills, errors = parse_fills(xml)
         unknown_line = next(e for e in errors if "Unknown XML" in e)
@@ -468,7 +480,7 @@ class TestUnknownAttributes:
 
     def test_multiple_unknown_attrs_sorted(self) -> None:
         xml = _wrap_af(
-            '<Trade transactionID="1" zzz="1" aaa="2" mmm="3" />'
+            '<Trade transactionID="1" buySell="BUY" zzz="1" aaa="2" mmm="3" />'
         )
         _, errors = parse_fills(xml)
         unknown_line = next(e for e in errors if "Unknown XML" in e)
@@ -489,8 +501,8 @@ class TestMalformedRows:
     def test_valid_rows_still_parsed_alongside_bad(self) -> None:
         """Multiple bad floats on separate rows: each row still creates a Fill."""
         xml = _wrap_af(
-            '<Trade transactionID="1" quantity="abc" />',
-            '<Trade transactionID="2" quantity="10" />',
+            '<Trade transactionID="1" buySell="BUY" quantity="abc" />',
+            '<Trade transactionID="2" buySell="BUY" quantity="10" />',
         )
         fills, errors = parse_fills(xml)
         assert len(fills) == 2
@@ -506,12 +518,12 @@ class TestFillTags:
     """All three supported tag names are parsed."""
 
     def test_trade_tag(self) -> None:
-        xml = _wrap_af('<Trade transactionID="1" symbol="A" />')
+        xml = _wrap_af('<Trade transactionID="1" buySell="BUY" symbol="A" />')
         fills, _ = parse_fills(xml)
         assert len(fills) == 1
 
     def test_trade_confirm_tag(self) -> None:
-        xml = _wrap_tc('<TradeConfirm tradeID="1" symbol="B" />')
+        xml = _wrap_tc('<TradeConfirm tradeID="1" buySell="BUY" symbol="B" />')
         fills, _ = parse_fills(xml)
         assert len(fills) == 1
 
@@ -519,7 +531,7 @@ class TestFillTags:
         xml = (
             "<FlexQueryResponse><FlexStatements><FlexStatement>"
             "<TradeConfirmations>"
-            '<TradeConfirmation tradeID="1" symbol="C" />'
+            '<TradeConfirmation tradeID="1" buySell="BUY" symbol="C" />'
             "</TradeConfirmations>"
             "</FlexStatement></FlexStatements></FlexQueryResponse>"
         )
@@ -617,13 +629,13 @@ class TestAggregateMultipleFills:
     def two_fill_trade(self) -> Trade:
         """Two partial fills: 10 @ $100, 20 @ $110 → same orderId."""
         xml = _wrap_af(
-            '<Trade transactionID="F1" ibOrderID="ORD1" symbol="TEST"'
+            '<Trade transactionID="F1" ibOrderID="ORD1" buySell="BUY" symbol="TEST"'
             ' quantity="10" tradePrice="100" ibCommission="-1"'
             ' taxes="-0.5" cost="1000" tradeMoney="1000"'
             ' proceeds="-1000" netCash="-1001.5"'
             ' fifoPnlRealized="10" mtmPnl="5" accruedInt="0.1"'
             ' tradeDate="20250401" dateTime="20250401;100000" />',
-            '<Trade transactionID="F2" ibOrderID="ORD1" symbol="TEST"'
+            '<Trade transactionID="F2" ibOrderID="ORD1" buySell="BUY" symbol="TEST"'
             ' quantity="20" tradePrice="110" ibCommission="-2"'
             ' taxes="-1" cost="2200" tradeMoney="2200"'
             ' proceeds="-2200" netCash="-2203"'
@@ -689,7 +701,7 @@ class TestAggregateEdgeCases:
     """Aggregation corner cases."""
 
     def test_fills_without_orderId_skipped(self) -> None:
-        xml = _wrap_af('<Trade transactionID="1" symbol="X" />')
+        xml = _wrap_af('<Trade transactionID="1" buySell="BUY" symbol="X" />')
         fills, _ = parse_fills(xml)
         assert fills[0].orderId == ""
         trades = aggregate_fills(fills)
@@ -697,8 +709,8 @@ class TestAggregateEdgeCases:
 
     def test_multiple_orders_separate_trades(self) -> None:
         xml = _wrap_af(
-            '<Trade transactionID="A" ibOrderID="ORD1" symbol="AAPL" quantity="1" tradePrice="100" />',
-            '<Trade transactionID="B" ibOrderID="ORD2" symbol="GOOG" quantity="2" tradePrice="200" />',
+            '<Trade transactionID="A" ibOrderID="ORD1" buySell="BUY" symbol="AAPL" quantity="1" tradePrice="100" />',
+            '<Trade transactionID="B" ibOrderID="ORD2" buySell="BUY" symbol="GOOG" quantity="2" tradePrice="200" />',
         )
         fills, _ = parse_fills(xml)
         trades = aggregate_fills(fills)
@@ -709,7 +721,7 @@ class TestAggregateEdgeCases:
     def test_zero_quantity_no_division_error(self) -> None:
         """All fills have quantity=0 — should not crash (division by zero)."""
         xml = _wrap_af(
-            '<Trade transactionID="1" ibOrderID="ORD1" quantity="0" tradePrice="100" />',
+            '<Trade transactionID="1" ibOrderID="ORD1" buySell="BUY" quantity="0" tradePrice="100" />',
         )
         fills, _ = parse_fills(xml)
         trades = aggregate_fills(fills)
@@ -719,8 +731,8 @@ class TestAggregateEdgeCases:
     def test_sell_negative_quantity(self) -> None:
         """Negative quantities (sells) aggregate correctly."""
         xml = _wrap_af(
-            '<Trade transactionID="F1" ibOrderID="ORD1" quantity="-5" tradePrice="100" />',
-            '<Trade transactionID="F2" ibOrderID="ORD1" quantity="-15" tradePrice="110" />',
+            '<Trade transactionID="F1" ibOrderID="ORD1" buySell="SELL" quantity="-5" tradePrice="100" />',
+            '<Trade transactionID="F2" ibOrderID="ORD1" buySell="SELL" quantity="-15" tradePrice="110" />',
         )
         fills, _ = parse_fills(xml)
         trades = aggregate_fills(fills)
@@ -742,11 +754,11 @@ class TestAggregateEdgeCases:
     def test_rounding_precision(self) -> None:
         """Aggregated financial fields are rounded to 4 decimal places."""
         xml = _wrap_af(
-            '<Trade transactionID="F1" ibOrderID="ORD1" quantity="3"'
+            '<Trade transactionID="F1" ibOrderID="ORD1" buySell="BUY" quantity="3"'
             ' tradePrice="10" ibCommission="-0.333333" />',
-            '<Trade transactionID="F2" ibOrderID="ORD1" quantity="3"'
+            '<Trade transactionID="F2" ibOrderID="ORD1" buySell="BUY" quantity="3"'
             ' tradePrice="10" ibCommission="-0.333333" />',
-            '<Trade transactionID="F3" ibOrderID="ORD1" quantity="3"'
+            '<Trade transactionID="F3" ibOrderID="ORD1" buySell="BUY" quantity="3"'
             ' tradePrice="10" ibCommission="-0.333334" />',
         )
         fills, _ = parse_fills(xml)
@@ -779,7 +791,7 @@ class TestFullPipeline:
 
     def test_errors_propagate(self) -> None:
         xml = _wrap_af(
-            '<Trade transactionID="1" ibOrderID="O" quantity="bad" unknownField="x" />'
+            '<Trade transactionID="1" ibOrderID="O" buySell="BUY" quantity="bad" unknownField="x" />'
         )
         fills, errors = parse_fills(xml)
         assert any("Bad float" in e for e in errors)

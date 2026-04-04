@@ -5,6 +5,8 @@
  * and run json-schema-to-typescript to regenerate this file.
  */
 
+export type BuySell = "BUY" | "SELL";
+
 export interface WebhookPayload {
   trades: Trade[];
   errors: string[];
@@ -55,7 +57,7 @@ export interface Trade {
   orderReference?: string;
   transactionType?: string;
   exchange?: string;
-  buySell?: string;
+  buySell: BuySell;
   quantity?: number;
   price?: number;
   taxes?: number;

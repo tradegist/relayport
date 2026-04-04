@@ -5,6 +5,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY client.py .
+COPY main.py ./
+COPY models.py ./
+COPY client/ client/
+COPY routes/ routes/
 
-CMD ["python", "-u", "client.py"]
+CMD ["python", "-u", "main.py"]

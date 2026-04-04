@@ -1,7 +1,5 @@
 """Unit tests for poller.py — parser is mocked (covered by test_flex_parser.py)."""
 
-from __future__ import annotations
-
 import hashlib
 import hmac as hmac_mod
 import json
@@ -11,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from models import Fill, Trade, WebhookPayload
+from models_poller import Fill, Trade, WebhookPayload
 from poller import (
     get_last_poll_ts,
     get_processed_ids,

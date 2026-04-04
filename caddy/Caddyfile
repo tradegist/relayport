@@ -10,12 +10,12 @@
 }
 
 {$TRADE_DOMAIN} {
-    handle /ibkr/run-poll-2 {
-        rewrite * /ibkr/run-poll
+    handle /ibkr/poller/2/* {
+        uri replace /ibkr/poller/2 /ibkr/poller
         reverse_proxy poller-2:8000
     }
 
-    handle /ibkr/run-poll {
+    handle /ibkr/poller/* {
         reverse_proxy poller:8000
     }
 

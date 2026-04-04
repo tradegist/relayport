@@ -1,7 +1,11 @@
+[project]
+requires-python = ">=3.11"
+
 [tool.mypy]
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+explicit_package_bases = true
 
 [[tool.mypy.overrides]]
 module = "httpx"
@@ -15,3 +19,8 @@ ignore_errors = true
 module = "cli.test_webhook"
 disallow_untyped_defs = false
 disallow_untyped_calls = false
+
+[tool.pytest.ini_options]
+testpaths = ["poller", "remote-client"]
+norecursedirs = ["tests/e2e"]
+addopts = "--import-mode=importlib"

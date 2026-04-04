@@ -6,7 +6,14 @@ Trade = one or more fills aggregated by orderId.
 
 from __future__ import annotations
 
+from enum import Enum
+
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class BuySell(str, Enum):
+    BUY = "BUY"
+    SELL = "SELL"
 
 
 class Fill(BaseModel):
@@ -69,7 +76,7 @@ class Fill(BaseModel):
     # ── Trade details ────────────────────────────────────────────────────
     transactionType: str = ""
     exchange: str = ""
-    buySell: str = ""
+    buySell: BuySell
     quantity: float = 0.0
     price: float = 0.0            # AF: tradePrice, TC: price
 

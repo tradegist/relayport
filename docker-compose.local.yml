@@ -1,0 +1,19 @@
+# Local development overrides — no TLS, direct port access.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+
+services:
+  novnc:
+    platform: linux/amd64
+    ports:
+      - "15002:8080"
+
+  webhook-relay:
+    ports:
+      - "15000:5000"
+
+  poller:
+    ports:
+      - "15001:8000"
+
+  caddy:
+    profiles: ["disabled"]

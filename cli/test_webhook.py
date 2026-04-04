@@ -6,7 +6,7 @@ import urllib.request
 import urllib.error
 
 from cli import load_env, env, die
-from models import Trade, WebhookPayload
+from models_poller import BuySell, Trade, WebhookPayload
 
 
 SAMPLE_TRADES = [
@@ -15,7 +15,7 @@ SAMPLE_TRADES = [
         underlyingSymbol="AAPL",
         assetCategory="STK",
         listingExchange="NASDAQ",
-        buySell="BUY",
+        buySell=BuySell.BUY,
         quantity=10.0,
         price=187.5200,
         tradeDate="20260402",
@@ -36,7 +36,7 @@ SAMPLE_TRADES = [
         underlyingSymbol="TSLA",
         assetCategory="STK",
         listingExchange="NASDAQ",
-        buySell="SELL",
+        buySell=BuySell.SELL,
         quantity=-5.0,
         price=364.4400,
         tradeDate="20260402",
@@ -57,7 +57,7 @@ SAMPLE_TRADES = [
         underlyingSymbol="MSFT",
         assetCategory="STK",
         listingExchange="NYSE",
-        buySell="BUY",
+        buySell=BuySell.BUY,
         quantity=3.0,
         price=425.1000,
         tradeDate="20260402",

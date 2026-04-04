@@ -1,21 +1,33 @@
 # IBKR Webhook Relay — Project Guidelines
 
+## Code Quality (MANDATORY)
+
+- **Always apply best practices by default.** Do not ask the user whether to follow a best practice — just do it. Use idiomatic Python naming, file organization, and patterns. When there is a clearly better approach (naming, structure, error handling), use it directly and explain why.
+
 ## Security Rules (MANDATORY)
 
 - **No hardcoded credentials** — passwords, API tokens, secrets, and keys MUST come from environment variables (`.env` file or `TF_VAR_*`). Never write real values in source files.
 - **No hardcoded IPs** — use `DROPLET_IP` from `.env`. In documentation, use `1.2.3.4` as placeholder.
 - **No hardcoded domains** — use `example.com` variants (`vnc.example.com`, `trade.example.com`) in docs and code. Actual domains are loaded at runtime via `VNC_DOMAIN` / `TRADE_DOMAIN` env vars.
 - **No email addresses or personal info** — never write real names, emails, or account IDs in committed files. Use `UXXXXXXX` for IBKR account examples.
-- **No logging of secrets** — never `log.info()` or `print()` tokens, passwords, or API keys. Log actions and outcomes, not credential values.
-- **`.env` and `*.tfvars` are gitignored** — never commit them. Use `.env.example` with placeholder values as reference.
+- **No logging of secrets or sensitive operational data** — never `log.info()` or `print()` tokens, passwords, or API keys. Log actions and outcomes, not credential values. When adding any `log.info()` or `log.debug()` call, check whether the logged value contains sensitive fields (e.g. `accountId`, `acctAlias`, account numbers, IPs, domains). Never log full model dumps at `info` level — use `log.debug` with explicit field exclusion: `log.debug("Trade: %s", trade.model_dump_json(exclude={"accountId", "acctAlias"}))`. Prefer logging counts, symbols, and statuses over full objects.
+- **`.env`, `*.tfvars`, and `.env.test` are gitignored** — never commit them. Use `.env.example` / `.env.test.example` with placeholder values as reference.
 - **Terraform state is gitignored** — `terraform.tfstate` contains SSH keys and IPs. Never commit it.
 
 ## Type Safety (MANDATORY)
 
+- **Python >= 3.11 is required.** The project uses `X | None` union syntax natively (no `from __future__ import annotations`). Docker images use `python:3.11-slim`. Local dev uses a `.venv` created from the latest Homebrew Python.
 - **Run `make typecheck` before copying ANY Python file to the droplet.** This is non-negotiable. If mypy fails, do NOT push the code.
 - **Run `make test` before assuming work is done and before copying ANY file to the droplet.** If tests fail, fix them first. Never deploy untested code.
+- **Run `make test` and `make typecheck` after every code change**, even refactors. Do not wait until the end — verify immediately.
+- **Run E2E tests after adding or modifying any E2E test.** E2E tests require the Docker stack — `make test` (unit tests) does not run them. Never assume an E2E test passes without actually running the stack. The E2E workflow is:
+  1. `make e2e-up` — start the stack (idempotent, skips if already running).
+  2. `make e2e-run` — run the tests.
+  3. Fix code → `make e2e-run` → repeat until all tests pass. Volume mounts keep code in sync — no rebuild needed.
+  4. `make e2e-down` — tear down **only after all tests pass**. Never tear down between iterations.
 - When modifying any Python file (`.py`), always run `make test` and `make typecheck` and confirm both pass before deploying.
-- After modifying any model in `models.py`, also run `make types` to regenerate the TypeScript definitions.
+- **Every Python file must be covered by `make typecheck`.** When adding a new Python service, package, or standalone script, immediately add it to the mypy invocation in the Makefile. No Python file may exist outside mypy's scope.
+- After modifying any model in `poller/models_poller.py` or `remote-client/models_remote_client.py`, also run `make types` to regenerate the TypeScript definitions.
 - **Always verify type safety by breaking it first.** After any refactor that touches types or model construction, deliberately introduce a type error (e.g. pass a `str` where `float` is expected), run `make typecheck`, and confirm it **fails**. Then revert and confirm it passes. Never assume mypy catches something — prove it.
 - **Avoid `dict[str, Any]` round-trips.** Never use `model_dump()` → `dict` → `Model(**data)` — mypy cannot type-check `**dict[str, Any]`. Use explicit keyword arguments or `model_copy(update=...)` instead.
 
@@ -25,6 +37,23 @@
 - **Use `ConfigDict(extra="forbid")`** on models that define an external contract (e.g. webhook payloads, API responses). This produces `additionalProperties: false` in the JSON Schema, keeping generated TypeScript types strict (no `[k: string]: unknown`).
 - **Docstrings on `parse_fills()` and similar claim "never raises"** — ensure the implementation matches. Wrap any call that can throw (e.g. `ET.fromstring()`) in try/except and return errors in the result tuple.
 
+## Concurrency Safety (MANDATORY)
+
+- **Assume concurrency by default.** Both services are async (aiohttp). Any handler can be interrupted at an `await`. When writing new code, always consider what happens if two requests arrive at the same time.
+- **Always be wary of race conditions.** Before merging any code that touches shared state, ask: "Can two callers interleave here? What breaks if they do?"
+- **Never use TOCTOU (Time of Check, Time of Use) patterns with locks.** Do NOT check `lock.locked()` and then `async with lock:` — another coroutine can acquire the lock between the check and the acquisition, defeating the guard. This is a race condition.
+- **Lock acquisition must BE the check.** Use `asyncio.wait_for(lock.acquire(), timeout=0)` with `try/finally: lock.release()` to fail-fast, or accept that `async with lock:` will queue. Never separate "is it locked?" from "acquire it."
+- **This applies to all shared-state guards** — locks, database transactions, file locks, semaphores, balance checks. If the action is "check a condition, then act on it," both steps must be atomic.
+- **Financial operations require extra scrutiny.** Any code path that places orders, moves money, or modifies account state must be reviewed for: race conditions, double-execution, partial failure (what if it crashes between two steps?), and idempotency.
+
+## Local Development
+
+- **`.venv` is the project's virtual environment.** Created by `make setup` using Homebrew Python. All dev dependencies are installed there.
+- **Auto-activation** is configured in `~/.zshrc` via a `chpwd` hook — the venv activates automatically when `cd`'ing into the project directory.
+- **`make setup`** creates the `.venv` (if missing), installs all dependencies (`requirements-dev.txt` + both service requirements), and writes a `.pth` file (see below).
+- **`ibkr-relay.pth`** is created inside `.venv/lib/pythonX.Y/site-packages/` by `make setup`. It adds `poller/` and `remote-client/` to `sys.path` so that `from models_poller import ...` and `from models_remote_client import ...` work everywhere (CLI, tests, scripts) without `sys.path` hacks or `PYTHONPATH`.
+- **`.venv/` is gitignored** — never commit it.
+
 ## Dependency Management
 
 - **Runtime deps (`poller/requirements.txt`, `remote-client/requirements.txt`)** use exact pins (`==`). These are deployed to production containers — builds must be reproducible.
@@ -33,8 +62,9 @@
 
 ## Docker
 
-- **`.dockerignore` uses an allowlist** (`*` to exclude everything, then `!` to include only what the Dockerfile needs). This prevents `.env`, `.git/`, `terraform/`, and other sensitive files from leaking into the Docker build context.
-- When modifying a Dockerfile to COPY new files, update `.dockerignore` to allow them.
+- **Never use `env_file:` in service definitions.** Always declare each env var explicitly in the `environment:` block with `${VAR}` interpolation. This is critical because `env_file:` is internally a list — override files append rather than replace, causing the production `.env` to leak into test containers. Explicit `environment:` vars with `--env-file` interpolation keeps environments fully isolated and allows clean overrides.
+- **`.dockerignore` uses an allowlist** (`*` to exclude everything, then `!poller/**` to include the whole module). Tests, `__pycache__`, and the Dockerfile itself are re-excluded. This means adding new source files to `poller/` requires **no** `.dockerignore` or Dockerfile changes.
+- The poller Dockerfile uses directory COPYs (`COPY poller/poller/ ./poller/`, `COPY poller/routes/ ./routes/`) so new files are picked up automatically.
 
 ## Architecture
 
@@ -49,7 +79,7 @@ Six Docker containers in a single Compose stack on a DigitalOcean droplet:
 | `poller`             | Polls IBKR Flex for trade confirmations, fires webhooks                        |
 | `gateway-controller` | Lightweight sidecar — starts ib-gateway container via Docker socket            |
 
-All secrets are injected via `.env` → `env_file` or `environment` in `docker-compose.yml`.
+All secrets are injected via `.env` → `environment` in `docker-compose.yml`.
 Caddy reads `VNC_DOMAIN` and `TRADE_DOMAIN` from env vars — the Caddyfile uses `{$VNC_DOMAIN}` / `{$TRADE_DOMAIN}` syntax.
 
 ## Memory & Droplet Sizing
@@ -71,10 +101,136 @@ Caddy reads `VNC_DOMAIN` and `TRADE_DOMAIN` from env vars — the Caddyfile uses
 - `restart: on-failure` — Docker restarts only on crashes, not clean exits.
 - Sessions last ~1 week before IBKR forces re-authentication.
 
+## E2E Testing
+
+- **E2E tests run against a local Docker stack** with a real IB Gateway connected to a paper trading account. Real orders are placed in paper mode.
+- **Credentials live in `.env.test`** (gitignored). Template: `.env.test.example`.
+- **`docker-compose.test.yml`** at project root defines the test stack (ib-gateway + webhook-relay only, no Caddy/poller/VNC).
+- **`make e2e`** starts the stack, waits for connection, runs pytest, then tears down. Always cleans up, even on test failure.
+- **`make e2e-up` / `make e2e-down`** for manual stack management during debugging.
+- **Test API runs on `localhost:15000`** with hardcoded token `test-token`.
+- **No healthcheck on `ib-gateway`** — the `IBClient.connect()` handles retry with exponential backoff, same as production.
+- **Paper accounts require no 2FA**, so the E2E stack is fully automated.
+
+## Remote Client Structure
+
+The `remote-client/` service is organized into packages:
+
+```
+remote-client/
+  main.py                  # Entrypoint (connection + HTTP server)
+  models_remote_client.py  # Pydantic request/response models (order API)
+  client/                  # IB Gateway client (namespace delegation)
+    __init__.py            # IBClient class (connection management)
+    orders.py              # OrdersNamespace: place(contract_req, order_req)
+  routes/                  # HTTP route handlers
+    __init__.py            # Orchestrator: create_routes()
+    middlewares.py         # Auth middleware (Bearer token)
+    order_place.py         # POST /ibkr/order
+    health.py              # GET /health
+  tests/e2e/               # E2E tests (paper account)
+    conftest.py            # httpx fixtures (api + anon_api)
+    .env.test.example      # Template for paper credentials
+```
+
+- **One file per route** — easy to find and scale.
+- **Namespace delegation for IBClient** — `client.orders.place(contract_req, order_req)`. Add new namespaces (e.g. `holdings.py`, `quotes.py`) as needed.
+- **Route handlers access the client via `request.app["client"]`**, not closures.
+
+## Poller Structure
+
+The `poller/` service follows the same package pattern:
+
+```
+poller/
+  main.py                  # Entrypoint (polling loop + HTTP API startup)
+  models_poller.py         # Pydantic models: Fill, Trade, WebhookPayload, BuySell
+  poller/                  # Core polling logic (package)
+    __init__.py            # SQLite dedup, webhook delivery, Flex fetch, poll_once()
+    flex_parser.py         # XML parser (Activity Flex + Trade Confirmation)
+    test_flex_parser.py    # Tests for flex_parser
+    test_poller.py         # Tests for poller core logic
+  routes/                  # HTTP API
+    __init__.py            # Orchestrator: create_routes(), start_api_server()
+    middlewares.py         # Auth middleware (Bearer token)
+    run.py                 # POST /ibkr/poller/run handler
+  Dockerfile
+  requirements.txt
+```
+
+- **`poller/poller/`** contains core logic: SQLite dedup, webhook delivery (HMAC-SHA256), Flex Web Service two-step fetch, and `poll_once()`.
+- **`poller/routes/`** contains the HTTP API for on-demand polls (`POST /ibkr/poller/run`).
+- **`poller/models_poller.py`** is the source of truth for TypeScript types (`make types`).
+
+## Models (Two Separate Files)
+
+This project has **two independent model files** with unique names to avoid import ambiguity:
+
+| File                                   | Domain                      | Contains                                                                                 |
+| -------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------- |
+| `poller/models_poller.py`              | Webhook payloads (outbound) | `Fill`, `Trade`, `WebhookPayload`, `BuySell` — parsed from IBKR Flex XML                 |
+| `remote-client/models_remote_client.py`| Order API (inbound)         | `ContractRequest`, `OrderRequest`, `PlaceOrderRequest`, `OrderResponse` — REST API types |
+
+- **Unique filenames** (`models_poller.py`, `models_remote_client.py`) prevent import collisions when both `poller/` and `remote-client/` are on `sys.path` (via the `.pth` file). Use `from models_poller import ...` and `from models_remote_client import ...` everywhere.
+- `models_poller.py` is the source of truth for `IbkrPoller` TypeScript types (`make types`).
+- `models_remote_client.py` is the source of truth for `IbkrHttp` TypeScript types (`make types`).
+- `models_remote_client.py` uses strict `Literal` types (`Action`, `OrderType`, `SecType`, `TimeInForce`) aligned with `ib_async` field names.
+- Both use `ConfigDict(extra="forbid")` for strict validation.
+
+## Order API Payload
+
+The `POST /ibkr/order` endpoint accepts a nested payload mirroring `ib.placeOrder(contract, order)`:
+
+```json
+{
+  "contract": {
+    "symbol": "TSLA",
+    "secType": "STK",
+    "exchange": "SMART",
+    "currency": "USD"
+  },
+  "order": {
+    "action": "BUY",
+    "totalQuantity": 2,
+    "orderType": "LMT",
+    "lmtPrice": 150.0
+  }
+}
+```
+
+- Field names match `ib_async` exactly (e.g. `lmtPrice`, `totalQuantity`, `secType`, `tif`, `outsideRth`).
+- `contract.secType` defaults to `"STK"`, `contract.exchange` to `"SMART"`, `contract.currency` to `"USD"`.
+- `order.tif` defaults to `"DAY"`, `order.outsideRth` to `false`.
+- Pydantic validates the full request; invalid payloads return 400 with structured error details.
+
+## TypeScript Types
+
+- Types are published as `@tradegist/ibkr-types` (npm package in `types/`, not yet published).
+- **Two namespaces**: `IbkrPoller` (webhook payload types) and `IbkrHttp` (order API types).
+- **`make types`** regenerates both from Pydantic models:
+  - `poller/models_poller.py` → `types/poller/webhook.d.ts`
+  - `remote-client/models_remote_client.py` → `types/http/order.d.ts`
+- **Structure:**
+  ```
+  types/
+    index.d.ts                 # Barrel: exports IbkrPoller, IbkrHttp namespaces
+    package.json               # @tradegist/ibkr-types
+    poller/
+      index.d.ts               # Re-exports: BuySell, WebhookPayload, Trade
+      webhook.d.ts             # Generated from poller/models_poller.py
+      webhook.schema.json      # Intermediate JSON Schema
+    http/
+      index.d.ts               # Re-exports: PlaceOrderRequest, ContractRequest, OrderRequest, OrderResponse
+      order.d.ts               # Generated from remote-client/models_remote_client.py
+      order.schema.json        # Intermediate JSON Schema
+  ```
+- **Usage:** `import { IbkrPoller, IbkrHttp } from "@tradegist/ibkr-types"`
+- Both model files have `__main__` blocks that output JSON Schema to stdout (used by the Makefile).
+
 ## Code Style
 
-- Python: `logging` module, f-strings, `aiohttp` for async HTTP in webhook-relay, `httpx` for sync HTTP in poller.
-- CLI scripts: Python (`cli/` package), invoked via `python3 -m cli <command>` or `make`. Uses only stdlib (`subprocess`, `urllib.request`, `json`, `os`). No third-party dependencies.
+- Python: `logging` module, f-strings, `aiohttp` for async HTTP in both webhook-relay and poller, `httpx` for sync HTTP client in poller.
+- CLI scripts: Python (`cli/` package), invoked via `python3 -m cli <command>` or `make`. Uses only stdlib (`subprocess`, `urllib.request`, `json`, `os`). No third-party dependencies. Uses lazy dispatch (`importlib.import_module`) — each command only imports its own module.
 - Terraform: all secrets marked `sensitive = true` in `variables.tf`.
 
 ## Build & Deploy
@@ -89,6 +245,7 @@ make pause     # Snapshot + delete droplet (save costs)
 make resume    # Restore from snapshot
 make poll      # Trigger immediate Flex poll
 make order     # Place an order
+make e2e       # Run E2E tests (paper account)
 ```
 
 Direct CLI (no Make required, works on Windows):
@@ -107,7 +264,7 @@ python3 -m cli poll 2
 docker-compose.yml      # All 6 services
 cli/                    # Python CLI (operator scripts)
   __init__.py           # Shared helpers (env loading, SSH, DO API, validation)
-  __main__.py           # Entry point (python3 -m cli <command>)
+  __main__.py           # Entry point (lazy dispatch via importlib)
   deploy.py             # Terraform init + apply
   destroy.py            # Terraform destroy
   pause.py              # Snapshot + delete droplet
@@ -116,9 +273,12 @@ cli/                    # Python CLI (operator scripts)
   order.py              # Place orders via HTTPS API
   poll.py               # Trigger immediate Flex poll
 caddy/Caddyfile         # Reverse proxy config (uses env vars for domains)
-remote-client/          # webhook-relay service (Python, aiohttp)
-poller/                 # Flex poller service (Python, httpx)
+remote-client/          # webhook-relay service (see Remote Client Structure above)
+poller/                 # Flex poller service (see Poller Structure above)
+  models_poller.py      # Pydantic models: Fill, Trade, WebhookPayload, BuySell
 gateway-controller/     # CGI sidecar (Alpine, busybox httpd)
 novnc/index.html        # Custom VNC UI (Tailwind CSS)
+types/                  # @tradegist/ibkr-types npm package (IbkrPoller + IbkrHttp namespaces)
+docker-compose.test.yml # E2E test stack
 terraform/              # Infrastructure as code (DigitalOcean)
 ```

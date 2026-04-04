@@ -1,0 +1,45 @@
+"""POST /ibkr/poller/run — trigger an on-demand poll."""
+
+import asyncio
+import logging
+
+from aiohttp import web
+
+from poller import poll_once
+
+log = logging.getLogger("poller")
+
+
+async def handle_run_poll(request: web.Request) -> web.Response:
+    db_conn = request.app["db_conn"]
+    poll_lock: asyncio.Lock = request.app["poll_lock"]
+
+    # Parse optional overrides from body
+    flex_token = None
+    flex_query_id = None
+    replay = 0
+    try:
+        body = await request.json()
+        flex_token = body.get("ibkr_flex_token") or None
+        flex_query_id = body.get("ibkr_flex_query_id") or None
+        replay = int(body.get("replay") or 0)
+    except Exception:
+        pass  # no body or malformed — use env defaults
+
+    try:
+        await asyncio.wait_for(poll_lock.acquire(), timeout=0)
+    except asyncio.TimeoutError:
+        return web.json_response({"error": "Poll already in progress"}, status=409)
+
+    try:
+        trades = await asyncio.to_thread(
+            poll_once, db_conn,
+            flex_token=flex_token, flex_query_id=flex_query_id, replay=replay,
+        )
+        result = trades if isinstance(trades, list) else []
+        return web.json_response({"trades": [t.model_dump() for t in result]})
+    except Exception as exc:
+        log.exception("On-demand poll failed")
+        return web.json_response({"error": str(exc)}, status=500)
+    finally:
+        poll_lock.release()

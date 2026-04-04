@@ -34,7 +34,7 @@ New response:
 
 ### 1b. Add `GET /health` on poller (port 8000)
 
-Currently the poller has no health endpoint — only `POST /ibkr/run-poll`.
+Currently the poller has no health endpoint — only `POST /ibkr/poller/run`.
 
 Add a `GET /health` handler returning:
 

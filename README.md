@@ -2,6 +2,9 @@
 
 Deploy a fully functional **Interactive Brokers Gateway API** to your own server with a few environment variables and one command.
 
+> [!WARNING]
+> This project is under active development and not yet ready for prime time. You're welcome to use it, but expect frequent breaking changes.
+
 ## Why This Project?
 
 IBKR has a notoriously difficult API. To automate anything — placing orders, getting fill confirmations — you need to run their Java-based Gateway or TWS application. That means either keeping it running on your local machine (impractical for web apps or any always-on service) or setting it up on a remote server (surprisingly painful to get right).
@@ -33,6 +36,8 @@ But even with those libraries, you still need to **build a Python app, deploy it
 - [Commands](#commands)
 - [Pause & Resume](#pause--resume)
 - [Security](#security)
+- [Testing](#testing)
+- [TypeScript Types](#typescript-types)
 - [GitHub Actions](#github-actions-fork--deploy)
 - [Project Structure](#project-structure)
 - [Current Status](#current-status)
@@ -50,18 +55,24 @@ POST /ibkr/order
 
 ```json
 {
-  "quantity": 2,
-  "symbol": "TSLA",
-  "orderType": "MKT"
+  "contract": {
+    "symbol": "TSLA",
+    "secType": "STK",
+    "exchange": "SMART",
+    "currency": "USD"
+  },
+  "order": {
+    "action": "BUY",
+    "totalQuantity": 2,
+    "orderType": "MKT"
+  }
 }
 ```
-
-Optional fields: `limitPrice` (required for `LMT`), `currency` (default `USD`), `exchange` (default `SMART`).
 
 #### Trigger a poll
 
 ```
-POST /ibkr/run-poll
+POST /ibkr/poller/run
 ```
 
 No body required. Immediately polls the Flex Web Service for new fills and sends them to the configured webhook.
@@ -174,7 +185,7 @@ JAVA_HEAP_SIZE=4096
 # 1. Clone and configure
 git clone https://github.com/OWNER/ibkr_relay.git
 cd ibkr_relay
-make setup        # Install dev dependencies (mypy, pydantic, pytest)
+make setup        # Create .venv and install dependencies
 cp .env.example .env
 # Edit .env with your values
 
@@ -188,6 +199,98 @@ make deploy
 # 4. Tear down when done
 make destroy
 ```
+
+## Testing
+
+### Unit tests
+
+```bash
+make test        # run pytest (poller, parser, models)
+make typecheck   # strict mypy checking
+```
+
+### E2E tests
+
+End-to-end tests run against a local Docker stack with a real IB Gateway connected to a **paper trading account**. Real orders are placed in paper mode.
+
+**Setup:**
+
+1. Copy the template and fill in your paper account credentials:
+
+   ```bash
+   cp .env.test.example .env.test
+   # Edit .env.test with your IBKR paper username and password
+   ```
+
+2. Make sure Docker Desktop is running.
+
+3. Run the tests:
+
+   ```bash
+   make e2e          # start stack → run tests → tear down
+   ```
+
+   Or manage the stack manually:
+
+   ```bash
+   make e2e-up       # start ib-gateway + webhook-relay (paper mode)
+   make e2e-run      # run tests (stack must be up)
+   make e2e-down     # stop and remove containers
+   ```
+
+The test stack exposes the API on `http://localhost:15000` with a hardcoded token (`test-token`). The gateway typically connects within ~20 seconds.
+
+### Local production stack
+
+Run the full production stack on your local machine — no TLS, no Caddy, direct port access:
+
+```bash
+make local-up     # build and start all services
+make local-down   # stop and remove containers
+```
+
+Endpoints after startup:
+
+| Service   | URL                           |
+| --------- | ----------------------------- |
+| REST API  | http://localhost:15000/health |
+| Poller    | http://localhost:15001/health |
+| VNC (2FA) | http://localhost:15002        |
+
+If you change `.env`, refresh the running stack without rebuilding:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+```
+
+## TypeScript Types
+
+Webhook payload and order placement types are available as a TypeScript package under `types/`:
+
+```
+types/
+  index.d.ts                 # Barrel: exports IbkrPoller, IbkrHttp namespaces
+  package.json               # @tradegist/ibkr-types
+  poller/
+    index.d.ts               # Re-exports: BuySell, WebhookPayload, Trade
+    webhook.d.ts             # Generated from poller/models_poller.py
+    webhook.schema.json      # Intermediate JSON Schema
+  http/
+    index.d.ts               # Re-exports: PlaceOrderRequest, ContractRequest, OrderRequest, OrderResponse
+    order.d.ts               # Generated from remote-client/models_remote_client.py
+    order.schema.json        # Intermediate JSON Schema
+```
+
+Usage:
+
+```typescript
+import { IbkrPoller, IbkrHttp } from "@tradegist/ibkr-types";
+
+const payload: IbkrPoller.WebhookPayload = ...;
+const order: IbkrHttp.PlaceOrderRequest = ...;
+```
+
+Types are auto-generated from the Pydantic models via `make types`. The package is not yet published to npm — the API is still evolving.
 
 ## GitHub Actions (Fork & Deploy)
 
@@ -275,7 +378,7 @@ When orders fill, the relay POSTs a JSON payload with all trades batched into a 
 
 The `trades` array contains one `Trade` object per order (fills are aggregated by `orderId`). The `errors` array contains warnings about unknown XML attributes or parse errors — it is empty when everything parsed cleanly. See [Flex XML Parsing](#flex-xml-parsing) for details.
 
-Each `Trade` includes **all fields** from the IBKR Flex XML (see [`models.py`](models.py) for the full list). Fields not present in the XML default to `""` or `0.0`.
+Each `Trade` includes **all fields** from the IBKR Flex XML (see [`poller/models_poller.py`](poller/models_poller.py) for the full list). Most fields not present in the XML default to `""` or `0.0`, but `buySell` must be present; rows missing it are skipped and reported in `errors`.
 
 The payload is signed with HMAC-SHA256. Verify using the `X-Signature-256` header:
 
@@ -307,11 +410,17 @@ All operations are available via `make` or the Python CLI directly. Run `make he
   make pause       Snapshot droplet + delete (save costs)
   make resume      Restore droplet from snapshot
   make sync        Push .env + restart all services (or: make sync S=gateway)
-  make order       Place an order (e.g. make order Q=2 SYM=TSLA T=MKT [P=] [CUR=EUR] [EX=LSE])
+  make order       Place a stock order (e.g. make order Q=2 SYM=TSLA T=MKT [P=] [CUR=EUR] [EX=LSE] [TIF=GTC] [RTH=1])
   make poll        Trigger an immediate Flex poll (V=1 verbose, DEBUG=1 XML, REPLAY=N resend)
   make test-webhook Send sample trades to webhook endpoint
   make test         Run unit tests (pytest)
   make typecheck    Run mypy strict type checking
+  make e2e          Run E2E tests against local paper account
+  make e2e-up       Start E2E test stack (IB Gateway + webhook-relay)
+  make e2e-run      Run E2E tests (stack must be up)
+  make e2e-down     Stop and remove E2E test stack
+  make local-up    Start full stack locally (no TLS, direct port access)
+  make local-down  Stop local stack
   make gateway     Start IB Gateway container (then open VNC for 2FA)
   make logs        Stream poller logs (Ctrl+C to stop)
   make stats       Show container resource usage
@@ -376,8 +485,8 @@ After changing a variable in `.env`, restart only the affected service:
 
 ├── Makefile # CLI shortcuts (make deploy, make sync, etc.)
 ├── cli/ # Python CLI (replaces shell scripts)
-│ ├── **init**.py # Shared helpers (env loading, SSH, DO API, validation)
-│ ├── **main**.py # Entry point (python3 -m cli <command>)
+│ ├── __init__.py # Shared helpers (env loading, SSH, DO API, validation)
+│ ├── __main__.py # Entry point (python3 -m cli <command>)
 │ ├── deploy.py # Terraform init + apply
 │ ├── destroy.py # Terraform destroy
 │ ├── pause.py # Snapshot + delete droplet
@@ -405,14 +514,45 @@ After changing a variable in `.env`, restart only the affected service:
 │ └── gateway-status.sh # CGI script to check ib-gateway status
 ├── remote-client/
 │ ├── Dockerfile
-│ ├── requirements.txt # ib_async, aiohttp
-│ └── client.py # IB Gateway client + authenticated order API
-├── models.py # Pydantic models (Fill, Trade, WebhookPayload)
-└── poller/
-├── Dockerfile
-├── requirements.txt # httpx, pydantic
-├── flex_parser.py # Flex XML parser (Activity + Trade Confirmation)
-└── poller.py # Flex trade poller + webhook sender
+│   ├── requirements.txt       # ib_async, aiohttp
+│   ├── main.py                # Entrypoint (connection + HTTP server)
+│   ├── models_remote_client.py # Pydantic models (order API types)
+│   ├── client/                # IB Gateway client (namespace delegation)
+│   │   ├── __init__.py        # IBClient class (connection management)
+│   │   └── orders.py          # OrdersNamespace (place orders)
+│   ├── routes/                # HTTP route handlers
+│   │   ├── __init__.py        # Route orchestrator (create_routes)
+│   │   ├── middlewares.py     # Auth middleware (Bearer token)
+│   │   ├── order_place.py     # POST /ibkr/order
+│   │   └── health.py          # GET /health
+│   └── tests/e2e/             # E2E tests (paper account)
+│       ├── conftest.py        # httpx fixtures
+│       ├── .env.test.example  # Template for paper credentials
+│       └── .env.test          # Your paper credentials (gitignored)
+├── poller/
+│   ├── Dockerfile
+│   ├── requirements.txt       # httpx, pydantic, aiohttp
+│   ├── main.py                # Entrypoint (polling loop + HTTP API)
+│   ├── models_poller.py       # Pydantic models (Fill, Trade, WebhookPayload, BuySell)
+│   ├── poller/                # Core polling logic (package)
+│   │   ├── __init__.py        # SQLite dedup, webhook delivery, Flex fetch, poll_once()
+│   │   ├── flex_parser.py     # Flex XML parser (Activity + Trade Confirmation)
+│   │   ├── test_flex_parser.py # Tests for flex_parser
+│   │   └── test_poller.py     # Tests for poller core logic
+│   └── routes/                # HTTP API
+│       ├── __init__.py        # Route orchestrator (create_routes, start_api_server)
+│       ├── middlewares.py     # Auth middleware (Bearer token)
+│       └── run.py             # POST /ibkr/poller/run handler
+├── docker-compose.test.yml    # E2E test stack (ib-gateway + webhook-relay)
+└── types/                     # @tradegist/ibkr-types npm package
+    ├── index.d.ts             # Barrel: exports IbkrPoller, IbkrHttp namespaces
+    ├── package.json
+    ├── poller/                # IbkrPoller namespace
+    │   ├── index.d.ts
+    │   └── webhook.d.ts       # Generated from poller/models_poller.py
+    └── http/                  # IbkrHttp namespace
+        ├── index.d.ts
+        └── order.d.ts         # Generated from remote-client/models_remote_client.py
 
 ```
 
@@ -454,7 +594,7 @@ If 2FA times out before you complete it, the gateway exits cleanly and stops (it
 
 ## Placing Orders
 
-Place stock orders from your local machine:
+Place stock orders from your local machine. The CLI is a convenience wrapper for `POST /ibkr/order` — it only supports `secType: STK` (stocks/ETFs). For other security types, call the API directly.
 
 ```bash
 # Buy 2 shares of TSLA at market
@@ -474,6 +614,12 @@ python3 -m cli order 10 CSPX LMT 590 EUR
 
 # Buy on a specific exchange
 python3 -m cli order 10 CSPX LMT 590 EUR LSE
+
+# Good-til-cancelled order
+python3 -m cli order 2 TSLA LMT 300 --tif GTC
+
+# Allow execution outside regular trading hours
+python3 -m cli order 2 TSLA LMT 300 --outside-rth
 ```
 
 Or via `make`:
@@ -483,6 +629,8 @@ make order Q=2 SYM=TSLA T=MKT
 make order Q=-2 SYM=TSLA T=LMT P=380
 make order Q=10 SYM=CSPX T=LMT P=590 CUR=EUR
 make order Q=10 SYM=CSPX T=LMT P=590 CUR=EUR EX=LSE
+make order Q=2 SYM=TSLA T=LMT P=300 TIF=GTC
+make order Q=2 SYM=TSLA T=LMT P=300 RTH=1
 ```
 
 Positive quantity = **BUY**, negative = **SELL**. The script calls `https://<TRADE_DOMAIN>/ibkr/order` over HTTPS with Bearer token authentication.
@@ -493,16 +641,16 @@ You can also call the API directly:
 curl -X POST https://trade.example.com/ibkr/order \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <API_TOKEN>" \
-  -d '{"quantity": 2, "symbol": "TSLA", "orderType": "MKT"}'
+  -d '{"contract": {"symbol": "TSLA"}, "order": {"action": "BUY", "totalQuantity": 2, "orderType": "MKT"}}'
 ```
 
-For non-US stocks or ETFs, pass `exchange` and `currency` (default: `SMART` and `USD`):
+For non-US stocks or ETFs, pass `exchange` and `currency` in the `contract` object (default: `SMART` and `USD`):
 
 ```bash
 curl -X POST https://trade.example.com/ibkr/order \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <API_TOKEN>" \
-  -d '{"quantity": 10, "symbol": "CSPX", "orderType": "LMT", "limitPrice": 590, "exchange": "SMART", "currency": "EUR"}'
+  -d '{"contract": {"symbol": "CSPX", "exchange": "SMART", "currency": "EUR"}, "order": {"action": "BUY", "totalQuantity": 10, "orderType": "LMT", "lmtPrice": 590}}'
 ```
 
 Example response:
@@ -513,19 +661,12 @@ Example response:
   "orderId": 8,
   "action": "BUY",
   "symbol": "TSLA",
-  "quantity": 1,
+  "totalQuantity": 2,
   "orderType": "MKT"
 }
 ```
 
-| Field        | Required | Default | Description                           |
-| ------------ | -------- | ------- | ------------------------------------- |
-| `quantity`   | Yes      | —       | Positive = BUY, negative = SELL       |
-| `symbol`     | Yes      | —       | Ticker symbol                         |
-| `orderType`  | Yes      | —       | `MKT` or `LMT`                        |
-| `limitPrice` | LMT only | —       | Limit price                           |
-| `exchange`   | No       | `SMART` | Exchange (SMART routes automatically) |
-| `currency`   | No       | `USD`   | Trading currency (EUR, GBP, etc.)     |
+Field names mirror `ib_async` exactly (e.g. `lmtPrice`, `totalQuantity`, `secType`, `tif`, `outsideRth`). See [`remote-client/models_remote_client.py`](remote-client/models_remote_client.py) for the full schema.
 
 > **Note**: The gateway must have `READ_ONLY_API=no` for orders to be accepted.
 
@@ -558,7 +699,7 @@ python3 -m cli poll --replay 3   # resend 3 trades
 You can also call the endpoint directly with `curl`:
 
 ```bash
-source .env && curl -s -X POST "https://${TRADE_DOMAIN}/ibkr/run-poll" \
+source .env && curl -s -X POST "https://${TRADE_DOMAIN}/ibkr/poller/run" \
   -H "Authorization: Bearer ${API_TOKEN}" \
   | python3 -m json.tool
 ```
@@ -566,7 +707,7 @@ source .env && curl -s -X POST "https://${TRADE_DOMAIN}/ibkr/run-poll" \
 You can optionally override the Flex token and query ID in the request body (defaults to the env vars if omitted):
 
 ```bash
-curl -s -X POST "https://trade.example.com/ibkr/run-poll" \
+curl -s -X POST "https://trade.example.com/ibkr/poller/run" \
   -H "Authorization: Bearer <API_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"ibkr_flex_token": "abc", "ibkr_flex_query_id": "123"}' \
@@ -643,6 +784,8 @@ make logs S=ib-gateway
 - [x] Makefile CLI (`make deploy`, `make order`, etc.)
 - [x] Gateway management (browser Start Gateway button + `make gateway`)
 - [x] Unified Flex XML parsing (Activity + Trade Confirmation)
+- [x] TypeScript type definitions (`@tradegist/ibkr-types`, not yet published)
+- [x] E2E test infrastructure (Docker-based, paper account)
 - [ ] Health monitoring / alerting
 
 ## Flex XML Parsing
@@ -663,7 +806,7 @@ The poller supports both **Activity Flex Queries** (`<Trade>` tags) and **Trade 
   | `settleDateTarget`   | `settleDateTarget`      | `settleDate`                 |
   | `tradeMoney`         | `tradeMoney`            | `amount`                     |
 
-- **All known fields are forwarded as-is** from the XML. The full list of supported fields is defined in [`models.py`](models.py). Unknown XML attributes are silently dropped but reported in the `errors` array of the webhook payload.
+- **All known fields are forwarded as-is** from the XML. The full list of supported fields is defined in [`poller/models_poller.py`](poller/models_poller.py). Unknown XML attributes are silently dropped but reported in the `errors` array of the webhook payload.
 
 - **Fills are aggregated into trades** by `orderId`. When an order has multiple fills:
   - `quantity` is the sum of all fills

@@ -1,0 +1,188 @@
+{
+  "$defs": {
+    "ContractRequest": {
+      "additionalProperties": false,
+      "description": "Contract fields for identifying the instrument (mirrors ib_async.Contract).",
+      "properties": {
+        "symbol": {
+          "type": "string"
+        },
+        "secType": {
+          "default": "STK",
+          "enum": [
+            "STK",
+            "OPT",
+            "FUT",
+            "IND",
+            "FOP",
+            "CASH",
+            "CFD",
+            "BAG",
+            "WAR",
+            "BOND",
+            "CMDTY",
+            "NEWS",
+            "FUND",
+            "CRYPTO",
+            "EVENT"
+          ],
+          "type": "string"
+        },
+        "exchange": {
+          "default": "SMART",
+          "type": "string"
+        },
+        "currency": {
+          "default": "USD",
+          "type": "string"
+        },
+        "primaryExchange": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol"
+      ],
+      "title": "ContractRequest",
+      "type": "object"
+    },
+    "OrderRequest": {
+      "additionalProperties": false,
+      "description": "Order fields for specifying the trade (mirrors ib_async.Order).",
+      "properties": {
+        "action": {
+          "enum": [
+            "BUY",
+            "SELL"
+          ],
+          "type": "string"
+        },
+        "totalQuantity": {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "orderType": {
+          "enum": [
+            "MKT",
+            "LMT"
+          ],
+          "type": "string"
+        },
+        "lmtPrice": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tif": {
+          "default": "DAY",
+          "enum": [
+            "DAY",
+            "GTC",
+            "IOC",
+            "GTD",
+            "OPG",
+            "FOK",
+            "DTC"
+          ],
+          "type": "string"
+        },
+        "outsideRth": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action",
+        "totalQuantity",
+        "orderType"
+      ],
+      "title": "OrderRequest",
+      "type": "object"
+    },
+    "PlaceOrderRequest": {
+      "additionalProperties": false,
+      "description": "Top-level request body for POST /ibkr/order.",
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/ContractRequest"
+        },
+        "order": {
+          "$ref": "#/$defs/OrderRequest"
+        }
+      },
+      "required": [
+        "contract",
+        "order"
+      ],
+      "title": "PlaceOrderRequest",
+      "type": "object"
+    },
+    "OrderResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "orderId": {
+          "type": "integer"
+        },
+        "action": {
+          "enum": [
+            "BUY",
+            "SELL"
+          ],
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "totalQuantity": {
+          "type": "number"
+        },
+        "orderType": {
+          "enum": [
+            "MKT",
+            "LMT"
+          ],
+          "type": "string"
+        },
+        "lmtPrice": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "status",
+        "orderId",
+        "action",
+        "symbol",
+        "totalQuantity",
+        "orderType"
+      ],
+      "title": "OrderResponse",
+      "type": "object"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/PlaceOrderRequest"
+    },
+    {
+      "$ref": "#/$defs/OrderResponse"
+    }
+  ]
+}

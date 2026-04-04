@@ -1,5 +1,13 @@
 {
   "$defs": {
+    "BuySell": {
+      "enum": [
+        "BUY",
+        "SELL"
+      ],
+      "title": "BuySell",
+      "type": "string"
+    },
     "Trade": {
       "additionalProperties": false,
       "description": "Aggregated trade \u2014 one or more fills grouped by orderId.\n\nNumeric fields (quantity, price, commission, taxes, \u2026) are aggregated.\nString fields use the last fill's value.\n``price`` is the quantity-weighted average across fills.",
@@ -157,8 +165,7 @@
           "type": "string"
         },
         "buySell": {
-          "default": "",
-          "type": "string"
+          "$ref": "#/$defs/BuySell"
         },
         "quantity": {
           "default": 0.0,
@@ -355,6 +362,9 @@
           "type": "integer"
         }
       },
+      "required": [
+        "buySell"
+      ],
       "title": "Trade",
       "type": "object"
     }

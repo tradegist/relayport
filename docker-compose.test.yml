@@ -1,0 +1,60 @@
+# E2E test overrides — applied on top of docker-compose.yml.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.test.yml ...
+# See Makefile E2E_COMPOSE for the full invocation.
+
+services:
+  ib-gateway:
+    restart: "no"
+
+  webhook-relay:
+    restart: "no"
+    environment:
+      API_TOKEN: test-token
+    ports:
+      - "15000:5000"
+    volumes:
+      - ./remote-client:/app
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')",
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  poller:
+    restart: "no"
+    environment:
+      IBKR_FLEX_TOKEN: test-flex-token
+      IBKR_FLEX_QUERY_ID: "000000"
+      API_TOKEN: test-token
+      POLLER_API_PORT: "8000"
+    ports:
+      - "15001:8000"
+    volumes:
+      - ./poller:/app
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  # Disable production-only services
+  novnc:
+    profiles: ["disabled"]
+  caddy:
+    profiles: ["disabled"]
+  gateway-controller:
+    profiles: ["disabled"]

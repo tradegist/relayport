@@ -1,30 +1,18 @@
-"""IBKR Flex Poller — polls Activity and Trade Confirmation Flex Queries and fires webhooks."""
-
-from __future__ import annotations
+"""IBKR Flex Poller — core polling logic, SQLite dedup, and webhook delivery."""
 
 import hashlib
 import hmac
-import json
 import logging
 import os
 import sqlite3
-import sys
-import threading
 import time
 import xml.etree.ElementTree as ET
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from typing import Any
 
 import httpx
 
-from flex_parser import parse_fills, aggregate_fills, _dedup_id
-from models import Trade, WebhookPayload
+from models_poller import Trade, WebhookPayload
+from .flex_parser import parse_fills, aggregate_fills, _dedup_id
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
 log = logging.getLogger("poller")
 
 # ---------------------------------------------------------------------------
@@ -141,10 +129,6 @@ def send_webhook(payload: WebhookPayload) -> None:
         log.error("Webhook delivery failed: %s", exc)
 
 
-API_TOKEN = os.environ.get("API_TOKEN", "")
-API_PORT = int(os.environ.get("POLLER_API_PORT", "8000"))
-
-
 # ---------------------------------------------------------------------------
 # Flex Web Service
 # ---------------------------------------------------------------------------
@@ -201,9 +185,6 @@ def fetch_flex_report(flex_token: str | None = None, flex_query_id: str | None =
     return None
 
 
-
-
-
 # ---------------------------------------------------------------------------
 # Poll cycle
 # ---------------------------------------------------------------------------
@@ -247,7 +228,7 @@ def poll_once(
         # Always show a sample of the first aggregated trade for debugging
         all_trades = aggregate_fills(all_fills)
         if all_trades:
-            log.info("Sample trade (first):\n%s", all_trades[0].model_dump_json(indent=2))
+            log.debug("Sample trade (first):\n%s", all_trades[0].model_dump_json(indent=2))
 
         # Pre-filter by timestamp watermark to reduce dedup work
         last_ts = get_last_poll_ts(conn)
@@ -308,129 +289,3 @@ def poll_once(
     finally:
         if close_conn:
             conn.close()
-
-
-# ---------------------------------------------------------------------------
-# Entry points
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# HTTP API — on-demand poll
-# ---------------------------------------------------------------------------
-_poll_lock = threading.Lock()
-_db_conn = None
-
-
-class PollHandler(BaseHTTPRequestHandler):
-    def log_message(self, fmt: str, *args: object) -> None:
-        log.debug(fmt, *args)
-
-    def do_POST(self) -> None:
-        if self.path != "/ibkr/run-poll":
-            self._reply(404, {"error": "Not found"})
-            return
-
-        if not API_TOKEN:
-            self._reply(500, {"error": "API_TOKEN not configured"})
-            return
-        auth = self.headers.get("Authorization", "")
-        if not hmac.compare_digest(auth, f"Bearer {API_TOKEN}"):
-            self._reply(401, {"error": "Unauthorized"})
-            return
-
-        # Read optional JSON body for token/query overrides
-        flex_token = None
-        flex_query_id = None
-        replay = 0
-        content_len = int(self.headers.get("Content-Length", 0))
-        if content_len > 0:
-            try:
-                body = json.loads(self.rfile.read(content_len))
-                flex_token = body.get("ibkr_flex_token") or None
-                flex_query_id = body.get("ibkr_flex_query_id") or None
-                replay = int(body.get("replay") or 0)
-            except (json.JSONDecodeError, Exception):
-                pass  # ignore malformed body, fall back to env vars
-
-        if not _poll_lock.acquire(blocking=False):
-            self._reply(409, {"error": "Poll already in progress"})
-            return
-        try:
-            orders = poll_once(_db_conn, flex_token=flex_token, flex_query_id=flex_query_id, replay=replay)
-            result = orders if isinstance(orders, list) else []
-            self._reply(200, {"trades": [o.model_dump() for o in result]})
-        except Exception as exc:
-            log.exception("On-demand poll failed")
-            self._reply(500, {"error": str(exc)})
-        finally:
-            _poll_lock.release()
-
-    def _reply(self, status: int, body: dict[str, Any]) -> None:
-        data = json.dumps(body, default=str, indent=2).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
-
-def start_api_server() -> None:
-    server = HTTPServer(("0.0.0.0", API_PORT), PollHandler)
-    log.info("Poll API listening on 0.0.0.0:%d", API_PORT)
-    server.serve_forever()
-
-
-# ---------------------------------------------------------------------------
-# Entry points
-# ---------------------------------------------------------------------------
-def main_loop() -> None:
-    """Continuous polling loop with HTTP API for on-demand polls."""
-    global _db_conn
-    if not FLEX_TOKEN or not FLEX_QUERY_ID:
-        log.error("IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID must be set")
-        raise SystemExit(1)
-
-    log.info("IBKR Flex Poller starting (poll every %ds)", POLL_INTERVAL)
-    if not TARGET_WEBHOOK_URL:
-        log.info("No TARGET_WEBHOOK_URL — running in dry-run mode")
-
-    _db_conn = init_db()
-    prune_old(_db_conn)
-
-    # Start HTTP API in background thread
-    api_thread = threading.Thread(target=start_api_server, daemon=True)
-    api_thread.start()
-
-    while True:
-        try:
-            with _poll_lock:
-                poll_once(_db_conn)
-        except Exception:
-            log.exception("Poll cycle failed")
-
-        log.debug("Next poll in %ds", POLL_INTERVAL)
-        time.sleep(POLL_INTERVAL)
-
-
-def main_once() -> None:
-    """Single on-demand poll, then exit."""
-    if not FLEX_TOKEN or not FLEX_QUERY_ID:
-        log.error("IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID must be set")
-        raise SystemExit(1)
-
-    debug = "--debug" in sys.argv
-    replay = 0
-    if "--replay" in sys.argv:
-        idx = sys.argv.index("--replay")
-        replay = int(sys.argv[idx + 1]) if idx + 1 < len(sys.argv) else 0
-    conn = init_db()
-    orders = poll_once(conn, debug=debug, replay=replay)
-    conn.close()
-    n = len(orders) if isinstance(orders, list) else 0
-    print(f"Done — {n} new trade(s) processed")
-
-
-if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--once":
-        main_once()
-    else:
-        main_loop()

@@ -106,10 +106,20 @@ def do_api(method, path, data=None):
         die(f"DO API error ({e.code} {method} {path}): {err_body}")
 
 
+_RELAY_URLS: dict[str, str] = {
+    "local": "http://localhost:15000",
+}
+
+
 def relay_api(path, method="POST", data=None):
-    domain = env("TRADE_DOMAIN")
+    relay_env = os.environ.get("RELAY_ENV") or os.environ.get("DEFAULT_CLI_RELAY_ENV") or "prod"
+    base_url = _RELAY_URLS.get(relay_env)
+    if base_url:
+        url = f"{base_url}{path}"
+    else:
+        domain = env("TRADE_DOMAIN")
+        url = f"https://{domain}{path}"
     token = env("API_TOKEN")
-    url = f"https://{domain}{path}"
     body = json.dumps(data).encode() if data else None
     req = urllib.request.Request(url, data=body, method=method)
     req.add_header("Authorization", f"Bearer {token}")

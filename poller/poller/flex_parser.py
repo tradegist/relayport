@@ -1,12 +1,10 @@
 """IBKR Flex XML parser — extracts fills and aggregates into trades."""
 
-from __future__ import annotations
-
 import logging
 import xml.etree.ElementTree as ET
 from typing import Any
 
-from models import Fill, Trade
+from models_poller import Fill, Trade
 
 log = logging.getLogger("flex_parser")
 

@@ -1,48 +1,109 @@
-.PHONY: setup deploy destroy pause resume sync order poll poll2 test-webhook types test typecheck logs stats gateway ssh help
+.PHONY: setup deploy destroy pause resume sync order poll poll2 test-webhook types test typecheck e2e e2e-up e2e-run e2e-down local-up local-down logs stats gateway ssh help
+
+PYTHON = .venv/bin/python3
+E2E_ENV = .env.test
+E2E_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.test.yml -p ibkr-relay-test --env-file $(E2E_ENV)
+LOCAL_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.local.yml
+CLI_RELAY_ENV = $(if $(ENV),RELAY_ENV=$(ENV))
 
 help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  make %-12s %s\n", $$1, $$2}'
 
-setup: ## Install dev dependencies (mypy, pydantic, pytest)
-	pip3 install -r requirements-dev.txt
+setup: ## Create .venv and install all dependencies
+	@test -d .venv || python3 -m venv .venv
+	.venv/bin/pip install -r requirements-dev.txt -r poller/requirements.txt -r remote-client/requirements.txt
+	@echo "$(CURDIR)/poller" > $$(find .venv/lib -name site-packages -type d)/ibkr-relay.pth
+	@echo "$(CURDIR)/remote-client" >> $$(find .venv/lib -name site-packages -type d)/ibkr-relay.pth
 
 deploy: ## Deploy infrastructure (Terraform + Docker)
-	python3 -m cli deploy
+	$(PYTHON) -m cli deploy
 
 destroy: ## Permanently destroy all infrastructure
-	python3 -m cli destroy
+	$(PYTHON) -m cli destroy
 
 pause: ## Snapshot droplet + delete (save costs)
-	python3 -m cli pause
+	$(PYTHON) -m cli pause
 
 resume: ## Restore droplet from snapshot
-	python3 -m cli resume
+	$(PYTHON) -m cli resume
 
 sync: ## Push .env + restart all services (or: make sync S=gateway)
-	python3 -m cli sync $(S)
+	$(PYTHON) -m cli sync $(S)
 
-order: ## Place an order (e.g. make order Q=2 SYM=TSLA T=MKT [P=] [CUR=EUR] [EX=LSE])
-	python3 -m cli order $(Q) $(SYM) $(T) $(P) $(CUR) $(EX)
+order: ## Place a stock order (e.g. make order Q=2 SYM=TSLA T=MKT [P=] [CUR=EUR] [EX=LSE] [TIF=GTC] [RTH=1] [ENV=local])
+	$(CLI_RELAY_ENV) $(PYTHON) -m cli order $(Q) $(SYM) $(T) $(P) $(CUR) $(EX) $(if $(TIF),--tif $(TIF)) $(if $(RTH),--outside-rth)
 
-poll: ## Trigger an immediate Flex poll (V=1 verbose, DEBUG=1 raw XML, REPLAY=N resend)
-	python3 -m cli poll $(if $(V),-v) $(if $(DEBUG),--debug) $(if $(REPLAY),--replay $(REPLAY))
+poll: ## Trigger an immediate Flex poll (V=1 verbose, DEBUG=1 raw XML, REPLAY=N resend, ENV=local)
+	$(CLI_RELAY_ENV) $(PYTHON) -m cli poll $(if $(V),-v) $(if $(DEBUG),--debug) $(if $(REPLAY),--replay $(REPLAY))
 
-poll2: ## Trigger an immediate Flex poll (second poller)
-	python3 -m cli poll 2 $(if $(V),-v) $(if $(DEBUG),--debug) $(if $(REPLAY),--replay $(REPLAY))
+poll2: ## Trigger an immediate Flex poll (second poller, ENV=local)
+	$(CLI_RELAY_ENV) $(PYTHON) -m cli poll 2 $(if $(V),-v) $(if $(DEBUG),--debug) $(if $(REPLAY),--replay $(REPLAY))
 
-test-webhook: ## Send sample trades to webhook endpoint (make test-webhook [S=2])
-	python3 -m cli test-webhook $(S)
+test-webhook: ## Send sample trades to webhook endpoint (make test-webhook [S=2] [ENV=local])
+	$(CLI_RELAY_ENV) $(PYTHON) -m cli test-webhook $(S)
 
 types: ## Regenerate TypeScript types from Pydantic models
-	python3 models.py > types/webhook-payload.schema.json
-	npx --yes json-schema-to-typescript types/webhook-payload.schema.json > types/webhook-payload.d.ts
-	@echo "Generated types/webhook-payload.d.ts"
+	$(PYTHON) poller/models_poller.py > types/poller/webhook.schema.json
+	npx --yes json-schema-to-typescript types/poller/webhook.schema.json > types/poller/webhook.d.ts
+	$(PYTHON) remote-client/models_remote_client.py > types/http/order.schema.json
+	npx --yes json-schema-to-typescript types/http/order.schema.json > types/http/order.d.ts
+	@echo "Generated types/poller/webhook.d.ts + types/http/order.d.ts"
 
 test: ## Run unit tests
-	PYTHONPATH=. python3 -m pytest poller/ -v
+	PYTHONPATH=.:poller $(PYTHON) -m pytest -v
 
 typecheck: ## Run mypy strict type checking
-	python3 -m mypy models.py poller/ cli/test_webhook.py
+	MYPYPATH=poller $(PYTHON) -m mypy poller/ cli/test_webhook.py
+	MYPYPATH=remote-client $(PYTHON) -m mypy remote-client/
+
+local-up: ## Start full stack locally (no TLS, direct port access)
+	$(LOCAL_COMPOSE) up -d --build
+	@echo ""
+	@echo "  REST API: http://localhost:15000/health"
+	@echo "  Poller:   http://localhost:15001/health"
+	@echo "  VNC:      http://localhost:15002"
+	@echo ""
+
+local-down: ## Stop local stack
+	$(LOCAL_COMPOSE) down
+
+e2e-up: ## Start E2E test stack (IB Gateway + webhook-relay + poller)
+	@if curl -sf http://localhost:15000/health | grep -q '"connected": true' && \
+	    curl -sf http://localhost:15001/health | grep -q '"status": "ok"'; then \
+		echo "Stack already running and connected"; \
+	else \
+		$(E2E_COMPOSE) up -d --build; \
+		echo "Waiting for webhook-relay to connect to IB Gateway..."; \
+		for i in $$(seq 1 12); do \
+			if curl -sf http://localhost:15000/health | grep -q '"connected": true'; then \
+				echo "webhook-relay ready"; break; \
+			fi; \
+			sleep 10; \
+		done; \
+		echo "Waiting for poller..."; \
+		for i in $$(seq 1 10); do \
+			if curl -sf http://localhost:15001/health | grep -q '"status": "ok"'; then \
+				echo "poller ready"; break; \
+			fi; \
+			sleep 3; \
+		done; \
+	fi
+
+e2e-down: ## Stop and remove E2E test stack
+	$(E2E_COMPOSE) down
+
+e2e-run: ## Run E2E tests (stack must be up)
+	$(PYTHON) -m pytest remote-client/tests/e2e/ poller/tests/e2e/ -v
+
+e2e: ## Run E2E tests against local paper account (starts/stops stack)
+	@was_up=false; \
+	if curl -sf http://localhost:15000/health | grep -q '"connected": true' && \
+	   curl -sf http://localhost:15001/health | grep -q '"status": "ok"'; then \
+		was_up=true; \
+	fi; \
+	$(MAKE) e2e-up && $(MAKE) e2e-run; ret=$$?; \
+	if [ "$$was_up" = "false" ]; then $(MAKE) e2e-down; fi; \
+	exit $$ret
 
 logs: ## Stream poller logs (Ctrl+C to stop)
 	@. ./.env && ssh -i $${SSH_KEY:-$$HOME/.ssh/ibkr-relay} root@$$DROPLET_IP \
