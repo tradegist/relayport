@@ -61,6 +61,7 @@
 
 ## Docker
 
+- **Never use `env_file:` in service definitions.** Always declare each env var explicitly in the `environment:` block with `${VAR}` interpolation. This is critical because `env_file:` is internally a list — override files append rather than replace, causing the production `.env` to leak into test containers. Explicit `environment:` vars with `--env-file` interpolation keeps environments fully isolated and allows clean overrides.
 - **`.dockerignore` uses an allowlist** (`*` to exclude everything, then `!poller/**` to include the whole module). Tests, `__pycache__`, and the Dockerfile itself are re-excluded. This means adding new source files to `poller/` requires **no** `.dockerignore` or Dockerfile changes.
 - The poller Dockerfile uses directory COPYs (`COPY poller/poller/ ./poller/`, `COPY poller/routes/ ./routes/`) so new files are picked up automatically.
 

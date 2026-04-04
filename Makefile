@@ -51,7 +51,7 @@ typecheck: ## Run mypy strict type checking
 	MYPYPATH=remote-client $(PYTHON) -m mypy remote-client/
 
 E2E_ENV = .env.test
-E2E_COMPOSE = docker compose -f docker-compose.test.yml --env-file $(E2E_ENV)
+E2E_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.test.yml -p ibkr-relay-test --env-file $(E2E_ENV)
 
 e2e-up: ## Start E2E test stack (IB Gateway + webhook-relay + poller)
 	@if curl -sf http://localhost:15000/health | grep -q '"connected": true' && \

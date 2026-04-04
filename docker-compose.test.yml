@@ -1,34 +1,14 @@
-# E2E test stack — paper account, no TLS, no VNC.
-# Usage: make e2e
-# Env file: .env.test
-
-name: ibkr-relay-test
+# E2E test overrides — applied on top of docker-compose.yml.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.test.yml ...
+# See Makefile E2E_COMPOSE for the full invocation.
 
 services:
   ib-gateway:
-    image: ghcr.io/gnzsnz/ib-gateway:stable
     restart: "no"
-    environment:
-      TWS_USERID: ${TWS_TEST_USER:?Set TWS_TEST_USER in .env}
-      TWS_PASSWORD: ${TWS_TEST_PASSWORD:?Set TWS_TEST_PASSWORD in .env}
-      TRADING_MODE: paper
-      TWOFA_TIMEOUT_ACTION: exit
-      RELOGIN_AFTER_TWOFA_TIMEOUT: "no"
-      EXISTING_SESSION_DETECTED_ACTION: primary
-      READ_ONLY_API: "no"
-      TZ: ${TIME_ZONE:-America/New_York}
-    expose:
-      - "4004"
 
   webhook-relay:
-    build: ./remote-client
     restart: "no"
-    depends_on:
-      - ib-gateway
     environment:
-      IB_HOST: ib-gateway
-      IB_PAPER_PORT: "4004"
-      TRADING_MODE: paper
       API_TOKEN: test-token
     ports:
       - "15000:5000"
@@ -48,9 +28,6 @@ services:
       start_period: 10s
 
   poller:
-    build:
-      context: .
-      dockerfile: poller/Dockerfile
     restart: "no"
     environment:
       IBKR_FLEX_TOKEN: test-flex-token
@@ -61,7 +38,6 @@ services:
       - "15001:8000"
     volumes:
       - ./poller:/app
-      - poller-test-data:/data
     healthcheck:
       test:
         [
@@ -75,5 +51,12 @@ services:
       retries: 20
       start_period: 5s
 
-volumes:
-  poller-test-data:
+  # Disable production-only services
+  novnc:
+    profiles: ["disabled"]
+  caddy:
+    profiles: ["disabled"]
+  gateway-controller:
+    profiles: ["disabled"]
+  poller-2:
+    profiles: ["disabled"]

@@ -4,8 +4,11 @@ services:
   ib-gateway:
     image: ghcr.io/gnzsnz/ib-gateway:stable
     restart: on-failure
-    env_file: .env
     environment:
+      TWS_USERID: ${TWS_USERID:?Set TWS_USERID in .env}
+      TWS_PASSWORD: ${TWS_PASSWORD:?Set TWS_PASSWORD in .env}
+      TRADING_MODE: ${TRADING_MODE:-paper}
+      VNC_SERVER_PASSWORD: ${VNC_SERVER_PASSWORD:?Set VNC_SERVER_PASSWORD in .env}
       TWOFA_TIMEOUT_ACTION: exit
       RELOGIN_AFTER_TWOFA_TIMEOUT: "no"
       EXISTING_SESSION_DETECTED_ACTION: primary
@@ -54,11 +57,11 @@ services:
     restart: always
     depends_on:
       - ib-gateway
-    env_file: .env
     environment:
       IB_HOST: ib-gateway
       IB_LIVE_PORT: "4003"
       IB_PAPER_PORT: "4004"
+      TRADING_MODE: ${TRADING_MODE:-paper}
       API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}
     expose:
       - "5000"
@@ -68,8 +71,14 @@ services:
       context: .
       dockerfile: poller/Dockerfile
     restart: always
-    env_file: .env
     environment:
+      IBKR_FLEX_TOKEN: ${IBKR_FLEX_TOKEN:?Set IBKR_FLEX_TOKEN in .env}
+      IBKR_FLEX_QUERY_ID: ${IBKR_FLEX_QUERY_ID:?Set IBKR_FLEX_QUERY_ID in .env}
+      TARGET_WEBHOOK_URL: ${TARGET_WEBHOOK_URL:-}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Set WEBHOOK_SECRET in .env}
+      WEBHOOK_HEADER_NAME: ${WEBHOOK_HEADER_NAME:-}
+      WEBHOOK_HEADER_VALUE: ${WEBHOOK_HEADER_VALUE:-}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-600}
       API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}
     expose:
       - "8000"
