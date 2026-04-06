@@ -526,25 +526,29 @@ make sync LOCAL_FILES=1  # deploy to your droplet
 
 ├── Makefile # CLI shortcuts (make deploy, make sync, etc.)
 ├── cli/ # Python CLI (replaces shell scripts)
-│ ├── __init__.py # Shared helpers (env loading, SSH, DO API, validation)
+│ ├── __init__.py # Project-specific config (CoreConfig setup, helpers)
 │ ├── __main__.py # Entry point (python3 -m cli <command>)
-│ ├── deploy.py # Terraform init + apply
-│ ├── destroy.py # Terraform destroy
-│ ├── pause.py # Snapshot + delete droplet
-│ ├── resume.py # Restore from snapshot
-│ ├── sync.py # Push .env + restart services
 │ ├── order.py # Place orders via HTTPS API
-│ └── poll.py # Trigger an immediate Flex poll
+│ ├── poll.py # Trigger an immediate Flex poll
+│ └── core/ # Project-agnostic (reusable across projects)
+│   ├── __init__.py # CoreConfig dataclass, generic helpers (env, SSH, DO API, Terraform)
+│   ├── deploy.py # Standalone (Terraform + rsync) or shared (rsync + compose)
+│   ├── destroy.py # Terraform destroy
+│   ├── pause.py # Snapshot + delete droplet
+│   ├── resume.py # Restore from snapshot
+│   └── sync.py # rsync files + pre-deploy checks + restart containers
 ├── .env.example # Configuration template
 ├── .github/workflows/
-│ └── deploy.yml # GitHub Actions workflow
+│ └── ci.yml # GitHub Actions: lint → typecheck → test
 ├── terraform/
-│ ├── main.tf # Droplet, firewall, reserved IP, provisioners
-│ ├── variables.tf # Terraform variables
-│ ├── outputs.tf # Droplet IP, VNC/Trade URLs, SSH key
-│ ├── cloud-init.sh # Docker install + repo clone (no secrets)
-│ └── env.tftpl # .env template for file provisioner
+│ ├── main.tf # Droplet, firewall, reserved IP, SSH key
+│ ├── variables.tf # Terraform variables (infrastructure only)
+│ ├── outputs.tf # Droplet IP, VNC/Site URLs, SSH key
+│ └── cloud-init.sh # Docker install + creates project directory
 ├── docker-compose.yml # Container orchestration (6 services)
+├── docker-compose.shared.yml # Shared-mode overlay (disables Caddy, uses relay-net)
+├── docker-compose.local.yml # Local dev override (direct port access, no TLS)
+├── docker-compose.test.yml # E2E test stack (ib-gateway + webhook-relay)
 ├── services/                  # Business-logic services (user-facing features)
 │   ├── remote-client/
 │   │   ├── Dockerfile
@@ -579,14 +583,17 @@ make sync LOCAL_FILES=1  # deploy to your droplet
 │           └── run.py             # POST /ibkr/poller/run handler
 ├── infra/                         # Infrastructure backbone (no business logic)
 │   ├── caddy/
-│   │   └── Caddyfile              # Reverse proxy config (VNC + Trade domains)
+│   │   ├── Caddyfile              # Reverse proxy config (VNC + Site domains)
+│   │   ├── sites/
+│   │   │   └── ibkr.caddy         # SITE_DOMAIN route handlers (handle /ibkr/*)
+│   │   └── domains/
+│   │       └── ibkr-vnc.caddy     # VNC_DOMAIN site block
 │   ├── novnc/
 │   │   └── index.html             # VNC web client (Start Gateway button)
 │   └── gateway-controller/
 │       ├── Dockerfile
 │       ├── start-gateway.sh       # CGI script to start ib-gateway
 │       └── gateway-status.sh      # CGI script to check ib-gateway status
-├── docker-compose.test.yml    # E2E test stack (ib-gateway + webhook-relay)
 └── types/                     # @tradegist/ibkr-types npm package
     ├── index.d.ts             # Barrel: exports IbkrPoller, IbkrHttp namespaces
     ├── package.json
