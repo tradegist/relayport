@@ -83,6 +83,9 @@ def _compose_env():
 
 
 def _droplet_size():
+    override = os.environ.get("DROPLET_SIZE", "")
+    if override:
+        return override
     heap = int(env("JAVA_HEAP_SIZE", "768"))
     if heap <= 1024:
         return "s-1vcpu-2gb"
@@ -147,6 +150,7 @@ _CONFIG = CoreConfig(
     terraform_vars={
         "do_token": "DO_API_TOKEN",
         "java_heap_size": "JAVA_HEAP_SIZE",
+        "droplet_size": "DROPLET_SIZE",
         "vnc_domain": "VNC_DOMAIN",
         "site_domain": "SITE_DOMAIN",
     },

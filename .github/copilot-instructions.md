@@ -152,7 +152,9 @@ The deployment mode is controlled by `DEPLOY_MODE` in `.env` (required, validate
 
 - `JAVA_HEAP_SIZE` in `.env` controls IB Gateway's JVM heap (in MB, default 768, max 10240).
 - **Droplet size is auto-selected** by Terraform based on this value (see `locals` block in `main.tf`).
-- `cli/resume.py` mirrors the same size-selection logic in Python.
+- **`DROPLET_SIZE`** overrides the heap-based auto-selection with a direct DO slug (e.g. `s-1vcpu-512mb`). Useful for poller-only deployments that don't need IB Gateway memory.
+- `cli/__init__.py` `_droplet_size()` checks `DROPLET_SIZE` first, then falls back to `JAVA_HEAP_SIZE`-based calculation.
+- `cli/core/resume.py` uses `cfg.droplet_size()` which delegates to the same `_droplet_size()` function.
 
 ## Auth Pattern
 

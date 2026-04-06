@@ -11,7 +11,7 @@ IBKR has a notoriously difficult API. To automate anything — placing orders, g
 
 Thankfully, amazing open-source projects like [`ib_async`](https://github.com/ib-api-reloaded/ib_async), [`ib-gateway-docker`](https://github.com/gnzsnz/ib-gateway-docker), and others have made the core pieces much more accessible. This project wouldn't exist without them.
 
-But even with those libraries, you still need to **build a Python app, deploy it somewhere, handle HTTPS, 2FA, reconnections, and webhooks**. That's where this project comes in — it bundles everything into a single `make deploy` that provisions a DigitalOcean droplet (starting at $12/month) with:
+But even with those libraries, you still need to **build a Python app, deploy it somewhere, handle HTTPS, 2FA, reconnections, and webhooks**. That's where this project comes in — it bundles everything into a single `make deploy` that provisions a DigitalOcean droplet (starting at $4/month for poller-only, or $12/month with the full gateway stack) with:
 
 - **An HTTPS endpoint to place orders** via a simple REST API
 - **A poller** that checks for trade fills every 10 minutes and sends them to your webhook URL
@@ -168,8 +168,16 @@ IB Gateway runs on Java and its performance depends on the heap memory allocatio
 
 IBKR recommends **4096** for API users. The default (768) works but may be slow for data-heavy operations.
 
+You can also set `DROPLET_SIZE` directly to override the heap-based selection. If you only need a poller, set a droplet size of 512 MB ($4/month) or 1 GB ($6/month):
+
 ```env
-# .env
+# .env — poller-only deployment
+REMOTE_CLIENT_ENABLED=false
+DROPLET_SIZE=s-1vcpu-512mb
+```
+
+```env
+# .env — full gateway stack
 JAVA_HEAP_SIZE=4096
 ```
 
@@ -344,6 +352,7 @@ All configuration is via environment variables in `.env`:
 | `NOTIFIERS`             | No       | —                  | Active notification backends (e.g. `webhook`). Empty = dry-run                                        |
 | `POLLER_ENABLED`        | No       | `true`             | Set to `false` to disable the poller container entirely                                               |
 | `REMOTE_CLIENT_ENABLED` | No       | `true`             | Set to `false` to disable ib-gateway, novnc, remote-client, and gateway-controller (poller-only mode) |
+| `DROPLET_SIZE`          | No       | —                  | Override droplet size slug (e.g. `s-1vcpu-512mb`). Ignores `JAVA_HEAP_SIZE` when set                  |
 | `POLL_INTERVAL_SECONDS` | No       | `600`              | Flex poll interval (seconds)                                                                          |
 | `TIME_ZONE`             | No       | `America/New_York` | Timezone (tz database format)                                                                         |
 

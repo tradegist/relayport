@@ -10,6 +10,12 @@ variable "java_heap_size" {
   default     = "768"
 }
 
+variable "droplet_size" {
+  description = "Override droplet size slug (e.g. s-1vcpu-512mb). When set, ignores java_heap_size for sizing."
+  type        = string
+  default     = ""
+}
+
 variable "droplet_region" {
   description = "DigitalOcean region for the droplet"
   type        = string
