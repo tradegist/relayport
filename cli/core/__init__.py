@@ -14,6 +14,7 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast, overload
 
 _UNSET = object()
 _VALID_DEPLOY_MODES = ("standalone", "shared")
@@ -54,6 +55,11 @@ class CoreConfig:
     """Optional callback returning droplet size slug for resume.
     If None, defaults to 's-1vcpu-1gb'."""
 
+    route_prefix: str = ""
+    """Expected path prefix for Caddy site snippets (e.g. '/ibkr').
+    If set, deploy validates that all ``handle`` directives in
+    ``infra/caddy/sites/*.caddy`` start with this prefix."""
+
     pre_sync_hook: Callable[[], None] | None = None
     """Optional callback run before sync (e.g. validate poller-2 env)."""
 
@@ -83,7 +89,8 @@ def set_config(cfg: CoreConfig) -> None:
 
 
 def config() -> CoreConfig:
-    assert _config is not None, "CoreConfig not set — call set_config() from cli/__init__.py"
+    if _config is None:
+        raise RuntimeError("CoreConfig not set — call set_config() from cli/__init__.py")
     return _config
 
 
@@ -136,12 +143,16 @@ def load_env(path: str | Path | None = None) -> None:
         os.environ[key.strip()] = value
 
 
+@overload
+def env(key: str) -> str: ...
+@overload
+def env(key: str, default: str) -> str: ...
 def env(key: str, default: str | object = _UNSET) -> str:
     val = os.environ.get(key)
     if val is None:
         if default is _UNSET:
             die(f"{key} is not set in .env")
-        return default  # type: ignore[return-value]
+        return cast(str, default)
     return val
 
 

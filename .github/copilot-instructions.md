@@ -4,6 +4,7 @@
 
 - **Always apply best practices by default.** Do not ask the user whether to follow a best practice — just do it. Use idiomatic Python naming, file organization, and patterns. When there is a clearly better approach (naming, structure, error handling), use it directly and explain why.
 - **No unused imports.** After writing or editing any Python file, verify every `import` is actually used in the file. Remove any that are not. This applies to new files and edits to existing files alike.
+- **No `assert` for runtime guards.** `assert` is stripped under `python -O`, turning invariant checks into silent `None`/`AttributeError`. Use `if ... raise RuntimeError(...)` (or `die()`) for any check that must hold at runtime.
 - **Run `make lint` after every code change.** Ruff enforces unused imports (F401), import ordering (I001), unused variables, common pitfalls (bugbear), and modern Python idioms. If ruff fails, fix before committing. Use `make lint FIX=1` to auto-fix safe issues (import sorting, etc.).
 
 ## Security Rules (MANDATORY)
@@ -34,6 +35,7 @@
 - **Avoid `dict[str, Any]` round-trips.** Never use `model_dump()` → `dict` → `Model(**data)` — mypy cannot type-check `**dict[str, Any]`. Use explicit keyword arguments or `model_copy(update=...)` instead.
 - **Prefer strict `Literal` types over bare `str` on Pydantic models.** Financial applications demand precision — a `str` field silently accepts typos and invalid values. When a field has a known set of valid values (e.g. `Action`, `OrderType`, `SecType`, `TimeInForce`), always use the existing `Literal` type. Only fall back to `str` when the external source (e.g. IB Gateway) genuinely returns unbounded values — and document why with an inline comment. At the mapping boundary (e.g. `_map_trade`), use `cast()` so mypy is satisfied and Pydantic validates at runtime.
 - **No `# type: ignore` without justification.** Do not bypass the type checker. Fix the root cause instead — use proper type annotations, import the correct type, widen a dict annotation, or use `cast()`. If suppression is truly unavoidable (e.g. untyped third-party library), the comment must include a reason: `# type: ignore[attr-defined] # ib_async.Foo has no stubs`. A bare `# type: ignore` with no explanation is never acceptable.
+- **Use `@overload` for sentinel-default patterns.** When a function accepts an optional default via a sentinel (e.g. `_UNSET = object()`), use `@overload` to express the two call signatures (`def f(key: str) -> str` and `def f(key: str, default: str) -> str`) instead of `# type: ignore` on the return. Use `cast()` in the implementation body for the default branch.
 
 ## Pydantic Best Practices
 

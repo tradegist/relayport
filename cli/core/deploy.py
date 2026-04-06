@@ -98,11 +98,28 @@ def _template_caddy_snippet(src: Path) -> str:
     return content
 
 
+def _validate_site_snippet_routes(content: str, snippet_name: str, prefix: str) -> None:
+    """Ensure all ``handle`` paths in a site snippet start with *prefix*.
+
+    Prevents a misconfigured snippet from shadowing other projects'
+    routes on the shared Caddy instance.
+    """
+    for match in re.finditer(r'^\s*handle\s+(\S+)', content, re.MULTILINE):
+        path = match.group(1)
+        if not path.startswith(f"{prefix}/"):
+            die(f"Snippet {snippet_name}: handle path '{path}' does not start "
+                f"with project prefix '{prefix}/'. All site snippet routes "
+                f"must be namespaced under '{prefix}/*' to avoid collisions.")
+
+
 def _deploy_caddy_snippets(droplet_ip: str) -> None:
     """Copy project Caddy snippets to /opt/caddy-shared/ and reload Caddy."""
     cfg = config()
     caddy_dir = cfg.project_dir / "infra" / "caddy"
     deployed = False
+
+    ssh_cmd(droplet_ip,
+            "mkdir -p /opt/caddy-shared/sites /opt/caddy-shared/domains")
 
     for subdir in ("sites", "domains"):
         src_dir = caddy_dir / subdir
@@ -110,6 +127,9 @@ def _deploy_caddy_snippets(droplet_ip: str) -> None:
             continue
         for snippet in src_dir.glob("*.caddy"):
             templated = _template_caddy_snippet(snippet)
+            if subdir == "sites" and cfg.route_prefix:
+                _validate_site_snippet_routes(
+                    templated, snippet.name, cfg.route_prefix)
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".caddy", delete=False,
             ) as tmp:

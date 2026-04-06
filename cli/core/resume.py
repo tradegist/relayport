@@ -1,3 +1,4 @@
+import os
 import subprocess
 import time
 
@@ -115,6 +116,7 @@ def run(args):
     print("  Snapshot deleted (no longer billed)")
     if cfg.post_resume_message:
         print()
-        print(f"  {cfg.post_resume_message}")
+        msg = cfg.post_resume_message.format_map(os.environ)
+        print(f"  {msg}")
     print()
     print("=" * 44)

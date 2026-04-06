@@ -39,10 +39,10 @@ This project can be deployed in two ways: on its own dedicated droplet
 The mode is controlled by **`DEPLOY_MODE`** in `.env` — a required env var
 validated before any deploy or sync. No implicit detection from token presence.
 
-| Mode           | `DEPLOY_MODE=` | Requirements             | What `make deploy` Does                                             |
-| -------------- | -------------- | ------------------------ | ------------------------------------------------------------------- |
+| Mode           | `DEPLOY_MODE=` | Requirements             | What `make deploy` Does                                                        |
+| -------------- | -------------- | ------------------------ | ------------------------------------------------------------------------------ |
 | **Standalone** | `standalone`   | `DO_API_TOKEN`           | Terraform creates droplet → CLI rsyncs files, pushes `.env`, runs `compose up` |
-| **Shared**     | `shared`       | `DROPLET_IP` + `SSH_KEY` | rsync + `docker compose -f docker-compose.shared.yml up`            |
+| **Shared**     | `shared`       | `DROPLET_IP` + `SSH_KEY` | rsync + `docker compose -f docker-compose.shared.yml up`                       |
 
 `DO_API_TOKEN` can be removed from `.env` after the first standalone deploy
 for security — the mode is determined by `DEPLOY_MODE`, not by token presence.
@@ -94,8 +94,8 @@ handle /kraken/* {
 **Routing rules:**
 
 - Every project's routes MUST be under its own prefix (`/kraken/*` for this project).
-- At deploy time, validate the Caddy snippet: every `handle` directive must start with `/<project_name>/`. Reject the deploy if any route violates this.
-- The Caddy snippet is SCP'd to `/etc/caddy/sites/<project_name>.caddy` on the droplet, then `docker exec caddy caddy reload`.
+- At deploy time, `route_prefix` on `CoreConfig` (e.g. `"/kraken"`) is used to validate that every `handle` directive in `sites/*.caddy` starts with the prefix. Reject the deploy if any route violates this.
+- The Caddy snippet is SCP'd to `/opt/caddy-shared/sites/<project_name>.caddy` on the droplet, then `docker exec caddy caddy reload`.
 
 ### Docker External Network
 
@@ -609,6 +609,7 @@ class CoreConfig:
     post_resume_message: str = ""                   # Printed after resume
     compose_profiles_fn: Callable[[], str] | None = None  # Returns COMPOSE_PROFILES
     size_selector_fn: Callable[[], str] | None = None     # Returns droplet size slug
+    route_prefix: str = ""                           # Caddy site snippet route prefix (e.g. '/kraken')
     pre_sync_hook: Callable[[], None] | None = None       # Runs before sync
 
     @property
@@ -648,6 +649,7 @@ _CONFIG = CoreConfig(
         "kraken-poller": "kraken-poller",
         "caddy": "caddy",
     },
+    route_prefix="/kraken",
 )
 
 set_config(_CONFIG)
@@ -694,18 +696,17 @@ locally, while the deployed version contains the literal domain — no env var
 injection needed in the host’s Caddy container.
 
 **Namespace validation** — every `handle` directive in `sites/*.caddy` must
-start with `/<project_name>/`. Validate before deploy:
+start with `route_prefix` (from `CoreConfig`). Validated after templating,
+before SCP:
 
 ```python
-def _validate_caddy_snippet(snippet_path: Path, project_name: str) -> None:
-    content = snippet_path.read_text()
-    for i, line in enumerate(content.splitlines(), 1):
-        stripped = line.strip()
-        if stripped.startswith("handle "):
-            route = stripped.split()[1]
-            if not route.startswith(f"/{project_name}/"):
-                die(f"Caddy snippet line {i}: route '{route}' must start "
-                    f"with '/{project_name}/'")
+def _validate_site_snippet_routes(content: str, snippet_name: str, prefix: str) -> None:
+    for match in re.finditer(r'^\s*handle\s+(\S+)', content, re.MULTILINE):
+        path = match.group(1)
+        if not path.startswith(f"{prefix}/"):
+            die(f"Snippet {snippet_name}: handle path '{path}' does not start "
+                f"with project prefix '{prefix}/'. All site snippet routes "
+                f"must be namespaced under '{prefix}/*' to avoid collisions.")
 ```
 
 ---

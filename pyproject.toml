@@ -41,6 +41,7 @@ select = [
     "SIM",    # flake8-simplify
     "RUF",    # Ruff-specific rules
     "PGH003", # Blanket type: ignore without error code
+    "S101",   # No assert in production code (stripped by python -O)
 ]
 ignore = [
     "E501",   # line length — handled by formatter, not linter
@@ -49,10 +50,14 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # Route tests must patch API_TOKEN before importing routes
-"services/remote-client/routes/test_*.py" = ["E402"]
+"services/remote-client/routes/test_*.py" = ["E402", "S101"]
 # CLI scripts use conditional imports and have looser style
 "cli/*.py" = ["E402", "F401", "RUF005"]
 "cli/core/*.py" = ["E402", "RUF005"]
+# Test files are allowed to use assert
+"**/test_*.py" = ["S101"]
+"**/conftest.py" = ["S101"]
+"**/tests/**" = ["S101"]
 
 [tool.ruff.lint.isort]
 known-first-party = [
