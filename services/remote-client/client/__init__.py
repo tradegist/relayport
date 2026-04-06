@@ -6,6 +6,7 @@ import os
 
 from ib_async import IB
 
+from client.listener import ListenerNamespace
 from client.orders import OrdersNamespace
 from client.trades import TradesNamespace
 
@@ -34,6 +35,7 @@ class IBClient:
         self._background_tasks: set[asyncio.Task[None]] = set()
         self.orders = OrdersNamespace(self.ib)
         self.trades = TradesNamespace(self.ib)
+        self.listener: ListenerNamespace | None = None
 
     @property
     def is_connected(self) -> bool:

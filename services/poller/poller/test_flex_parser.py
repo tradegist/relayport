@@ -425,19 +425,19 @@ class TestDedupId:
     """_dedup_id returns the best available unique identifier."""
 
     def test_prefers_transactionId(self) -> None:
-        fill = Fill(buySell=BuySell.BUY, transactionId="T1", ibExecId="E1", tradeID="X1")
+        fill = Fill(buySell=BuySell.BUY, source="flex", transactionId="T1", ibExecId="E1", tradeID="X1")
         assert _dedup_id(fill) == "T1"
 
     def test_falls_back_to_ibExecId(self) -> None:
-        fill = Fill(buySell=BuySell.BUY, transactionId="", ibExecId="E1", tradeID="X1")
+        fill = Fill(buySell=BuySell.BUY, source="flex", transactionId="", ibExecId="E1", tradeID="X1")
         assert _dedup_id(fill) == "E1"
 
     def test_falls_back_to_tradeID(self) -> None:
-        fill = Fill(buySell=BuySell.BUY, transactionId="", ibExecId="", tradeID="X1")
+        fill = Fill(buySell=BuySell.BUY, source="flex", transactionId="", ibExecId="", tradeID="X1")
         assert _dedup_id(fill) == "X1"
 
     def test_empty_when_no_ids(self) -> None:
-        fill = Fill(buySell=BuySell.BUY)
+        fill = Fill(buySell=BuySell.BUY, source="flex")
         assert _dedup_id(fill) == ""
 
 

@@ -7,8 +7,11 @@ Trade = one or more fills aggregated by orderId.
 from __future__ import annotations
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+
+Source = Literal["flex", "execDetailsEvent", "commissionReportEvent"]
 
 
 class BuySell(str, Enum):
@@ -20,6 +23,9 @@ class Fill(BaseModel):
     """Individual execution / fill from IBKR Flex XML."""
 
     model_config = ConfigDict(extra="forbid")
+
+    # ── Source ────────────────────────────────────────────────────────────
+    source: Source
 
     # ── Account ──────────────────────────────────────────────────────────
     accountId: str = ""

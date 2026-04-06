@@ -57,7 +57,9 @@ services:
       - caddy-config:/config
 
   remote-client:
-    build: ./services/remote-client
+    build:
+      context: .
+      dockerfile: services/remote-client/Dockerfile
     restart: always
     depends_on:
       - ib-gateway
@@ -67,6 +69,12 @@ services:
       IB_PAPER_PORT: "4004"
       TRADING_MODE: ${TRADING_MODE:-paper}
       API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}
+      LISTENER_ENABLED: ${LISTENER_ENABLED:-}
+      NOTIFIERS: ${NOTIFIERS:-}
+      TARGET_WEBHOOK_URL: ${TARGET_WEBHOOK_URL:-}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+      WEBHOOK_HEADER_NAME: ${WEBHOOK_HEADER_NAME:-}
+      WEBHOOK_HEADER_VALUE: ${WEBHOOK_HEADER_VALUE:-}
     expose:
       - "5000"
 

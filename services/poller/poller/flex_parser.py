@@ -103,7 +103,7 @@ def parse_fills(xml_text: str) -> tuple[list[Fill], list[str]]:
 
             # Dedup within this XML document
             try:
-                fill = Fill(**kwargs)
+                fill = Fill(**kwargs, source="flex")
             except Exception as exc:
                 errors.append(f"Failed to create Fill from <{tag}>: {exc}")
                 continue

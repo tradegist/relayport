@@ -2,12 +2,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY services/remote-client/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py ./
-COPY models_remote_client.py ./
-COPY client/ client/
-COPY routes/ routes/
+COPY services/remote-client/main.py ./
+COPY services/remote-client/models_remote_client.py ./
+COPY services/remote-client/client/ client/
+COPY services/remote-client/routes/ routes/
+COPY services/poller/models_poller.py ./
+COPY services/notifier/ ./notifier/
 
 CMD ["python", "-u", "main.py"]

@@ -12,6 +12,14 @@
       "additionalProperties": false,
       "description": "Aggregated trade \u2014 one or more fills grouped by orderId.\n\nNumeric fields (quantity, price, commission, taxes, \u2026) are aggregated.\nString fields use the last fill's value.\n``price`` is the quantity-weighted average across fills.",
       "properties": {
+        "source": {
+          "enum": [
+            "flex",
+            "execDetailsEvent",
+            "commissionReportEvent"
+          ],
+          "type": "string"
+        },
         "accountId": {
           "default": "",
           "type": "string"
@@ -362,6 +370,7 @@
         }
       },
       "required": [
+        "source",
         "buySell",
         "execIds",
         "fillCount"

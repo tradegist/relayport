@@ -15,10 +15,11 @@ But even with those libraries, you still need to **build a Python app, deploy it
 
 - **An HTTPS endpoint to place orders** via a simple REST API
 - **A poller** that checks for trade fills every 10 minutes and sends them to your webhook URL
+- **A real-time listener** (opt-in) that fires webhooks immediately when orders fill via IB Gateway events
 
 > **Only one endpoint for now?** Yes — more APIs will be exposed as the need arises. PRs welcome.
 
-> **Why a poller instead of listening for events through the Gateway API?** Because IBKR only allows **one active session per user**. If the Gateway is connected and listening for fills, you can't use the IBKR Client Portal or mobile app at the same time. With the poller approach, you can **close the gateway** when you don't need programmatic order placement, trade normally via web/mobile, and know that ~10 minutes later the poller will detect and forward any fills to your webhook. The poller uses the [Flex Web Service](https://www.interactivebrokers.com/campus/ibkr-api-page/flex-web-service/) (a REST API), so it **does not require an active Gateway session**.
+> **Why both a poller and a listener?** The poller uses the [Flex Web Service](https://www.interactivebrokers.com/campus/ibkr-api-page/flex-web-service/) (a REST API) — it **does not require an active Gateway session**. You can close the gateway, trade normally via web/mobile, and know that ~10 minutes later the poller will catch any fills. The listener gives you **instant** webhooks (sub-second) but only works while the Gateway is connected. Use the poller as your reliable baseline, and optionally enable the listener for real-time notifications when the Gateway is up.
 
 ## Table of Contents
 
@@ -42,6 +43,7 @@ But even with those libraries, you still need to **build a Python app, deploy it
 - [Project Structure](#project-structure)
 - [Current Status](#current-status)
 - [Flex XML Parsing](#flex-xml-parsing)
+- [Real-Time Listener](#real-time-listener)
 
 ## API Endpoints
 
@@ -558,7 +560,8 @@ make sync LOCAL_FILES=1  # deploy to your droplet
 │   │   ├── models_remote_client.py # Pydantic models (order API types)
 │   │   ├── client/                # IB Gateway client (namespace delegation)
 │   │   │   ├── __init__.py        # IBClient class (connection management)
-│   │   │   └── orders.py          # OrdersNamespace (place orders)
+│   │   │   ├── orders.py          # OrdersNamespace (place orders)
+│   │   │   └── listener.py        # ListenerNamespace (real-time trade events → webhooks)
 │   │   ├── routes/                # HTTP route handlers
 │   │   │   ├── __init__.py        # Route orchestrator (create_routes)
 │   │   │   ├── middlewares.py     # Auth middleware (Bearer token)
@@ -721,7 +724,7 @@ Example response:
 }
 ```
 
-Field names mirror `ib_async` exactly (e.g. `lmtPrice`, `totalQuantity`, `secType`, `tif`, `outsideRth`). See [`services/remote-client/models_remote_client.py`](services/remote-client/models_remote_client.py) for the full schema.
+**Order API** field names mirror `ib_async` exactly (e.g. `lmtPrice`, `totalQuantity`, `secType`, `tif`, `outsideRth`). See [`services/remote-client/models_remote_client.py`](services/remote-client/models_remote_client.py) for the full schema.
 
 > **Note**: The gateway must have `READ_ONLY_API=no` for orders to be accepted.
 
@@ -842,6 +845,7 @@ make logs S=ib-gateway
 - [x] Unified Flex XML parsing (Activity + Trade Confirmation)
 - [x] TypeScript type definitions (`@tradegist/ibkr-types`, not yet published)
 - [x] E2E test infrastructure (Docker-based, paper account)
+- [x] Real-time listener (opt-in, `LISTENER_ENABLED`)
 - [ ] Health monitoring / alerting
 
 ## Flex XML Parsing
@@ -902,3 +906,45 @@ IBKR uses different field names for the same identifiers across its APIs. This t
 - **Fill level:** `execId` (TWS) ↔ `ibExecID` (Flex AF) ↔ `execID` (Flex TC)
 
 **This project's convention:** The permanent order ID (`permId` from ib_async) is exposed as `orderId` in all API responses (`PlaceOrderResponse`, `TradeDetail`). The session-scoped `orderId` from ib_async is never exposed — it resets on reconnect and is useless for cross-session tracking.
+
+## Real-Time Listener
+
+The listener is an **opt-in** feature that subscribes to IB Gateway trade events and fires webhooks immediately when orders fill — no polling delay.
+
+### How it works
+
+When enabled, the remote-client subscribes to two ib_async events:
+
+- **`execDetailsEvent`** — fires when an execution occurs (fill price, quantity, exchange). Commission is not yet available.
+- **`commissionReportEvent`** — fires shortly after with commission and realized P&L.
+
+Each event produces a separate webhook with a single `Trade` object. The `source` field indicates the origin:
+
+| Source                  | Commission | Latency        |
+| ----------------------- | ---------- | -------------- |
+| `execDetailsEvent`      | 0.0        | Instant        |
+| `commissionReportEvent` | Populated  | ~0.5s after    |
+| `flex`                  | Populated  | Minutes (poll) |
+
+Both events fire for every fill — consumers receive two webhooks per fill and can choose which to act on (e.g. use `execDetailsEvent` for instant notification, `commissionReportEvent` for final commission data).
+
+### Enable
+
+Set `LISTENER_ENABLED` to any non-empty value in `.env` and configure at least one notifier backend:
+
+```env
+LISTENER_ENABLED=true
+NOTIFIERS=webhook
+TARGET_WEBHOOK_URL=https://example.com/webhook
+WEBHOOK_SECRET=your_hmac_secret_key
+```
+
+The listener reuses the same notifier configuration as the poller (`NOTIFIERS`, `TARGET_WEBHOOK_URL`, `WEBHOOK_SECRET`, etc.).
+
+### No cross-service dedup
+
+The listener and poller fire independently. If the Gateway is connected and `LISTENER_ENABLED=true`, the same trade may produce webhooks from both the listener (real-time) and the poller (next poll cycle). Consumers should use the `source` field to distinguish or deduplicate by `ibExecId`.
+
+### Field mapping
+
+The listener maps ib_async event objects to the same `Trade` model used by the poller. Since the events provide a different set of fields than Flex XML, some Trade fields will be empty strings or `0.0` (e.g. `tradeDate`, `tradeMoney`, `proceeds`). The key fields (`symbol`, `buySell`, `quantity`, `price`, `orderId`, `ibExecId`, `commission`, `dateTime`) are always populated.

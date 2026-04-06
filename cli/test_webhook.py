@@ -10,6 +10,7 @@ from models_poller import BuySell, Trade, WebhookPayload
 
 SAMPLE_TRADES = [
     Trade(
+        source="flex",
         symbol="AAPL",
         underlyingSymbol="AAPL",
         assetCategory="STK",
@@ -31,6 +32,7 @@ SAMPLE_TRADES = [
         fillCount=1,
     ),
     Trade(
+        source="flex",
         symbol="TSLA",
         underlyingSymbol="TSLA",
         assetCategory="STK",
@@ -52,6 +54,7 @@ SAMPLE_TRADES = [
         fillCount=2,
     ),
     Trade(
+        source="flex",
         symbol="MSFT",
         underlyingSymbol="MSFT",
         assetCategory="STK",

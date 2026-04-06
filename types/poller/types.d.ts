@@ -20,6 +20,7 @@ export interface WebhookPayload {
  * ``price`` is the quantity-weighted average across fills.
  */
 export interface Trade {
+  source: "flex" | "execDetailsEvent" | "commissionReportEvent";
   accountId?: string;
   acctAlias?: string;
   model?: string;

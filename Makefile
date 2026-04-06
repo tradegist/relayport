@@ -56,7 +56,7 @@ test: ## Run unit tests
 
 typecheck: ## Run mypy strict type checking
 	MYPYPATH=services/poller:services $(PYTHON) -m mypy services/poller/ cli/test_webhook.py
-	MYPYPATH=services/remote-client $(PYTHON) -m mypy services/remote-client/
+	MYPYPATH=services/remote-client:services/poller:services $(PYTHON) -m mypy services/remote-client/
 	MYPYPATH=services $(PYTHON) -m mypy services/notifier/
 	$(PYTHON) -m mypy schema_gen.py
 

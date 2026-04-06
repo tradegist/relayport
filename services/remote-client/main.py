@@ -31,6 +31,16 @@ async def amain() -> None:
 
     client.ib.disconnectedEvent += client.on_disconnect
 
+    # Start listener if enabled
+    if os.environ.get("LISTENER_ENABLED"):
+        from client.listener import ListenerNamespace
+        from notifier import load_notifiers
+
+        notifiers = load_notifiers()
+        client.listener = ListenerNamespace(client.ib, notifiers)
+        client.listener.start()
+        log.info("Listener enabled — subscribed to trade events")
+
     # Start watchdog to detect stale connections
     watchdog_task = asyncio.ensure_future(client.watchdog())
     client._background_tasks.add(watchdog_task)

@@ -8,6 +8,12 @@ services/poller/Dockerfile
 services/poller/**/test_*.py
 services/poller/**/__pycache__/
 
+!services/remote-client/**
+services/remote-client/tests/
+services/remote-client/Dockerfile
+services/remote-client/**/test_*.py
+services/remote-client/**/__pycache__/
+
 !services/notifier/**
 services/notifier/**/test_*.py
 services/notifier/**/__pycache__/

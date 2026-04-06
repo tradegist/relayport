@@ -96,7 +96,7 @@ Six Docker containers in a single Compose stack on a DigitalOcean droplet:
 | `ib-gateway`         | IBKR Gateway (gnzsnz/ib-gateway). Restart policy: `on-failure` (not `always`). |
 | `novnc`              | Browser VNC proxy for 2FA authentication                                       |
 | `caddy`              | Reverse proxy with automatic HTTPS (Let's Encrypt)                             |
-| `remote-client`     | Python API server — places orders via IB Gateway                               |
+| `remote-client`     | Python API server — places orders via IB Gateway, optional real-time listener |
 | `poller`             | Polls IBKR Flex for trade confirmations, fires webhooks                        |
 | `gateway-controller` | Lightweight sidecar — starts ib-gateway container via Docker socket            |
 
@@ -205,6 +205,8 @@ services/remote-client/
     test_orders.py         # Tests for orders namespace
     trades.py              # TradesNamespace: list()
     test_trades.py         # Tests for trades namespace
+    listener.py            # ListenerNamespace: subscribe to trade events → webhooks
+    test_listener.py       # Tests for listener namespace
   routes/                  # HTTP route handlers
     __init__.py            # Orchestrator: create_routes()
     middlewares.py         # Auth middleware (Bearer token)
@@ -217,6 +219,7 @@ services/remote-client/
     conftest.py            # httpx fixtures (api + anon_api)
     test_smoke.py          # Health + auth smoke tests
     test_trades.py         # Order placement + trade listing
+    test_listener.py       # Listener webhook E2E (skips when market closed)
     .env.test.example      # Template for paper credentials
 ```
 
@@ -267,6 +270,21 @@ services/notifier/
 - **`validate_notifier_env()`** is called by `cli/__init__.py` during pre-deploy checks to ensure all required env vars are set for the configured backends.
 - **Adding a new backend** — create `services/notifier/<name>.py` with a class extending `BaseNotifier`, add it to `REGISTRY` in `__init__.py`.
 - **The poller calls `notify(notifiers, payload)`** — notifiers are loaded once at startup and passed through to `poll_once()`. The poller has no direct knowledge of webhook delivery mechanics.
+
+## Listener (Real-Time Trade Events)
+
+The listener is an **opt-in** feature (`LISTENER_ENABLED` env var) that subscribes to ib_async trade events and fires webhooks immediately when orders fill.
+
+- **Lives in `client/listener.py`** inside the remote-client service — it is a `ListenerNamespace`, same pattern as `OrdersNamespace`.
+- **Subscribes to two events**: `execDetailsEvent` (fill without commission) and `commissionReportEvent` (fill with commission). Both fire per fill → two webhooks per fill.
+- **Event subscriptions survive reconnects** — ib_async creates events in `__init__`, not in `connectAsync()`.
+- **Maps ib_async objects to the poller's `Trade` model** via `_map_to_trade()`. Since events provide different fields than Flex XML, some Trade fields are empty/zero (e.g. `tradeDate`, `tradeMoney`, `proceeds`). Key fields (`symbol`, `buySell`, `quantity`, `price`, `orderId`, `ibExecId`, `commission`, `dateTime`) are always populated.
+- **The `source` field** on `Trade` distinguishes origin: `"flex"`, `"execDetailsEvent"`, or `"commissionReportEvent"`.
+- **No cross-service dedup** — the listener and poller fire independently. Consumers use `source` or `ibExecId` to deduplicate.
+- **No buffering** — each event fires a webhook immediately.
+- **Async dispatch** — `asyncio.ensure_future(asyncio.to_thread(notify, ...))` fire-and-forget. The `notify()` function uses synchronous `httpx.post`, so it runs in a thread to avoid blocking the ib_async event loop.
+- **Side mapping**: `"BOT"` → `BuySell.BUY`, `"SLD"` → `BuySell.SELL`.
+- **UNSET sentinel**: ib_async uses `1.7976931348623157e308` for unset floats — the listener treats this as `0.0`.
 
 ## Models (Two Separate Files)
 
@@ -418,7 +436,7 @@ cli/                    # Python CLI (operator scripts)
 services/               # Business-logic services (user-facing features)
   remote-client/        # remote-client service (see Remote Client Structure above)
   poller/               # Flex poller service (see Poller Structure above)
-    models_poller.py    # Pydantic models: Fill, Trade, WebhookPayload, BuySell
+    models_poller.py    # Pydantic models: Fill, Trade, WebhookPayload, BuySell, Source
   notifier/             # Pluggable notification backends (library, no container)
 infra/                  # Infrastructure backbone (no business logic)
   caddy/Caddyfile       # Reverse proxy config (uses env vars for domains)

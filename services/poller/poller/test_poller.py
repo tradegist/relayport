@@ -41,6 +41,7 @@ def db() -> sqlite3.Connection:
 
 def _make_fill(**overrides: Any) -> Fill:
     defaults: dict[str, Any] = {
+        "source": "flex",
         "symbol": "AAPL",
         "buySell": "BUY",
         "quantity": 1.0,
@@ -56,6 +57,7 @@ def _make_fill(**overrides: Any) -> Fill:
 
 def _make_trade(**overrides: Any) -> Trade:
     defaults: dict[str, Any] = {
+        "source": "flex",
         "symbol": "AAPL",
         "buySell": "BUY",
         "quantity": 1.0,
