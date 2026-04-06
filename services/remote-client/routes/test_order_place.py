@@ -35,7 +35,7 @@ class TestOrderValidation(AioHTTPTestCase):
         mock_client = _make_client()
         mock_response = MagicMock()
         mock_response.model_dump.return_value = {
-            "status": "Submitted", "orderId": 1, "permId": 100,
+            "status": "Submitted", "orderId": 100,
             "action": "BUY", "symbol": "AAPL", "totalQuantity": 1.0,
             "orderType": "MKT",
         }

@@ -53,7 +53,6 @@ export interface OrderPayload {
 export interface PlaceOrderResponse {
   status: string;
   orderId: number;
-  permId: number;
   action: "BUY" | "SELL";
   symbol: string;
   totalQuantity: number;
@@ -72,7 +71,6 @@ export interface ListTradesResponse {
  */
 export interface TradeDetail {
   orderId: number;
-  permId: number;
   action: string;
   totalQuantity: number;
   orderType: string;

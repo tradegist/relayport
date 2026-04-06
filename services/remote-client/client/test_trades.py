@@ -125,8 +125,7 @@ class TestMapTrade:
     def test_basic_mapping(self) -> None:
         t = _mock_ib_trade(order_id=42, perm_id=999, symbol="TSLA")
         detail = _map_trade(t)
-        assert detail.orderId == 42
-        assert detail.permId == 999
+        assert detail.orderId == 999
         assert detail.symbol == "TSLA"
         assert detail.status == "Filled"
 
@@ -167,7 +166,7 @@ class TestDedup:
         ns = TradesNamespace(ib)
         result = asyncio.run(ns.list())
         assert len(result.trades) == 2
-        perm_ids = {t.permId for t in result.trades}
+        perm_ids = {t.orderId for t in result.trades}
         assert perm_ids == {100, 200}
 
     def test_session_trades_take_priority(self) -> None:

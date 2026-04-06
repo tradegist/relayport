@@ -51,8 +51,7 @@ def _map_trade(trade: IBTrade) -> TradeDetail:
     c = trade.contract
     s = trade.orderStatus
     return TradeDetail(
-        orderId=o.orderId,
-        permId=o.permId,
+        orderId=o.permId,
         action=o.action,
         totalQuantity=o.totalQuantity,
         orderType=o.orderType,
@@ -81,7 +80,7 @@ class TradesNamespace:
 
         Combines ``ib.trades()`` (session cache) with
         ``reqCompletedOrders()`` (survives reconnections) and
-        deduplicates by ``permId``.
+        deduplicates by ``orderId`` (the permanent order ID).
         """
         session_trades = self._ib.trades()
 
@@ -92,13 +91,13 @@ class TradesNamespace:
 
         for t in session_trades:
             detail = _map_trade(t)
-            seen_perm_ids.add(detail.permId)
+            seen_perm_ids.add(detail.orderId)
             merged.append(detail)
 
         for t in completed:
             if t.order.permId not in seen_perm_ids:
                 detail = _map_trade(t)
-                seen_perm_ids.add(detail.permId)
+                seen_perm_ids.add(detail.orderId)
                 merged.append(detail)
 
         log.debug(

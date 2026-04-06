@@ -119,8 +119,7 @@ class TestSuccessResponse:
         order = OrderPayload(action="SELL", totalQuantity=5, orderType="MKT")
 
         result = asyncio.run(ns.place(contract, order))
-        assert result.orderId == 42
-        assert result.permId == 999
+        assert result.orderId == 999
         assert result.action == "SELL"
         assert result.symbol == "TSLA"
         assert result.totalQuantity == 5

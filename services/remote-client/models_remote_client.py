@@ -59,8 +59,7 @@ class PlaceOrderResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str
-    orderId: int
-    permId: int
+    orderId: int  # Permanent order ID (permId from ib_async)
     action: Action
     symbol: str
     totalQuantity: float
@@ -101,8 +100,7 @@ class TradeDetail(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # Order identification
-    orderId: int
-    permId: int
+    orderId: int  # Permanent order ID (permId from ib_async)
     action: str  # str not Action — IB may return values beyond BUY/SELL for reads
     totalQuantity: float
     orderType: str  # str not OrderType — IB returns STP, TRAIL, etc. for existing orders

@@ -39,19 +39,19 @@ def test_invalid_symbol_rejected(api: httpx.Client) -> None:
 
 
 def _wait_for_trade(
-    api: httpx.Client, perm_id: int, timeout: float = 10,
+    api: httpx.Client, order_id: int, timeout: float = 10,
 ) -> dict[str, Any]:
-    """Poll /ibkr/trades until a trade with the given permId appears."""
+    """Poll /ibkr/trades until a trade with the given orderId appears."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         resp = api.get("/ibkr/trades")
         assert resp.status_code == 200
         trades: list[dict[str, Any]] = resp.json()["trades"]
-        match = [t for t in trades if t["permId"] == perm_id]
+        match = [t for t in trades if t["orderId"] == order_id]
         if match:
             return match[0]
         time.sleep(0.5)
-    pytest.fail(f"Trade with permId={perm_id} not found within {timeout}s")
+    pytest.fail(f"Trade with orderId={order_id} not found within {timeout}s")
 
 
 def test_market_buy_appears_in_trades(api: httpx.Client) -> None:
@@ -64,9 +64,9 @@ def test_market_buy_appears_in_trades(api: httpx.Client) -> None:
         },
     )
     assert order_resp.status_code == 200, order_resp.text
-    perm_id = order_resp.json()["permId"]
+    order_id = order_resp.json()["orderId"]
 
-    trade = _wait_for_trade(api, perm_id)
+    trade = _wait_for_trade(api, order_id)
     assert trade["action"] == "BUY"
     assert trade["symbol"] == "AAPL"
     assert trade["orderType"] == "MKT"
@@ -98,9 +98,9 @@ def test_limit_buy_below_market(api: httpx.Client) -> None:
     data = order_resp.json()
     assert data["orderType"] == "LMT"
     assert data["lmtPrice"] == 1.0
-    perm_id = data["permId"]
+    order_id = data["orderId"]
 
-    trade = _wait_for_trade(api, perm_id)
+    trade = _wait_for_trade(api, order_id)
     assert trade["lmtPrice"] == 1.0
     # Should NOT have filled at $1
     assert trade["status"] in ("Submitted", "PreSubmitted")
@@ -118,7 +118,7 @@ def test_market_sell_appears_in_trades(api: httpx.Client) -> None:
         },
     )
     assert buy_resp.status_code == 200, buy_resp.text
-    _wait_for_trade(api, buy_resp.json()["permId"])
+    _wait_for_trade(api, buy_resp.json()["orderId"])
 
     # Now sell
     order_resp = api.post(
@@ -129,20 +129,20 @@ def test_market_sell_appears_in_trades(api: httpx.Client) -> None:
         },
     )
     assert order_resp.status_code == 200, order_resp.text
-    perm_id = order_resp.json()["permId"]
+    order_id = order_resp.json()["orderId"]
 
-    trade = _wait_for_trade(api, perm_id)
+    trade = _wait_for_trade(api, order_id)
     assert trade["action"] == "SELL"
     assert trade["symbol"] == "AAPL"
 
 
 def test_trades_list_stable(api: httpx.Client) -> None:
-    """Two consecutive GET /ibkr/trades return the same set of permIds."""
+    """Two consecutive GET /ibkr/trades return the same set of orderIds."""
     resp1 = api.get("/ibkr/trades")
     assert resp1.status_code == 200
     resp2 = api.get("/ibkr/trades")
     assert resp2.status_code == 200
 
-    ids1 = {t["permId"] for t in resp1.json()["trades"]}
-    ids2 = {t["permId"] for t in resp2.json()["trades"]}
+    ids1 = {t["orderId"] for t in resp1.json()["trades"]}
+    ids2 = {t["orderId"] for t in resp2.json()["trades"]}
     assert ids1 == ids2

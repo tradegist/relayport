@@ -133,9 +133,6 @@
         "orderId": {
           "type": "integer"
         },
-        "permId": {
-          "type": "integer"
-        },
         "action": {
           "enum": [
             "BUY",
@@ -171,7 +168,6 @@
       "required": [
         "status",
         "orderId",
-        "permId",
         "action",
         "symbol",
         "totalQuantity",
@@ -248,9 +244,6 @@
       "description": "A trade with its order info, status, and fills.",
       "properties": {
         "orderId": {
-          "type": "integer"
-        },
-        "permId": {
           "type": "integer"
         },
         "action": {
@@ -335,7 +328,6 @@
       },
       "required": [
         "orderId",
-        "permId",
         "action",
         "totalQuantity",
         "orderType",
