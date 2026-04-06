@@ -1,7 +1,5 @@
-"""IBKR Flex Poller — core polling logic, SQLite dedup, and webhook delivery."""
+"""IBKR Flex Poller — core polling logic and SQLite dedup."""
 
-import hashlib
-import hmac
 import logging
 import os
 import sqlite3
@@ -11,6 +9,8 @@ import xml.etree.ElementTree as ET
 import httpx
 
 from models_poller import Trade, WebhookPayload
+from notifier import notify
+from notifier.base import BaseNotifier
 
 from .flex_parser import _dedup_id, aggregate_fills, parse_fills
 
@@ -22,10 +22,6 @@ log = logging.getLogger("poller")
 FLEX_TOKEN = os.environ.get("IBKR_FLEX_TOKEN", "")
 FLEX_QUERY_ID = os.environ.get("IBKR_FLEX_QUERY_ID", "")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL_SECONDS", "600"))
-TARGET_WEBHOOK_URL = os.environ.get("TARGET_WEBHOOK_URL", "")
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
-WEBHOOK_HEADER_NAME = os.environ.get("WEBHOOK_HEADER_NAME", "")
-WEBHOOK_HEADER_VALUE = os.environ.get("WEBHOOK_HEADER_VALUE", "")
 DB_PATH = os.environ.get("DB_PATH", "/data/poller.db")
 
 FLEX_BASE = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"
@@ -98,39 +94,6 @@ def prune_old(conn: sqlite3.Connection, days: int = 30) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Webhook delivery
-# ---------------------------------------------------------------------------
-def send_webhook(payload: WebhookPayload) -> None:
-    body = payload.model_dump_json(indent=2)
-
-    if not TARGET_WEBHOOK_URL:
-        log.info("Webhook payload (dry-run):\n%s", body)
-        return
-
-    signature = hmac.new(
-        WEBHOOK_SECRET.encode(), body.encode(), hashlib.sha256
-    ).hexdigest()
-
-    try:
-        headers = {
-            "Content-Type": "application/json",
-            "X-Signature-256": f"sha256={signature}",
-        }
-        if WEBHOOK_HEADER_NAME:
-            headers[WEBHOOK_HEADER_NAME] = WEBHOOK_HEADER_VALUE
-
-        resp = httpx.post(
-            TARGET_WEBHOOK_URL,
-            content=body,
-            headers=headers,
-            timeout=10.0,
-        )
-        log.info("Webhook sent — status %d", resp.status_code)
-    except httpx.HTTPError as exc:
-        log.error("Webhook delivery failed: %s", exc)
-
-
-# ---------------------------------------------------------------------------
 # Flex Web Service
 # ---------------------------------------------------------------------------
 def fetch_flex_report(flex_token: str | None = None, flex_query_id: str | None = None) -> str | None:
@@ -195,6 +158,7 @@ def poll_once(
     flex_query_id: str | None = None,
     debug: bool = False,
     replay: int = 0,
+    notifiers: list[BaseNotifier] | None = None,
 ) -> list[Trade]:
     """Run a single poll. Returns list of new aggregated trades."""
     close_conn = conn is None
@@ -257,7 +221,7 @@ def poll_once(
                 replay_fills = all_fills[:replay]
                 trades = aggregate_fills(replay_fills)
                 log.info("Replay mode: resending %d fill(s) as %d trade(s)", len(replay_fills), len(trades))
-                send_webhook(WebhookPayload(trades=trades, errors=parse_errors))
+                notify(notifiers or [], WebhookPayload(trades=trades, errors=parse_errors))
                 return trades
             log.info("No new fills")
             return []
@@ -274,7 +238,7 @@ def poll_once(
             )
 
         # Send a single webhook with all trades
-        send_webhook(WebhookPayload(trades=trades, errors=parse_errors))
+        notify(notifiers or [], WebhookPayload(trades=trades, errors=parse_errors))
 
         # Mark all fills as processed after successful webhook
         all_new_ids = [did for t in trades for did in t.execIds]

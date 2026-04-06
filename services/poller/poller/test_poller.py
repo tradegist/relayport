@@ -1,7 +1,5 @@
 """Unit tests for poller.py — parser is mocked (covered by test_flex_parser.py)."""
 
-import hashlib
-import hmac as hmac_mod
 import sqlite3
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -16,7 +14,6 @@ from poller import (
     mark_processed,
     poll_once,
     prune_old,
-    send_webhook,
     set_last_poll_ts,
 )
 
@@ -152,73 +149,13 @@ class TestPruneOld:
 
 
 # ═════════════════════════════════════════════════════════════════════════
-#  send_webhook()
-# ═════════════════════════════════════════════════════════════════════════
-
-class TestSendWebhook:
-    def test_dry_run_no_url(self) -> None:
-        """No URL → logs payload, no HTTP call."""
-        payload = WebhookPayload(trades=[_make_trade()], errors=[])
-        with patch("poller.TARGET_WEBHOOK_URL", ""):
-            # Should not raise
-            send_webhook(payload)
-
-    @patch("poller.httpx.post")
-    def test_sends_with_signature(self, mock_post: MagicMock) -> None:
-        mock_post.return_value = MagicMock(status_code=200)
-        payload = WebhookPayload(trades=[_make_trade()], errors=[])
-        secret = "test-secret"
-
-        with patch("poller.TARGET_WEBHOOK_URL", "https://example.com/hook"), \
-             patch("poller.WEBHOOK_SECRET", secret):
-            send_webhook(payload)
-
-        mock_post.assert_called_once()
-        call_kwargs = mock_post.call_args
-        headers = call_kwargs.kwargs["headers"]
-        body = call_kwargs.kwargs["content"]
-
-        # Verify HMAC signature
-        expected_sig = hmac_mod.new(
-            secret.encode(), body.encode(), hashlib.sha256
-        ).hexdigest()
-        assert headers["X-Signature-256"] == f"sha256={expected_sig}"
-        assert headers["Content-Type"] == "application/json"
-
-    @patch("poller.httpx.post")
-    def test_custom_header_sent(self, mock_post: MagicMock) -> None:
-        mock_post.return_value = MagicMock(status_code=200)
-        payload = WebhookPayload(trades=[_make_trade()], errors=[])
-
-        with patch("poller.TARGET_WEBHOOK_URL", "https://example.com/hook"), \
-             patch("poller.WEBHOOK_SECRET", "s"), \
-             patch("poller.WEBHOOK_HEADER_NAME", "X-Custom"), \
-             patch("poller.WEBHOOK_HEADER_VALUE", "my-value"):
-            send_webhook(payload)
-
-        headers = mock_post.call_args.kwargs["headers"]
-        assert headers["X-Custom"] == "my-value"
-
-    @patch("poller.httpx.post")
-    def test_http_error_does_not_raise(self, mock_post: MagicMock) -> None:
-        """Webhook delivery failure is logged, not raised."""
-        import httpx
-        mock_post.side_effect = httpx.HTTPError("connection refused")
-        payload = WebhookPayload(trades=[_make_trade()], errors=[])
-
-        with patch("poller.TARGET_WEBHOOK_URL", "https://example.com/hook"), \
-             patch("poller.WEBHOOK_SECRET", "s"):
-            send_webhook(payload)  # should not raise
-
-
-# ═════════════════════════════════════════════════════════════════════════
 #  poll_once() — parser mocked
 # ═════════════════════════════════════════════════════════════════════════
 
 class TestPollOnce:
     """poll_once with mocked fetch_flex_report and parser."""
 
-    @patch("poller.send_webhook")
+    @patch("poller.notify")
     @patch("poller.aggregate_fills")
     @patch("poller.parse_fills")
     @patch("poller.fetch_flex_report")
@@ -227,16 +164,16 @@ class TestPollOnce:
         mock_fetch: MagicMock,
         mock_parse: MagicMock,
         mock_agg: MagicMock,
-        mock_webhook: MagicMock,
+        mock_notify: MagicMock,
         db: sqlite3.Connection,
     ) -> None:
         mock_fetch.return_value = None
         result = poll_once(db)
         assert result == []
         mock_parse.assert_not_called()
-        mock_webhook.assert_not_called()
+        mock_notify.assert_not_called()
 
-    @patch("poller.send_webhook")
+    @patch("poller.notify")
     @patch("poller.aggregate_fills")
     @patch("poller.parse_fills")
     @patch("poller.fetch_flex_report")
@@ -245,7 +182,7 @@ class TestPollOnce:
         mock_fetch: MagicMock,
         mock_parse: MagicMock,
         mock_agg: MagicMock,
-        mock_webhook: MagicMock,
+        mock_notify: MagicMock,
         db: sqlite3.Connection,
     ) -> None:
         mock_fetch.return_value = "<xml/>"
@@ -253,9 +190,9 @@ class TestPollOnce:
         result = poll_once(db)
         assert result == []
         mock_agg.assert_called_once_with([])
-        mock_webhook.assert_not_called()
+        mock_notify.assert_not_called()
 
-    @patch("poller.send_webhook")
+    @patch("poller.notify")
     @patch("poller.aggregate_fills")
     @patch("poller.parse_fills")
     @patch("poller.fetch_flex_report")
@@ -264,7 +201,7 @@ class TestPollOnce:
         mock_fetch: MagicMock,
         mock_parse: MagicMock,
         mock_agg: MagicMock,
-        mock_webhook: MagicMock,
+        mock_notify: MagicMock,
         db: sqlite3.Connection,
     ) -> None:
         fill = _make_fill()
@@ -277,12 +214,12 @@ class TestPollOnce:
 
         assert len(result) == 1
         assert result[0].symbol == "AAPL"
-        mock_webhook.assert_called_once()
-        sent_payload = mock_webhook.call_args[0][0]
+        mock_notify.assert_called_once()
+        sent_payload = mock_notify.call_args[0][1]
         assert isinstance(sent_payload, WebhookPayload)
         assert len(sent_payload.trades) == 1
 
-    @patch("poller.send_webhook")
+    @patch("poller.notify")
     @patch("poller.aggregate_fills")
     @patch("poller.parse_fills")
     @patch("poller.fetch_flex_report")
@@ -291,7 +228,7 @@ class TestPollOnce:
         mock_fetch: MagicMock,
         mock_parse: MagicMock,
         mock_agg: MagicMock,
-        mock_webhook: MagicMock,
+        mock_notify: MagicMock,
         db: sqlite3.Connection,
     ) -> None:
         fill = _make_fill(transactionId="TX99")
@@ -306,7 +243,7 @@ class TestPollOnce:
         found = get_processed_ids(db, {"TX99"})
         assert "TX99" in found
 
-    @patch("poller.send_webhook")
+    @patch("poller.notify")
     @patch("poller.aggregate_fills")
     @patch("poller.parse_fills")
     @patch("poller.fetch_flex_report")
@@ -315,7 +252,7 @@ class TestPollOnce:
         mock_fetch: MagicMock,
         mock_parse: MagicMock,
         mock_agg: MagicMock,
-        mock_webhook: MagicMock,
+        mock_notify: MagicMock,
         db: sqlite3.Connection,
     ) -> None:
         """Fills already in the DB are not re-sent."""
@@ -329,9 +266,9 @@ class TestPollOnce:
         result = poll_once(db)
 
         assert result == []
-        mock_webhook.assert_not_called()
+        mock_notify.assert_not_called()
 
-    @patch("poller.send_webhook")
+    @patch("poller.notify")
     @patch("poller.aggregate_fills")
     @patch("poller.parse_fills")
     @patch("poller.fetch_flex_report")
@@ -340,7 +277,7 @@ class TestPollOnce:
         mock_fetch: MagicMock,
         mock_parse: MagicMock,
         mock_agg: MagicMock,
-        mock_webhook: MagicMock,
+        mock_notify: MagicMock,
         db: sqlite3.Connection,
     ) -> None:
         fill = _make_fill(dateTime="20250403;150000")
@@ -353,7 +290,7 @@ class TestPollOnce:
 
         assert get_last_poll_ts(db) == "20250403;150000"
 
-    @patch("poller.send_webhook")
+    @patch("poller.notify")
     @patch("poller.aggregate_fills")
     @patch("poller.parse_fills")
     @patch("poller.fetch_flex_report")
@@ -362,7 +299,7 @@ class TestPollOnce:
         mock_fetch: MagicMock,
         mock_parse: MagicMock,
         mock_agg: MagicMock,
-        mock_webhook: MagicMock,
+        mock_notify: MagicMock,
         db: sqlite3.Connection,
     ) -> None:
         """Fills older than the watermark are filtered by timestamp pre-filter."""
@@ -389,7 +326,7 @@ class TestPollOnce:
         assert "NEW" in found
         assert "OLD" not in found
 
-    @patch("poller.send_webhook")
+    @patch("poller.notify")
     @patch("poller.aggregate_fills")
     @patch("poller.parse_fills")
     @patch("poller.fetch_flex_report")
@@ -398,7 +335,7 @@ class TestPollOnce:
         mock_fetch: MagicMock,
         mock_parse: MagicMock,
         mock_agg: MagicMock,
-        mock_webhook: MagicMock,
+        mock_notify: MagicMock,
         db: sqlite3.Connection,
     ) -> None:
         fill = _make_fill()
@@ -409,10 +346,10 @@ class TestPollOnce:
 
         poll_once(db)
 
-        sent_payload = mock_webhook.call_args[0][0]
+        sent_payload = mock_notify.call_args[0][1]
         assert "Unknown attr: fakeField" in sent_payload.errors
 
-    @patch("poller.send_webhook")
+    @patch("poller.notify")
     @patch("poller.aggregate_fills")
     @patch("poller.parse_fills")
     @patch("poller.fetch_flex_report")
@@ -421,7 +358,7 @@ class TestPollOnce:
         mock_fetch: MagicMock,
         mock_parse: MagicMock,
         mock_agg: MagicMock,
-        mock_webhook: MagicMock,
+        mock_notify: MagicMock,
         db: sqlite3.Connection,
     ) -> None:
         """replay=N re-sends N fills even if already processed."""
@@ -439,9 +376,9 @@ class TestPollOnce:
         result = poll_once(db, replay=1)
 
         assert len(result) == 1
-        mock_webhook.assert_called_once()
+        mock_notify.assert_called_once()
 
-    @patch("poller.send_webhook")
+    @patch("poller.notify")
     @patch("poller.aggregate_fills")
     @patch("poller.parse_fills")
     @patch("poller.fetch_flex_report")
@@ -450,7 +387,7 @@ class TestPollOnce:
         mock_fetch: MagicMock,
         mock_parse: MagicMock,
         mock_agg: MagicMock,
-        mock_webhook: MagicMock,
+        mock_notify: MagicMock,
         db: sqlite3.Connection,
     ) -> None:
         """Multiple new trades are batched into a single webhook call."""
@@ -466,8 +403,8 @@ class TestPollOnce:
         result = poll_once(db)
 
         assert len(result) == 2
-        mock_webhook.assert_called_once()
-        sent_payload = mock_webhook.call_args[0][0]
+        mock_notify.assert_called_once()
+        sent_payload = mock_notify.call_args[0][1]
         assert len(sent_payload.trades) == 2
 
 
@@ -504,12 +441,12 @@ _AF_XML = (
 class TestPollOnceE2E:
     """End-to-end: poll_once uses the real parser (not mocked)."""
 
-    @patch("poller.send_webhook")
+    @patch("poller.notify")
     @patch("poller.fetch_flex_report")
     def test_real_parser_integration(
         self,
         mock_fetch: MagicMock,
-        mock_webhook: MagicMock,
+        mock_notify: MagicMock,
         db: sqlite3.Connection,
     ) -> None:
         """Two fills for the same order → aggregated into 1 trade with correct values."""
@@ -530,8 +467,8 @@ class TestPollOnceE2E:
         assert t.execIds == ["TX100", "TX101"]
 
         # Webhook sent with the aggregated trade
-        mock_webhook.assert_called_once()
-        sent_payload = mock_webhook.call_args[0][0]
+        mock_notify.assert_called_once()
+        sent_payload = mock_notify.call_args[0][1]
         assert len(sent_payload.trades) == 1
         assert sent_payload.errors == []
 
@@ -542,12 +479,12 @@ class TestPollOnceE2E:
         # Watermark updated
         assert get_last_poll_ts(db) == "20250403;140030"
 
-    @patch("poller.send_webhook")
+    @patch("poller.notify")
     @patch("poller.fetch_flex_report")
     def test_second_poll_skips_duplicates(
         self,
         mock_fetch: MagicMock,
-        mock_webhook: MagicMock,
+        mock_notify: MagicMock,
         db: sqlite3.Connection,
     ) -> None:
         """Polling the same XML twice produces trades only on the first call."""
@@ -559,5 +496,5 @@ class TestPollOnceE2E:
         second = poll_once(db)
         assert second == []
 
-        # Webhook sent only once
-        assert mock_webhook.call_count == 1
+        # Notification sent only once
+        assert mock_notify.call_count == 1

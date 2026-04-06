@@ -180,7 +180,8 @@ These are non-negotiable. Every rule below applies from the first commit.
 ### 3.7 Docker
 
 - **Never use `env_file:` in service definitions.** Always declare each env var explicitly in the `environment:` block with `${VAR}` interpolation.
-- **`.dockerignore` uses an allowlist** (`*` to exclude everything, then `!services/listener/**` etc.).
+- **`.dockerignore` uses an allowlist** (`*` to exclude everything, then `!services/listener/**` etc.). When adding a new standalone module (e.g. `services/notifier/`), add a `!services/<module>/**` entry.
+- **Never nest bind mounts in `docker-compose.test.yml`.** If a service mounts `./services/poller:/app` and you also need `services/notifier/`, mount it at a separate path outside `/app` (e.g. `./services/notifier:/opt/notifier`) and add `PYTHONPATH: /opt` to the service's `environment:` block. Mounting inside the first mount causes Docker to auto-create empty directories on the host that shadow real content on restart.
 - Runtime data MUST use Docker named volumes. Never write to the project directory.
 
 ### 3.8 Dependencies
@@ -246,7 +247,6 @@ kraken_relay/
 │   │   │   ├── test_ws_parser.py
 │   │   │   ├── dedup.py         # SQLite dedup (processed_fills table, txid key)
 │   │   │   ├── test_dedup.py
-│   │   │   ├── webhook.py       # Webhook delivery (HMAC-SHA256 signing)
 │   │   │   └── test_webhook.py
 │   │   ├── routes/              # HTTP API
 │   │   │   ├── __init__.py      # create_routes()
@@ -256,7 +256,7 @@ kraken_relay/
 │   │       ├── conftest.py
 │   │       ├── test_smoke.py
 │   │       └── .env.test.example
-│   └── poller/                  # REST API poller service (backup)
+│   ├── poller/                  # REST API poller service (backup)
 │       ├── Dockerfile
 │       ├── requirements.txt
 │       ├── main.py              # Entrypoint (polling loop + HTTP API)
@@ -273,6 +273,12 @@ kraken_relay/
 │       └── tests/e2e/
 │           ├── conftest.py
 │           └── test_smoke.py
+│   └── notifier/                # Pluggable notification backends (library, no container)
+│       ├── __init__.py          # Registry, load_notifiers(), validate_notifier_env(), notify()
+│       ├── base.py              # BaseNotifier ABC (name, required_env_vars, send)
+│       ├── webhook.py           # WebhookNotifier: HMAC-SHA256 signed HTTP POST
+│       ├── test_notifier.py     # Tests for registry and loader
+│       └── test_webhook.py      # Tests for webhook backend
 ├── infra/
 │   └── caddy/
 │       ├── Caddyfile            # Shell: imports from sites/ and domains/
@@ -340,7 +346,7 @@ webhooks when order executions are detected.
    a. Parse into Fill model (ws_parser.py)
    b. Check SQLite dedup (dedup.py) — skip if already processed
    c. Aggregate fills into Trade (by orderId / txid)
-   d. POST signed webhook (webhook.py)
+   d. Send via notifier (notify())
    e. Mark as processed in SQLite
 5. On disconnect: exponential backoff reconnect (2s, 4s, 8s, ... max 60s)
 ```
@@ -382,7 +388,7 @@ as a reliability fallback. Catches fills that the WebSocket missed.
 2. Parse response JSON into Fill models
 3. SQLite dedup (skip already-processed txids)
 4. Aggregate into Trade models
-5. POST signed webhook
+5. Send via notifier (notify())
 6. Mark processed, update timestamp watermark
 ```
 
@@ -458,6 +464,11 @@ SCHEMA_MODELS: list[type[BaseModel]] = [WebhookPayload, Trade, Fill, BuySell]
 
 ## 8. Webhook Delivery
 
+Webhook delivery is handled by the **notifier** package (`services/notifier/`), a pluggable notification backend system shared across services.
+
+- **`NOTIFIERS` env var** controls which backends are active (comma-separated, e.g. `NOTIFIERS=webhook`). Empty = no notifications (dry-run).
+- **`WebhookNotifier`** is the built-in backend — it POSTs JSON payloads signed with HMAC-SHA256.
+
 - **Body:** JSON-serialized `WebhookPayload`.
 - **Signing:** HMAC-SHA256 of the body using `WEBHOOK_SECRET`.
 - **Header:** `X-Signature-256: sha256=<hex_digest>`.
@@ -488,6 +499,7 @@ KRAKEN_API_KEY=your-api-key-here
 KRAKEN_API_SECRET=your-api-secret-here
 
 # ── Webhook delivery ────────────────────────────────────────────────
+NOTIFIERS=webhook
 TARGET_WEBHOOK_URL=https://your-app.example.com/hooks/kraken
 WEBHOOK_SECRET=generate-a-random-secret-here
 WEBHOOK_HEADER_NAME=
@@ -525,8 +537,9 @@ services:
     environment:
       KRAKEN_API_KEY: ${KRAKEN_API_KEY:?Set KRAKEN_API_KEY in .env}
       KRAKEN_API_SECRET: ${KRAKEN_API_SECRET:?Set KRAKEN_API_SECRET in .env}
+      NOTIFIERS: ${NOTIFIERS:-}
       TARGET_WEBHOOK_URL: ${TARGET_WEBHOOK_URL:-}
-      WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Set WEBHOOK_SECRET in .env}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
       WEBHOOK_HEADER_NAME: ${WEBHOOK_HEADER_NAME:-}
       WEBHOOK_HEADER_VALUE: ${WEBHOOK_HEADER_VALUE:-}
       API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}
@@ -541,8 +554,9 @@ services:
     environment:
       KRAKEN_API_KEY: ${KRAKEN_API_KEY:?Set KRAKEN_API_KEY in .env}
       KRAKEN_API_SECRET: ${KRAKEN_API_SECRET:?Set KRAKEN_API_SECRET in .env}
+      NOTIFIERS: ${NOTIFIERS:-}
       TARGET_WEBHOOK_URL: ${TARGET_WEBHOOK_URL:-}
-      WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Set WEBHOOK_SECRET in .env}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
       WEBHOOK_HEADER_NAME: ${WEBHOOK_HEADER_NAME:-}
       WEBHOOK_HEADER_VALUE: ${WEBHOOK_HEADER_VALUE:-}
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-300}
@@ -641,7 +655,7 @@ _CONFIG = CoreConfig(
         "do_token": "DO_API_TOKEN",
         "site_domain": "SITE_DOMAIN",
     },
-    required_env=["DO_API_TOKEN", "KRAKEN_API_KEY", "KRAKEN_API_SECRET", "WEBHOOK_SECRET"],
+    required_env=["DO_API_TOKEN", "KRAKEN_API_KEY", "KRAKEN_API_SECRET"],
     service_map={
         "listener": "kraken-listener",
         "kraken-listener": "kraken-listener",
@@ -749,21 +763,21 @@ warn_unused_configs = true
 explicit_package_bases = true
 
 [tool.pytest.ini_options]
-testpaths = ["services/listener", "services/poller"]
+testpaths = ["services/listener", "services/poller", "services/notifier"]
 norecursedirs = ["tests/e2e"]
 addopts = "--import-mode=importlib"
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["services/listener", "services/poller", "cli"]
+src = ["services/listener", "services/poller", "services/notifier", "cli"]
 
 [tool.ruff.lint]
 select = ["F", "E", "W", "I", "UP", "B", "SIM", "RUF", "PGH003"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["listener", "poller", "routes", "models_listener", "models_poller"]
+known-first-party = ["listener", "poller", "notifier", "routes", "models_listener", "models_poller"]
 ```
 
 ---
@@ -829,7 +843,7 @@ every step.
 1. **Scaffold** — repo init, `.gitignore`, `pyproject.toml`, `requirements-dev.txt`, `Makefile` (setup/lint/typecheck/test targets), empty `services/` dirs.
 2. **Models** — `models_listener.py` with `Fill`, `Trade`, `WebhookPayload`, `BuySell`. Write tests.
 3. **Dedup** — `listener/dedup.py` (SQLite init, check, mark, prune). Write tests.
-4. **Webhook** — `listener/webhook.py` (HMAC signing, POST delivery). Write tests.
+4. **Notifier** — `services/notifier/` (base ABC, webhook backend, registry, loader). Copy from `ibkr_relay` and adapt. Write tests.
 5. **WS Parser** — `listener/ws_parser.py` (parse Kraken WS JSON into Fill models). Write tests with sample messages.
 6. **Listener core** — `listener/__init__.py` (WS connect, subscribe, reconnect loop, integration of parser + dedup + webhook).
 7. **HTTP health API** — `routes/health.py`, `routes/middlewares.py`.

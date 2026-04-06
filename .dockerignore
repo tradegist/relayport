@@ -7,3 +7,7 @@ services/poller/tests/
 services/poller/Dockerfile
 services/poller/**/test_*.py
 services/poller/**/__pycache__/
+
+!services/notifier/**
+services/notifier/**/test_*.py
+services/notifier/**/__pycache__/

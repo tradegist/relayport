@@ -34,10 +34,12 @@ services:
       IBKR_FLEX_QUERY_ID: "000000"
       API_TOKEN: test-token
       POLLER_API_PORT: "8000"
+      PYTHONPATH: /opt
     ports:
       - "15011:8000"
     volumes:
       - ./services/poller:/app
+      - ./services/notifier:/opt/notifier
     healthcheck:
       test:
         [

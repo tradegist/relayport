@@ -123,7 +123,7 @@ Six containers in a single Docker network:
 - **`novnc`** — [`theasp/novnc`](https://hub.docker.com/r/theasp/novnc). Browser-based VNC proxy for completing 2FA.
 - **`caddy`** — [Caddy 2](https://caddyserver.com/) reverse proxy with automatic HTTPS via Let's Encrypt. Routes traffic to the correct backend based on domain (see [Domains & HTTPS](#domains--https)).
 - **`remote-client`** — Python image connected to IB Gateway via `ib_async`. Exposes an HTTP API (internal port 5000) for placing stock orders, secured with Bearer token authentication.
-- **`poller`** — Python image that polls the IBKR Flex Web Service every 10 minutes for new fills and POSTs them to a webhook. Supports both **Trade Confirmation** and **Activity** Flex Query types. Uses SQLite for deduplication. **Does not hold an IBKR session** — trade normally via web/mobile.
+- **`poller`** — Python image that polls the IBKR Flex Web Service every 10 minutes for new fills and sends them via pluggable notification backends (see `services/notifier/`). Supports both **Trade Confirmation** and **Activity** Flex Query types. Uses SQLite for deduplication. **Does not hold an IBKR session** — trade normally via web/mobile.
 - **`gateway-controller`** — Lightweight Alpine sidecar with Docker CLI. Exposes a CGI endpoint so the noVNC page can start the gateway container from the browser.
 
 ## Domains & HTTPS
@@ -338,7 +338,8 @@ All configuration is via environment variables in `.env`:
 | `IBKR_FLEX_TOKEN`       | Yes      | —                  | Flex Web Service token (from Client Portal)                    |
 | `IBKR_FLEX_QUERY_ID`    | Yes      | —                  | Flex Query ID (Trade Confirmation or Activity)                 |
 | `TARGET_WEBHOOK_URL`    | No       | —                  | Webhook endpoint (empty = log-only dry-run)                    |
-| `WEBHOOK_SECRET`        | Yes      | —                  | HMAC-SHA256 key for signing payloads                           |
+| `WEBHOOK_SECRET`        | No       | —                  | HMAC-SHA256 key for signing payloads (required if NOTIFIERS=webhook) |
+| `NOTIFIERS`             | No       | —                  | Active notification backends (e.g. `webhook`). Empty = dry-run |
 | `POLL_INTERVAL_SECONDS` | No       | `600`              | Flex poll interval (seconds)                                   |
 | `TIME_ZONE`             | No       | `America/New_York` | Timezone (tz database format)                                  |
 
@@ -567,13 +568,13 @@ make sync LOCAL_FILES=1  # deploy to your droplet
 │   │       ├── conftest.py        # httpx fixtures
 │   │       ├── .env.test.example  # Template for paper credentials
 │   │       └── .env.test          # Your paper credentials (gitignored)
-│   └── poller/
+│   ├── poller/
 │       ├── Dockerfile
 │       ├── requirements.txt       # httpx, pydantic, aiohttp
 │       ├── main.py                # Entrypoint (polling loop + HTTP API)
 │       ├── models_poller.py       # Pydantic models (Fill, Trade, WebhookPayload, BuySell)
 │       ├── poller/                # Core polling logic (package)
-│       │   ├── __init__.py        # SQLite dedup, webhook delivery, Flex fetch, poll_once()
+│       │   ├── __init__.py        # SQLite dedup, Flex fetch, poll_once()
 │       │   ├── flex_parser.py     # Flex XML parser (Activity + Trade Confirmation)
 │       │   ├── test_flex_parser.py # Tests for flex_parser
 │       │   └── test_poller.py     # Tests for poller core logic
@@ -581,6 +582,10 @@ make sync LOCAL_FILES=1  # deploy to your droplet
 │           ├── __init__.py        # Route orchestrator (create_routes, start_api_server)
 │           ├── middlewares.py     # Auth middleware (Bearer token)
 │           └── run.py             # POST /ibkr/poller/run handler
+│   └── notifier/                  # Pluggable notification backends (library, no container)
+│       ├── __init__.py            # Registry, load_notifiers(), validate_notifier_env(), notify()
+│       ├── base.py                # BaseNotifier ABC
+│       └── webhook.py             # WebhookNotifier: HMAC-SHA256 signed HTTP POST
 ├── infra/                         # Infrastructure backbone (no business logic)
 │   ├── caddy/
 │   │   ├── Caddyfile              # Reverse proxy config (VNC + Site domains)
@@ -830,6 +835,7 @@ make logs S=ib-gateway
 - [x] GitHub Actions workflow
 - [x] Dry-run mode (log payloads when no webhook URL)
 - [x] Webhook endpoint (HMAC-SHA256 signed, batched payloads)
+- [x] Pluggable notification backends (`services/notifier/`, currently: webhook)
 - [x] HTTPS via Caddy + Let's Encrypt (separate VNC/Trade domains)
 - [x] Makefile CLI (`make deploy`, `make order`, etc.)
 - [x] Gateway management (browser Start Gateway button + `make gateway`)

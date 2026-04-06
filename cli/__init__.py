@@ -21,7 +21,7 @@ REMOTE_DIR = f"/opt/{PROJECT_NAME}"
 # ── IBKR-specific helpers ───────────────────────────────────────────
 
 def validate_poller_env(suffix=""):
-    required = ["IBKR_FLEX_TOKEN", "IBKR_FLEX_QUERY_ID", "TARGET_WEBHOOK_URL", "WEBHOOK_SECRET"]
+    required = ["IBKR_FLEX_TOKEN", "IBKR_FLEX_QUERY_ID"]
     missing = []
     set_count = 0
     for var in required:
@@ -58,6 +58,9 @@ def _droplet_size():
 
 def _pre_sync_hook():
     validate_poller_env("_2")
+    from notifier import validate_notifier_env
+    validate_notifier_env()
+    validate_notifier_env("_2")
 
 
 _RELAY_URLS: dict[str, str] = {
@@ -103,7 +106,7 @@ _CONFIG = CoreConfig(
     },
     required_env=[
         "DO_API_TOKEN", "TWS_USERID", "TWS_PASSWORD",
-        "VNC_SERVER_PASSWORD", "WEBHOOK_SECRET",
+        "VNC_SERVER_PASSWORD",
         "IBKR_FLEX_TOKEN", "IBKR_FLEX_QUERY_ID",
     ],
     service_map={

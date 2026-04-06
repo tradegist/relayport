@@ -15,6 +15,7 @@ setup: ## Create .venv and install all dependencies
 	.venv/bin/pip install -r requirements-dev.txt -r services/poller/requirements.txt -r services/remote-client/requirements.txt
 	@echo "$(CURDIR)/services/poller" > $$(find .venv/lib -name site-packages -type d)/$(PROJECT).pth
 	@echo "$(CURDIR)/services/remote-client" >> $$(find .venv/lib -name site-packages -type d)/$(PROJECT).pth
+	@echo "$(CURDIR)/services" >> $$(find .venv/lib -name site-packages -type d)/$(PROJECT).pth
 
 deploy: ## Deploy infrastructure (Terraform + Docker)
 	$(PYTHON) -m cli deploy
@@ -44,22 +45,23 @@ test-webhook: ## Send sample trades to webhook endpoint (make test-webhook [S=2]
 	$(CLI_RELAY_ENV) $(PYTHON) -m cli test-webhook $(S)
 
 types: ## Regenerate TypeScript types from Pydantic models
-	PYTHONPATH=services/poller:services/remote-client $(PYTHON) schema_gen.py models_poller > types/poller/types.schema.json
+	PYTHONPATH=services/poller:services/remote-client:services $(PYTHON) schema_gen.py models_poller > types/poller/types.schema.json
 	npx --yes json-schema-to-typescript types/poller/types.schema.json > types/poller/types.d.ts
-	PYTHONPATH=services/poller:services/remote-client $(PYTHON) schema_gen.py models_remote_client > types/http/types.schema.json
+	PYTHONPATH=services/poller:services/remote-client:services $(PYTHON) schema_gen.py models_remote_client > types/http/types.schema.json
 	npx --yes json-schema-to-typescript types/http/types.schema.json > types/http/types.d.ts
 	@echo "Generated types/poller/types.d.ts + types/http/types.d.ts"
 
 test: ## Run unit tests
-	PYTHONPATH=.:services/poller:services/remote-client $(PYTHON) -m pytest -v
+	PYTHONPATH=.:services/poller:services/remote-client:services $(PYTHON) -m pytest -v
 
 typecheck: ## Run mypy strict type checking
-	MYPYPATH=services/poller $(PYTHON) -m mypy services/poller/ cli/test_webhook.py
+	MYPYPATH=services/poller:services $(PYTHON) -m mypy services/poller/ cli/test_webhook.py
 	MYPYPATH=services/remote-client $(PYTHON) -m mypy services/remote-client/
+	MYPYPATH=services $(PYTHON) -m mypy services/notifier/
 	$(PYTHON) -m mypy schema_gen.py
 
 lint: ## Run ruff linter (use FIX=1 to auto-fix)
-	$(PYTHON) -m ruff check services/poller/ services/remote-client/ cli/ schema_gen.py $(if $(FIX),--fix)
+	$(PYTHON) -m ruff check services/poller/ services/remote-client/ services/notifier/ cli/ schema_gen.py $(if $(FIX),--fix)
 
 local-up: ## Start full stack locally (no TLS, direct port access)
 	$(LOCAL_COMPOSE) up -d --build

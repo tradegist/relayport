@@ -58,7 +58,7 @@
 - **`.venv` is the project's virtual environment.** Created by `make setup` using Homebrew Python. All dev dependencies are installed there.
 - **Auto-activation** is configured in `~/.zshrc` via a `chpwd` hook — the venv activates automatically when `cd`'ing into the project directory.
 - **`make setup`** creates the `.venv` (if missing), installs all dependencies (`requirements-dev.txt` + both service requirements), and writes a `.pth` file (see below).
-- **`ibkr-relay.pth`** is created inside `.venv/lib/pythonX.Y/site-packages/` by `make setup`. It adds `services/poller/` and `services/remote-client/` to `sys.path` so that `from models_poller import ...` and `from models_remote_client import ...` work everywhere (CLI, tests, scripts) without `sys.path` hacks or `PYTHONPATH`.
+- **`ibkr-relay.pth`** is created inside `.venv/lib/pythonX.Y/site-packages/` by `make setup`. It adds `services/poller/`, `services/remote-client/`, and `services/` to `sys.path` so that `from models_poller import ...`, `from models_remote_client import ...`, and `from notifier import ...` work everywhere (CLI, tests, scripts) without `sys.path` hacks or `PYTHONPATH`.
 - **`.venv/` is gitignored** — never commit it.
 
 ## Dependency Management
@@ -71,7 +71,9 @@
 
 - **Never use `env_file:` in service definitions.** Always declare each env var explicitly in the `environment:` block with `${VAR}` interpolation. This is critical because `env_file:` is internally a list — override files append rather than replace, causing the production `.env` to leak into test containers. Explicit `environment:` vars with `--env-file` interpolation keeps environments fully isolated and allows clean overrides.
 - **`.dockerignore` uses an allowlist** (`*` to exclude everything, then `!services/poller/**` to include the whole module). Tests, `__pycache__`, and the Dockerfile itself are re-excluded. This means adding new source files to `services/poller/` requires **no** `.dockerignore` or Dockerfile changes.
+- **When adding a new standalone module** (e.g. `services/notifier/`), you must add a `!services/<module>/**` entry to `.dockerignore` — the allowlist excludes everything by default. Also add exclusions for test files and `__pycache__` under the new module. Without this, `COPY services/<module>/ ./<module>/` in the Dockerfile will fail with a cryptic "not found" error.
 - The poller Dockerfile uses directory COPYs (`COPY services/poller/poller/ ./poller/`, `COPY services/poller/routes/ ./routes/`) so new files are picked up automatically.
+- **Never nest bind mounts in `docker-compose.test.yml`.** If a service mounts `./services/poller:/app` and you also need `services/notifier/` available, do NOT mount `./services/notifier:/app/notifier` (inside the first mount). Docker will auto-create an empty `services/poller/notifier/` directory on the host to back the nested mount point. On `docker compose restart`, this empty host directory shadows the real content, causing `ImportError`. Instead, mount the extra module at a separate path outside `/app` (e.g. `./services/notifier:/opt/notifier`) and add `PYTHONPATH: /opt` to the service's `environment:` block so Python can find it.
 
 ## Architecture
 
@@ -141,7 +143,7 @@ The deployment mode is controlled by `DEPLOY_MODE` in `.env` (required, validate
 ## Auth Pattern
 
 - API endpoints under `/ibkr/*` require `Authorization: Bearer <API_TOKEN>` (HMAC-safe comparison via `hmac.compare_digest`).
-- Webhook payloads are signed with HMAC-SHA256 (`X-Signature-256` header).
+- Webhook payloads are signed with HMAC-SHA256 (`X-Signature-256` header) via the notifier package.
 - VNC access is password-protected (VNC protocol auth).
 
 ## IB Gateway Lifecycle
@@ -219,7 +221,7 @@ services/poller/
   main.py                  # Entrypoint (polling loop + HTTP API startup)
   models_poller.py         # Pydantic models: Fill, Trade, WebhookPayload, BuySell
   poller/                  # Core polling logic (package)
-    __init__.py            # SQLite dedup, webhook delivery, Flex fetch, poll_once()
+    __init__.py            # SQLite dedup, Flex fetch, poll_once()
     flex_parser.py         # XML parser (Activity Flex + Trade Confirmation)
     test_flex_parser.py    # Tests for flex_parser
     test_poller.py         # Tests for poller core logic
@@ -231,9 +233,28 @@ services/poller/
   requirements.txt
 ```
 
-- **`services/poller/poller/`** contains core logic: SQLite dedup, webhook delivery (HMAC-SHA256), Flex Web Service two-step fetch, and `poll_once()`.
+- **`services/poller/poller/`** contains core logic: SQLite dedup, Flex Web Service two-step fetch, and `poll_once()`. Notification delivery is delegated to the notifier package (see below).
 - **`services/poller/routes/`** contains the HTTP API for on-demand polls (`POST /ibkr/poller/run`).
 - **`services/poller/models_poller.py`** is the source of truth for TypeScript types (`make types`).
+
+## Notifier Structure
+
+The `services/notifier/` package is a **standalone library** (no container, no Dockerfile). It provides a pluggable notification backend system used by the poller.
+
+```
+services/notifier/
+  __init__.py              # Registry, load_notifiers(), validate_notifier_env(), notify()
+  base.py                  # BaseNotifier ABC (name, required_env_vars, send)
+  webhook.py               # WebhookNotifier: HMAC-SHA256 signed HTTP POST
+  test_notifier.py         # Tests for registry and loader
+  test_webhook.py          # Tests for webhook backend
+```
+
+- **`NOTIFIERS` env var** controls which backends are active (comma-separated, e.g. `NOTIFIERS=webhook`). Empty = no notifications (dry-run).
+- **Suffix support** — `load_notifiers(suffix="_2")` reads from `TARGET_WEBHOOK_URL_2`, `WEBHOOK_SECRET_2`, etc. This powers `poller-2`.
+- **`validate_notifier_env()`** is called by `cli/__init__.py` during pre-deploy checks to ensure all required env vars are set for the configured backends.
+- **Adding a new backend** — create `services/notifier/<name>.py` with a class extending `BaseNotifier`, add it to `REGISTRY` in `__init__.py`.
+- **The poller calls `notify(notifiers, payload)`** — notifiers are loaded once at startup and passed through to `poll_once()`. The poller has no direct knowledge of webhook delivery mechanics.
 
 ## Models (Two Separate Files)
 
@@ -386,6 +407,7 @@ services/               # Business-logic services (user-facing features)
   remote-client/        # webhook-relay service (see Remote Client Structure above)
   poller/               # Flex poller service (see Poller Structure above)
     models_poller.py    # Pydantic models: Fill, Trade, WebhookPayload, BuySell
+  notifier/             # Pluggable notification backends (library, no container)
 infra/                  # Infrastructure backbone (no business logic)
   caddy/Caddyfile       # Reverse proxy config (uses env vars for domains)
   caddy/sites/          # Route snippets imported inside {$SITE_DOMAIN}
