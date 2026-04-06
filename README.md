@@ -509,6 +509,7 @@ make sync POLLER=0           # disable poller
 make sync REMOTE_CLIENT=0    # disable gateway stack
 make sync REMOTE_CLIENT=1    # re-enable gateway stack
 make local-up POLLER=0       # start local stack without poller
+make local-up REMOTE_CLIENT=0  # start local stack without gateway
 ```
 
 ### Syncing code changes

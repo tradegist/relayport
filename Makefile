@@ -49,6 +49,11 @@ sync: ## Push .env + restart (S=gateway B=1 LOCAL_FILES=1 SKIP_E2E=1)
 	$(PYTHON) -m cli sync $(S) $(if $(LOCAL_FILES),--local-files) $(if $(B),--build) $(if $(SKIP_E2E),--skip-e2e)
 
 order: ## Place a stock order (e.g. make order Q=2 SYM=TSLA T=MKT [P=] [CUR=EUR] [EX=LSE] [TIF=GTC] [RTH=1] [ENV=local])
+	@. ./.env && \
+		rc="$${REMOTE_CLIENT_ENABLED:-true}"; \
+		if [ "$$rc" = "false" ] || [ "$$rc" = "0" ] || [ "$$rc" = "no" ] || [ -z "$$rc" ]; then \
+			echo "ERROR: REMOTE_CLIENT_ENABLED is false — order API requires the gateway stack" >&2; exit 1; \
+		fi
 	$(CLI_RELAY_ENV) $(PYTHON) -m cli order $(Q) $(SYM) $(T) $(P) $(CUR) $(EX) $(if $(TIF),--tif $(TIF)) $(if $(RTH),--outside-rth)
 
 poll: ## Trigger an immediate Flex poll (V=1 verbose, DEBUG=1 raw XML, REPLAY=N resend, ENV=local)
@@ -80,6 +85,17 @@ lint: ## Run ruff linter (use FIX=1 to auto-fix)
 	$(PYTHON) -m ruff check services/poller/ services/remote-client/ services/notifier/ cli/ schema_gen.py $(if $(FIX),--fix)
 
 local-up: ## Start full stack locally (no TLS, direct port access)
+	@if [ -f .env ]; then \
+		. ./.env; \
+		rc="$${REMOTE_CLIENT_ENABLED:-true}"; \
+		if [ "$$rc" = "false" ] || [ "$$rc" = "0" ] || [ "$$rc" = "no" ] || [ -z "$$rc" ]; then \
+			export GATEWAY_REPLICAS=$${GATEWAY_REPLICAS:-0}; \
+		fi; \
+		pe="$${POLLER_ENABLED:-true}"; \
+		if [ "$$pe" = "false" ] || [ "$$pe" = "0" ] || [ "$$pe" = "no" ] || [ -z "$$pe" ]; then \
+			export POLLER_REPLICAS=$${POLLER_REPLICAS:-0}; \
+		fi; \
+	fi && \
 	$(LOCAL_COMPOSE) up -d --build
 	@echo ""
 	@echo "  REST API: http://localhost:15000/health"
@@ -154,7 +170,12 @@ stats: ## Show container resource usage
 		'docker stats --no-stream'
 
 gateway: ## Start IB Gateway container (then open VNC for 2FA)
-	@. ./.env && ssh -i $${SSH_KEY:-$$HOME/.ssh/$(PROJECT)} root@$$DROPLET_IP \
+	@. ./.env && \
+		rc="$${REMOTE_CLIENT_ENABLED:-true}"; \
+		if [ "$$rc" = "false" ] || [ "$$rc" = "0" ] || [ "$$rc" = "no" ] || [ -z "$$rc" ]; then \
+			echo "ERROR: REMOTE_CLIENT_ENABLED is false — gateway stack is disabled" >&2; exit 1; \
+		fi && \
+		ssh -i $${SSH_KEY:-$$HOME/.ssh/$(PROJECT)} root@$$DROPLET_IP \
 		'cd /opt/$(PROJECT) && docker compose up -d ib-gateway && sleep 2 && docker compose ps ib-gateway'
 
 ssh: ## SSH into the droplet
