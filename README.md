@@ -302,7 +302,7 @@ const payload: IbkrPoller.WebhookPayload = ...;
 const order: IbkrHttp.PlaceOrderPayload = ...;
 ```
 
-Types are auto-generated from the Pydantic models via `make types`. The package is not yet published to npm — the API is still evolving.
+Types are auto-generated from the Pydantic models via `make types`. The `Trade` type follows the CommonFill contract (`orderId`, `symbol`, `side`, `volume`, `price`, `fee`, `cost`, `orderType`, `timestamp`, `source`, `raw`, `fillCount`, `execIds`). The package is not yet published to npm — the API is still evolving.
 
 ## Configuration
 
@@ -339,35 +339,61 @@ When orders fill, the relay POSTs a JSON payload with all trades batched into a 
 {
   "trades": [
     {
-      "accountId": "UXXXXXXX",
-      "symbol": "AAPL",
-      "underlyingSymbol": "AAPL",
-      "assetCategory": "STK",
-      "listingExchange": "NASDAQ",
-      "exchange": "IBDARK",
-      "buySell": "BUY",
-      "quantity": 1.0,
-      "price": 254.6,
-      "tradeDate": "20260402",
-      "dateTime": "20260402;093008",
-      "orderTime": "20260401;183713",
       "orderId": "684196618",
-      "transactionId": "10101388829",
-      "orderType": "MKT",
-      "commission": -1.0,
-      "commissionCurrency": "USD",
-      "currency": "USD",
-      "execIds": ["10101388829"],
-      "fillCount": 1
+      "symbol": "AAPL",
+      "side": "buy",
+      "orderType": "market",
+      "price": 254.6,
+      "volume": 1.0,
+      "cost": 254.6,
+      "fee": -1.0,
+      "fillCount": 1,
+      "execIds": ["0001f4e8.67890abc.01.01"],
+      "timestamp": "20260402;093008",
+      "source": "flex",
+      "raw": {
+        "accountId": "UXXXXXXX",
+        "assetCategory": "STK",
+        "currency": "USD",
+        "commission": -1.0,
+        "commissionCurrency": "USD",
+        "tradeDate": "20260402",
+        "dateTime": "20260402;093008",
+        "orderTime": "20260401;183713",
+        "orderType": "MKT",
+        "listingExchange": "NASDAQ",
+        "exchange": "IBDARK",
+        "underlyingSymbol": "AAPL"
+      }
     }
   ],
   "errors": []
 }
 ```
 
-The `trades` array contains one `Trade` object per order (fills are aggregated by `orderId`). The `errors` array contains warnings about unknown XML attributes or parse errors — it is empty when everything parsed cleanly. See [Flex XML Parsing](#flex-xml-parsing) for details.
+### CommonFill Contract
 
-Each `Trade` includes **all fields** from the IBKR Flex XML (see [`services/poller/models_poller.py`](services/poller/models_poller.py) for the full list). Most fields not present in the XML default to `""` or `0.0`, but `buySell` must be present; rows missing it are skipped and reported in `errors`.
+All exchange relays (IBKR, Kraken, etc.) use the same **CommonFill** model. The `trades` array contains `Trade` objects with these guaranteed fields:
+
+| Field       | Type                | Description                                                                               |
+| ----------- | ------------------- | ----------------------------------------------------------------------------------------- |
+| `orderId`   | `string`            | Permanent order identifier (unique per account)                                           |
+| `symbol`    | `string`            | Instrument symbol                                                                         |
+| `side`      | `"buy" \| "sell"`   | Trade direction (lowercase)                                                               |
+| `orderType` | `OrderType \| null` | Normalized: `"market"`, `"limit"`, `"stop"`, `"stop_limit"`, `"trailing_stop"`, or `null` |
+| `price`     | `number`            | VWAP when aggregated, single fill price otherwise                                         |
+| `volume`    | `number`            | Sum of fill quantities                                                                    |
+| `cost`      | `number`            | Total cost (sum of fills)                                                                 |
+| `fee`       | `number`            | Total fees/commissions (sum of fills)                                                     |
+| `fillCount` | `number`            | Number of fills aggregated into this trade                                                |
+| `execIds`   | `string[]`          | One execution ID per fill (for tracing back to individual fills)                          |
+| `timestamp` | `string`            | Latest fill timestamp                                                                     |
+| `source`    | `string`            | Origin: `"flex"`, `"execDetailsEvent"`, or `"commissionReportEvent"`                      |
+| `raw`       | `object`            | Original exchange-specific payload (all fields, unmodified)                               |
+
+The `raw` object preserves the full exchange-specific data. For IBKR Flex, this includes ~100 XML attributes (account info, security details, financial fields, dates). For ib_async listener events, it includes a smaller set of fields from the execution/commission report objects. Consumers should treat `raw` as opaque exchange data — the CommonFill fields above are the stable contract.
+
+The `errors` array contains warnings about parse problems — it is empty when everything parsed cleanly.
 
 The payload is signed with HMAC-SHA256. Verify using the `X-Signature-256` header:
 
@@ -565,6 +591,8 @@ make sync LOCAL_FILES=1  # deploy to your droplet
 ├── docker-compose.local.yml # Local dev override (direct port access, no TLS)
 ├── docker-compose.test.yml # E2E test stack (ib-gateway + remote-client)
 ├── services/                  # Business-logic services (user-facing features)
+│   ├── shared/                    # Single source of truth for models + utilities
+│   │   └── __init__.py            # Fill, Trade, WebhookPayload, BuySell, OrderType, aggregate_fills()
 │   ├── remote-client/
 │   │   ├── Dockerfile
 │   │   ├── requirements.txt       # ib_async, aiohttp
@@ -587,7 +615,7 @@ make sync LOCAL_FILES=1  # deploy to your droplet
 │       ├── Dockerfile
 │       ├── requirements.txt       # httpx, pydantic, aiohttp
 │       ├── main.py                # Entrypoint (polling loop + HTTP API)
-│       ├── models_poller.py       # Pydantic models (Fill, Trade, WebhookPayload, BuySell)
+│       ├── models_poller.py       # Re-export shim (shared models + poller-specific API types)
 │       ├── poller/                # Core polling logic (package)
 │       │   ├── __init__.py        # SQLite dedup, Flex fetch, poll_once()
 │       │   ├── flex_parser.py     # Flex XML parser (Activity + Trade Confirmation)
@@ -881,18 +909,18 @@ The poller supports both **Activity Flex Queries** (`<Trade>` tags) and **Trade 
   | `settleDateTarget`   | `settleDateTarget`      | `settleDate`                 |
   | `tradeMoney`         | `tradeMoney`            | `amount`                     |
 
-- **All known fields are forwarded as-is** from the XML. The full list of supported fields is defined in [`services/poller/models_poller.py`](services/poller/models_poller.py). Unknown XML attributes are silently dropped but reported in the `errors` array of the webhook payload.
+- **All known fields are preserved in `raw`** — the full IBKR XML attributes are captured in the `raw` dict on each Fill (and propagated to Trade). CommonFill fields (`execId`, `symbol`, `side`, `volume`, `price`, `fee`, `cost`, `timestamp`, `orderType`, `source`) are extracted as top-level fields. Unknown XML attributes also appear in `raw` but are not reported as errors.
 
 - **Fills are aggregated into trades** by `orderId`. When an order has multiple fills:
-  - `quantity` is the sum of all fills
-  - `price` is the quantity-weighted average
-  - Financial fields (`commission`, `taxes`, `cost`, `tradeMoney`, `proceeds`, `netCash`, `fifoPnlRealized`, `mtmPnl`, `accruedInt`) are summed
-  - `dateTime` and `tradeDate` use the latest value across fills
-  - All other fields use the last fill's value
-  - `execIds` is an array of `transactionId` values (one per fill), so you can trace back to individual executions
+  - `volume` is the sum of all fills
+  - `price` is the quantity-weighted average (VWAP)
+  - Financial fields (`cost`, `fee`) are summed
+  - `timestamp` uses the latest value across fills
+  - `raw` comes from the first fill
+  - `execIds` is an array of execution IDs (one per fill), so you can trace back to individual executions
   - `fillCount` is the number of fills in the group
 
-- **Deduplication** uses `ibExecId` as the primary key (falling back to `transactionId` → `tradeID`). `ibExecId` is preferred because it is the common identifier between Flex XML fills and real-time ib_async execution events, enabling cross-service dedup. Processed IDs are stored in a shared SQLite database (WAL mode) that both the poller and listener read/write concurrently.
+- **Deduplication** uses `execId` as the primary key. For Flex XML, `execId` is resolved via a fallback chain: `ibExecId` → `transactionId` → `tradeID`. `ibExecId` is preferred because it is the common identifier between Flex XML fills and real-time ib_async execution events, enabling cross-service dedup. Processed IDs are stored in a shared SQLite database (WAL mode) that both the poller and listener read/write concurrently.
 
 - **Parse errors never break the runtime.** Malformed rows are skipped and reported in the `errors` array. Bad float values default to `0.0`.
 
@@ -920,7 +948,7 @@ IBKR uses different field names for the same identifiers across its APIs. This t
 - **Order level:** `permId` (TWS) ↔ `ibOrderID` (Flex AF) ↔ `orderID` (Flex TC)
 - **Fill level:** `execId` (TWS) ↔ `ibExecID` (Flex AF) ↔ `execID` (Flex TC)
 
-**This project's convention:** The permanent order ID (`permId` from ib_async) is exposed as `orderId` in all API responses (`PlaceOrderResponse`, `TradeDetail`). The session-scoped `orderId` from ib_async is never exposed — it resets on reconnect and is useless for cross-session tracking.
+**This project's convention:** The permanent order ID (`permId` from ib_async) is exposed as `orderId` in all API responses (`PlaceOrderResponse`, `Trade`). The session-scoped `orderId` from ib_async is never exposed — it resets on reconnect and is useless for cross-session tracking. The execution/fill ID is exposed as `execId` on `Fill` and in the `execIds` array on `Trade`. The dedup key is `execId`, resolved via the fallback chain `ibExecId` → `transactionId` → `tradeID` at parse time.
 
 ## Real-Time Listener
 
@@ -964,10 +992,14 @@ The listener reuses the same notifier configuration as the poller (`NOTIFIERS`, 
 
 Both the listener and poller share the same SQLite dedup database at `DEDUP_DB_PATH` (default `/data/dedup/fills.db`) on a `dedup-data` Docker named volume. SQLite WAL mode with `timeout=5.0` enables safe concurrent access from both containers.
 
-A fill processed by the listener is automatically skipped by the next poll cycle, and vice versa. The dedup key is `ibExecId` (the common identifier between Flex XML and ib_async events), falling back to `transactionId` → `tradeID`.
+A fill processed by the listener is automatically skipped by the next poll cycle, and vice versa. The dedup key is `execId` (resolved by the Flex parser via the `ibExecId` → `transactionId` → `tradeID` fallback chain; the listener uses `execId` from ib_async directly).
 
 The poller has a separate metadata DB at `META_DB_PATH` (default `/data/meta.db`) on a private `poller-data` volume for its timestamp watermark.
 
 ### Field mapping
 
-The listener maps ib_async event objects to `Fill` via `_map_to_fill()`, then wraps them in `Trade` objects (via `_fill_to_trade()` for immediate dispatch, or `aggregate_fills()` when debouncing). Since the events provide a different set of fields than Flex XML, some Trade fields will be empty strings or `0.0` (e.g. `tradeDate`, `tradeMoney`, `proceeds`). The key fields (`symbol`, `buySell`, `quantity`, `price`, `orderId`, `ibExecId`, `commission`, `dateTime`) are always populated.
+The listener maps ib_async event objects to `Fill` via `_map_to_fill()`, then wraps them in `Trade` objects (via `_fill_to_trade()` for immediate dispatch, or `aggregate_fills()` when debouncing). The ib_async objects are not directly serializable, so the listener manually extracts fields from `Execution`, `CommissionReport`, `Order`, and `Contract` into a flat `raw` dict.
+
+Since listener events provide a different set of fields than Flex XML, the `raw` dict contains a smaller set (~15 keys vs ~100 for Flex). The CommonFill fields (`symbol`, `side`, `volume`, `price`, `orderId`, `execId`, `fee`, `timestamp`) are always populated. `orderType` is `None` for listener events (ib_async doesn't expose it at the fill level). `cost` is `0.0`.
+
+The `raw` keys for listener events: `ibExecId`, `orderId`, `side`, `quantity`, `price`, `symbol`, `assetCategory`, `exchange`, `currency`, `commission`, `commissionCurrency`, `fifoPnlRealized`, `dateTime`, `accountId`.
