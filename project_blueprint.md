@@ -1,10 +1,15 @@
-# Kraken Webhook Relay — Project Blueprint
+# Exchange Webhook Relay — Project Blueprint
 
 > **Purpose:** This document is the technical specification for scaffolding a new
-> project (`kraken_relay`) that listens to the Kraken exchange via WebSocket and
-> REST API, detects completed trades, and fires webhook notifications. It is
-> designed to be handed to an AI agent in a fresh repository with zero prior
-> context.
+> exchange relay project (e.g. `binance_relay`, `kraken_relay`). The project
+> listens to an exchange via WebSocket and REST API, detects completed trades,
+> and fires webhook notifications. It is designed to be handed to an AI agent
+> in a fresh repository with zero prior context.
+>
+> **To adapt:** Replace `kraken` with the target exchange name throughout.
+> Replace API endpoints, auth methods, and WS message formats with the
+> exchange's equivalents. The architecture, dedup, notifier, CLI, deployment,
+> and TypeScript types are exchange-agnostic.
 
 ---
 
@@ -21,9 +26,13 @@ are filled. Two data sources:
 Both services:
 
 1. Receive trade/fill data from Kraken.
-2. Deduplicate against a SQLite database (by trade ID / `txid`).
+2. Deduplicate against a **shared** SQLite database (WAL mode, by execution ID).
 3. Aggregate fills into trades.
 4. POST a signed JSON webhook to `TARGET_WEBHOOK_URL`.
+
+Both services share a single dedup database on a `dedup-data` Docker volume.
+A fill processed by the listener is automatically skipped by the next poll
+cycle, and vice versa.
 
 The **listener** gives near-instant notifications. The **poller** is a
 reliability fallback that catches anything the WebSocket missed (disconnects,
@@ -135,6 +144,9 @@ These are non-negotiable. Every rule below applies from the first commit.
 ### 3.1 Code Quality
 
 - **No unused imports.** After writing or editing any Python file, verify every `import` is used. Remove unused ones.
+- **No `__all__`.** All imports are explicit (`from module import X`). `__all__` only controls star-imports, which we never use.
+- **Makefile must mirror CLI arguments.** When adding a new parameter to a `cli/` command, always add the corresponding `$(if $(VAR),--flag $(VAR))` to the Makefile target so `make <target> VAR=value` works.
+- **Update README.md when changing public interfaces.** When adding or modifying CLI commands, Makefile targets, API endpoints, or env vars, always update the README to reflect the change.
 - **Run `make lint` after every code change.** Ruff is the linter. Fix all errors before committing. Use `make lint FIX=1` to auto-fix safe issues.
 - **Run `make test` and `make typecheck` after every code change**, even refactors. Do not wait until the end — verify immediately.
 
@@ -288,7 +300,8 @@ kraken_relay/
 │       ├── test_notifier.py     # Tests for registry and loader
 │       └── test_webhook.py      # Tests for webhook backend
 │   └── dedup/                   # SQLite dedup (shared library, no container)
-│       ├── __init__.py          # init_db(), is_processed(), mark_processed(), prune()
+│       ├── __init__.py          # init_db(), is_processed(), get_processed_ids(),
+│       │                        #   mark_processed(), mark_processed_batch(), prune()
 │       └── test_dedup.py
 ├── infra/
 │   └── caddy/
@@ -445,7 +458,7 @@ webhooks when order executions are detected.
 2. Connect to wss://ws-auth.kraken.com/v2
 3. Subscribe to `executions` channel
 4. For each message:
-   a. Parse into Fill model (ws_parser.py)
+   a. Parse into Fill model (ws_parser.py) — raw fields (txid, pair) mapped to model fields (execId, symbol)
    b. Check dedup (services/dedup/) — skip if already processed
    c. Aggregate fills into Trade (by orderId / txid)
    d. Send via notifier (notify())
@@ -467,14 +480,13 @@ webhooks when order executions are detected.
 
 **SQLite Dedup (shared `services/dedup/` module):**
 
-Both the listener and poller use the shared `dedup` package for deduplication.
-Each service passes its own `db_path` to `init_db()` so they maintain separate
-databases.
+Both the listener and poller use the shared `dedup` package for deduplication,
+reading and writing the same `fills.db` at `DEDUP_DB_PATH` (default
+`/data/dedup/fills.db`) on a shared `dedup-data` Docker named volume. SQLite
+WAL mode + `timeout=5.0` enables safe concurrent access across containers.
 
-- `processed_fills` table with `exec_id TEXT PRIMARY KEY` and `processed_at TEXT DEFAULT (datetime('now'))`, keyed by Kraken `txid`.
-- Timestamp watermark pre-filter to reduce DB lookups.
+- `processed_fills` table with `exec_id TEXT PRIMARY KEY` and `processed_at TEXT DEFAULT (datetime('now'))`, keyed by execution ID.
 - Prune entries older than 30 days.
-- DB file at `/data/listener.db` (Docker named volume `listener-data:/data`).
 
 ### 6.2 Poller Service (`services/poller/`)
 
@@ -490,22 +502,32 @@ as a reliability fallback. Catches fills that the WebSocket missed.
 **Poll Cycle (in `poller/__init__.py`):**
 
 ```
-1. Call Kraken REST API for recent trades (TradesHistory)
+1. Call exchange REST API for recent trades (TradesHistory)
 2. Parse response JSON into Fill models
-3. SQLite dedup (skip already-processed txids)
-4. Aggregate into Trade models
+3. Batch dedup check via get_processed_ids() — skip already-processed IDs
+4. Aggregate new fills into Trade models
 5. Send via notifier (notify())
-6. Mark processed, update timestamp watermark
+6. Batch mark processed via mark_processed_batch()
+7. Update timestamp watermark in separate metadata DB
 ```
+
+**Replay mode** (`replay > 0`):
+- Passes `start=None` to the exchange API (ignores watermark, fetches all recent)
+- Skips dedup entirely — takes the first N fills regardless
+- Sends webhook but does NOT mark fills as processed or update watermark
+- Use case: testing webhook delivery without waiting for new real trades
 
 **HTTP API (aiohttp, same process):**
 
 - `GET /health` — returns `{"status": "ok"}`.
-- `POST /kraken/poller/run` — trigger immediate poll (auth required).
+- `POST /kraken/poller/run` — trigger immediate poll (auth required). Body: `{"replay": N}` to resend last N fills (bypasses dedup/watermark).
 
-**SQLite:** Same dedup module (`services/dedup/`) as listener but separate
-DB file (`/data/poller.db`, volume `poller-data:/data`). The poller's `init_db()`
-additionally creates a `watermark` table on top of the shared dedup schema.
+**SQLite:** Same shared dedup DB (`services/dedup/`) as listener — both services
+read/write the same `fills.db` on the `dedup-data` volume. The poller has a
+**separate** metadata database at `META_DB_PATH` (default `/data/meta/poller.db`)
+on a private `poller-meta` volume for the timestamp watermark. The poller's
+`init_dedup_db()` wraps `dedup.init_db()`; `init_meta_db()` creates and manages
+the watermark table independently.
 
 ---
 
@@ -519,34 +541,38 @@ additionally creates a `watermark` table on top of the shared dedup schema.
 
 ```python
 from enum import Enum
+from typing import Literal
 from pydantic import BaseModel, ConfigDict
+
+Source = Literal["ws_execution", "rest_poll"]
 
 class BuySell(str, Enum):
     BUY = "buy"
     SELL = "sell"
 
 class Fill(BaseModel):
-    """Individual execution from Kraken."""
+    """Individual execution from exchange."""
     model_config = ConfigDict(extra="forbid")
 
-    txid: str                    # Kraken trade ID (unique per execution)
-    orderId: str                 # Kraken order ID (ordertxid)
-    pair: str                    # e.g. "XXBTZUSD"
+    execId: str                  # Exchange execution/trade ID (unique per fill)
+    orderId: str                 # Exchange order ID
+    symbol: str                  # e.g. "XXBTZUSD"
     side: BuySell
     orderType: str               # "market", "limit", etc.
     price: float
     volume: float
     cost: float
     fee: float
-    time: float                  # Unix timestamp of execution
-    # Add more fields as needed from Kraken's response
+    timestamp: str               # ISO 8601 ("2025-04-07T10:30:00Z")
+    source: Source               # Origin: "ws_execution" or "rest_poll"
+    # Add more fields as needed from the exchange's response
 
 class Trade(BaseModel):
     """Aggregated trade (one or more fills for the same order)."""
     model_config = ConfigDict(extra="forbid")
 
     orderId: str
-    pair: str
+    symbol: str
     side: BuySell
     orderType: str
     price: float                 # Volume-weighted average price
@@ -554,8 +580,9 @@ class Trade(BaseModel):
     cost: float                  # Total cost
     fee: float                   # Total fees
     fillCount: int
-    execIds: list[str]           # All txids in this trade
-    time: str                    # ISO timestamp of latest fill
+    execIds: list[str]           # All execution IDs in this trade
+    timestamp: str               # ISO timestamp of latest fill
+    source: Source               # Origin of the fills
 
 class WebhookPayload(BaseModel):
     """Payload sent to the target webhook URL."""
@@ -564,7 +591,18 @@ class WebhookPayload(BaseModel):
     trades: list[Trade]
     errors: list[str]            # Parse errors, if any
 
-SCHEMA_MODELS: list[type[BaseModel]] = [WebhookPayload, Trade, Fill, BuySell]
+SCHEMA_MODELS: list[type[BaseModel]] = [WebhookPayload, Trade, Fill]
+```
+
+### `services/poller/models_poller.py`
+
+The poller re-exports shared types from the listener models (they are identical).
+The listener's `models_listener.py` is the single source of truth.
+
+```python
+from models_listener import Fill, Trade, WebhookPayload
+
+SCHEMA_MODELS: list[type[BaseModel]] = [WebhookPayload, Trade, Fill]
 ```
 
 ---
@@ -654,10 +692,11 @@ services:
       WEBHOOK_HEADER_NAME: ${WEBHOOK_HEADER_NAME:-}
       WEBHOOK_HEADER_VALUE: ${WEBHOOK_HEADER_VALUE:-}
       API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}
+      DEDUP_DB_PATH: /data/dedup/fills.db
     expose:
       - "5000"
     volumes:
-      - listener-data:/data
+      - dedup-data:/data/dedup
 
   kraken-poller:
     build:
@@ -674,10 +713,13 @@ services:
       WEBHOOK_HEADER_VALUE: ${WEBHOOK_HEADER_VALUE:-}
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-300}
       API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}
+      DEDUP_DB_PATH: /data/dedup/fills.db
+      META_DB_PATH: /data/meta/poller.db
     expose:
       - "8000"
     volumes:
-      - poller-data:/data
+      - dedup-data:/data/dedup
+      - poller-meta:/data/meta
 
   caddy:
     image: caddy:2-alpine
@@ -697,8 +739,8 @@ services:
       - caddy-config:/config
 
 volumes:
-  listener-data:
-  poller-data:
+  dedup-data:
+  poller-meta:
   caddy-data:
   caddy-config:
 
@@ -745,6 +787,7 @@ services:
       API_TOKEN: test-token
       KRAKEN_API_KEY: ${KRAKEN_API_KEY} # from .env.test
       KRAKEN_API_SECRET: ${KRAKEN_API_SECRET} # from .env.test
+      DEDUP_DB_PATH: /data/dedup/fills.db
       PYTHONPATH: /opt # for notifier + dedup at /opt/*
     ports:
       - "15010:5000"
@@ -772,6 +815,8 @@ services:
       KRAKEN_API_KEY: ${KRAKEN_API_KEY}
       KRAKEN_API_SECRET: ${KRAKEN_API_SECRET}
       POLL_INTERVAL_SECONDS: "99999" # effectively disable auto-poll
+      DEDUP_DB_PATH: /data/dedup/fills.db
+      META_DB_PATH: /data/meta/poller.db
       PYTHONPATH: /opt
     ports:
       - "15011:8000"
@@ -1016,7 +1061,8 @@ def main():
 
     # Project-specific commands
     p = sub.add_parser("poll", help="Trigger an immediate Kraken poll")
-    # ... poll-specific args ...
+    p.add_argument("--replay", type=int, default=0, metavar="N",
+                   help="Resend the last N fills (bypasses dedup/watermark)")
 
     modules = {**CORE_MODULES, **_PROJECT_MODULES}
     module = importlib.import_module(modules[args.command])
@@ -1073,7 +1119,14 @@ e2e-down:     ## Stop E2E test stack
 e2e:          ## Full E2E cycle (up + run + down)
 local-up:     ## Start local dev stack
 local-down:   ## Stop local dev stack
-poll:         ## Trigger immediate Kraken poll
+poll:         ## Trigger immediate Kraken poll (REPLAY=N to resend last N fills)
+```
+
+### `poll` target with replay support
+
+```makefile
+poll:
+	$(PYTHON) -m cli poll $(if $(V),-v) $(if $(REPLAY),--replay $(REPLAY))
 ```
 
 ### `MYPYPATH` for cross-service imports
@@ -1088,6 +1141,7 @@ typecheck:
 	MYPYPATH=services/listener:services $(PYTHON) -m mypy services/listener/
 	MYPYPATH=services/poller:services/listener:services $(PYTHON) -m mypy services/poller/
 	MYPYPATH=services $(PYTHON) -m mypy services/notifier/
+	$(PYTHON) -m mypy services/dedup/
 ```
 
 The poller needs `services/listener` on its path because `models_poller.py`
@@ -1120,21 +1174,21 @@ warn_unused_configs = true
 explicit_package_bases = true
 
 [tool.pytest.ini_options]
-testpaths = ["services/listener", "services/poller", "services/notifier"]
+testpaths = ["services/listener", "services/poller", "services/notifier", "services/dedup"]
 norecursedirs = ["tests/e2e"]
 addopts = "--import-mode=importlib"
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["services/listener", "services/poller", "services/notifier", "cli"]
+src = ["services/listener", "services/poller", "services/notifier", "services/dedup", "cli"]
 
 [tool.ruff.lint]
 select = ["F", "E", "W", "I", "UP", "B", "SIM", "RUF", "PGH003"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["listener", "poller", "notifier", "routes", "models_listener", "models_poller"]
+known-first-party = ["listener", "poller", "notifier", "dedup", "routes", "models_listener", "models_poller"]
 ```
 
 ---
