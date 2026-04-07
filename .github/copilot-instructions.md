@@ -242,7 +242,7 @@ The `services/poller/` service follows the same package pattern:
 ```
 services/poller/
   main.py                  # Entrypoint (polling loop + HTTP API startup)
-  models_poller.py         # Pydantic models: Fill, Trade, WebhookPayload, BuySell
+  models_poller.py         # Re-export shim (shared models + poller-specific API types)
   poller/                  # Core polling logic (package)
     __init__.py            # SQLite dedup, Flex fetch, poll_once()
     flex_parser.py         # XML parser (Activity Flex + Trade Confirmation)
@@ -262,7 +262,7 @@ services/poller/
 
 - **`services/poller/poller/`** contains core logic: SQLite dedup, Flex Web Service two-step fetch, and `poll_once()`. Notification delivery is delegated to the notifier package (see below).
 - **`services/poller/routes/`** contains the HTTP API for on-demand polls (`POST /ibkr/poller/run`).
-- **`services/poller/models_poller.py`** is the source of truth for TypeScript types (`make types`).
+- **`services/poller/models_poller.py`** is a re-export shim for shared models plus poller-specific API types (`RunPollResponse`, `HealthResponse`). The shared models (`Fill`, `Trade`, `WebhookPayload`) live in `services/shared/__init__.py`.
 
 ## Notifier Structure
 
@@ -300,7 +300,7 @@ services/dedup/
 - **`mark_processed_batch(conn, exec_ids)`** — batch mark (used by poller).
 - **`prune(conn, days=30)`** — delete old entries.
 - **Shared dedup DB** — both services read/write the same `fills.db` at `DEDUP_DB_PATH` (default `/data/dedup/fills.db`) on a `dedup-data` Docker named volume. SQLite WAL mode + `timeout=5.0` enables safe concurrent access.
-- **Dedup key priority** — `ibExecId → transactionId → tradeID` (via `_dedup_id()` in `models_poller.py`). `ibExecId` is preferred because it is the common identifier between Flex XML fills and ib_async execution events.
+- **Dedup key priority** — `ibExecId → transactionId → tradeID` (via `_dedup_id()` in `services/shared/__init__.py`). `ibExecId` is preferred because it is the common identifier between Flex XML fills and ib_async execution events.
 - The poller has a separate metadata DB at `META_DB_PATH` (default `/data/meta.db`) on a `poller-data` volume for the timestamp watermark. The poller's `init_dedup_db()` wraps `dedup.init_db()`; `init_meta_db()` manages the metadata table independently.
 
 ## Listener (Real-Time Trade Events)
@@ -319,21 +319,24 @@ The listener is an **opt-in** feature (`LISTENER_ENABLED` env var) that subscrib
 - **Side mapping**: `"BOT"` → `BuySell.BUY`, `"SLD"` → `BuySell.SELL`.
 - **UNSET sentinel**: ib_async uses `1.7976931348623157e308` for unset floats — the listener treats this as `0.0`.
 
-## Models (Two Separate Files)
+## Models (Three Locations)
 
-This project has **two independent model files** with unique names to avoid import ambiguity:
+This project has **three model locations** — a shared source of truth and two service-specific files:
 
 | File                                             | Domain                      | Contains                                                                                      |
 | ------------------------------------------------ | --------------------------- | --------------------------------------------------------------------------------------------- |
-| `services/poller/models_poller.py`               | Webhook payloads (outbound) | `Fill`, `Trade`, `WebhookPayload`, `BuySell` — re-exported from `shared`                       |
+| `services/shared/__init__.py`                    | CommonFill (outbound)       | `Fill`, `Trade`, `WebhookPayload`, `BuySell`, `OrderType`, `Source`, `aggregate_fills()`, `_dedup_id()` |
+| `services/poller/models_poller.py`               | Poller API (outbound)       | Re-exports shared models + `RunPollResponse`, `HealthResponse`                                 |
 | `services/remote-client/models_remote_client.py` | Order API (inbound)         | `ContractPayload`, `OrderPayload`, `PlaceOrderPayload`, `PlaceOrderResponse` — REST API types |
 
-- **Unique filenames** (`models_poller.py`, `models_remote_client.py`) prevent import collisions when both `services/poller/` and `services/remote-client/` are on `sys.path` (via the `.pth` file). Use `from models_poller import Fill` for types/models.
+- **`services/shared/__init__.py`** is the single source of truth for all webhook payload models. Both poller and remote-client import from it.
+- **Unique filenames** (`models_poller.py`, `models_remote_client.py`) prevent import collisions when both `services/poller/` and `services/remote-client/` are on `sys.path` (via the `.pth` file). Use `from shared import Fill` for shared types, `from models_poller import RunPollResponse` for poller-specific types.
 - **Model shims only re-export models and types** (Pydantic models, enums, type aliases). Utility functions (`aggregate_fills`, `normalize_order_type`, `_dedup_id`) must be imported directly from the owning module: `from shared import aggregate_fills`. Never re-export functions through model shims.
-- `models_poller.py` is the source of truth for `IbkrPoller` TypeScript types (`make types`).
+- `models_poller.py` re-exports shared models and defines poller-specific API types. Its `SCHEMA_MODELS` contains only `[RunPollResponse, HealthResponse]`.
+- `shared/__init__.py` defines `SCHEMA_MODELS = [WebhookPayload, Trade, Fill]` for the shared types.
 - `models_remote_client.py` is the source of truth for `IbkrHttp` TypeScript types (`make types`).
 - `models_remote_client.py` uses strict `Literal` types (`Action`, `OrderType`, `SecType`, `TimeInForce`) aligned with `ib_async` field names.
-- Both use `ConfigDict(extra="forbid")` for strict validation.
+- All external-contract models use `ConfigDict(extra="forbid")` for strict validation.
 
 ## Naming Convention for API Models
 
@@ -381,27 +384,54 @@ The `POST /ibkr/order` endpoint accepts a nested payload mirroring `ib.placeOrde
 
 ## TypeScript Types
 
+### Namespace Convention (cross-relay standard)
+
+All relay projects export TypeScript types using a two-tier namespace pattern:
+
+- **`types/shared/`** → exported as the **relay's primary namespace** (named after the exchange: `Ibkr`, `Kraken`, etc.). Contains the CommonFill models (`Fill`, `Trade`, `WebhookPayload`, `BuySell`) generated from `services/shared/__init__.py` SCHEMA_MODELS. Every relay has this.
+- **`types/<module>/`** → exported as **`<RelayName><ModuleName>`** (e.g. `IbkrPoller`, `IbkrHttp`). Contains service-specific types generated from that module's `SCHEMA_MODELS`. Only created when a service has unique types not in shared.
+
+The barrel `types/index.d.ts` ties them together:
+```ts
+import * as Ibkr from "./shared";
+import * as IbkrPoller from "./poller";
+import * as IbkrHttp from "./http";
+export { Ibkr, IbkrPoller, IbkrHttp };
+```
+
+A relay with no service-specific types (e.g. kraken_relay) has only the shared namespace:
+```ts
+export * as Kraken from "./shared";
+```
+
+### IBKR Relay Types
+
 - Types are published as `@tradegist/ibkr-relay-types` (npm package in `types/`, not yet published).
-- **Two namespaces**: `IbkrPoller` (webhook payload types) and `IbkrHttp` (order API types).
-- **`make types`** regenerates both from Pydantic models:
-  - `services/poller/models_poller.py` → `types/poller/webhook.d.ts`
-  - `services/remote-client/models_remote_client.py` → `types/http/order.d.ts`
+- **Three namespaces**: `Ibkr` (shared webhook payload types), `IbkrPoller` (poller-specific API types), and `IbkrHttp` (order API types).
+- **`make types`** regenerates all three from Pydantic models:
+  - `services/shared/__init__.py` → `types/shared/types.d.ts` (CommonFill models: WebhookPayload, Trade, Fill, BuySell)
+  - `services/poller/models_poller.py` → `types/poller/types.d.ts` (poller-specific: RunPollResponse, HealthResponse)
+  - `services/remote-client/models_remote_client.py` → `types/http/types.d.ts` (order API types)
 - **Structure:**
   ```
   types/
-    index.d.ts                 # Barrel: exports IbkrPoller, IbkrHttp namespaces
+    index.d.ts                 # Barrel: exports Ibkr, IbkrPoller, IbkrHttp namespaces
     package.json               # @tradegist/ibkr-relay-types
+    shared/
+      index.d.ts               # Re-exports: BuySell, Fill, Trade, WebhookPayload
+      types.d.ts               # Generated from shared/__init__.py (SCHEMA_MODELS)
+      types.schema.json         # Intermediate JSON Schema
     poller/
-      index.d.ts               # Re-exports: BuySell, WebhookPayload, Trade
-      types.d.ts               # Generated from poller/models_poller.py
+      index.d.ts               # Re-exports: RunPollResponse, HealthResponse
+      types.d.ts               # Generated from poller/models_poller.py (SCHEMA_MODELS)
       types.schema.json         # Intermediate JSON Schema
     http/
       index.d.ts               # Re-exports: PlaceOrderPayload, ContractPayload, OrderPayload, PlaceOrderResponse
-      types.d.ts               # Generated from remote-client/models_remote_client.py
+      types.d.ts               # Generated from remote-client/models_remote_client.py (SCHEMA_MODELS)
       types.schema.json         # Intermediate JSON Schema
   ```
-- **Usage:** `import { IbkrPoller, IbkrHttp } from "@tradegist/ibkr-relay-types"`
-- Each model file declares a `SCHEMA_MODELS` list at the bottom — `schema_gen.py` reads it to generate the JSON Schema. **To export a new model to TypeScript, append it to `SCHEMA_MODELS` in the relevant `models_*.py` file and update the corresponding `types/*/index.d.ts` re-exports.**
+- **Usage:** `import { Ibkr, IbkrPoller, IbkrHttp } from "@tradegist/ibkr-relay-types"`
+- Each model file declares a `SCHEMA_MODELS` list at the bottom — `schema_gen.py` reads it to generate the JSON Schema. **To export a new model to TypeScript, append it to `SCHEMA_MODELS` in the relevant `models_*.py` or `shared/__init__.py` file and update the corresponding `types/*/index.d.ts` re-exports.**
 
 ## Code Style
 

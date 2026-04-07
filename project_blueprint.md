@@ -263,7 +263,7 @@ kraken_relay/
 ├── services/
 │   ├── shared/                  # Source of truth: shared models + utilities (library, no container)
 │   │   ├── __init__.py          # Fill, Trade, WebhookPayload, BuySell, Source, OrderType,
-│   │   │                        #   normalize_order_type(), SCHEMA_MODELS
+│   │   │                        #   normalize_order_type(), aggregate_fills(), SCHEMA_MODELS
 │   │   └── kraken_types.py      # TypedDicts for Kraken API (KrakenWsMessage, KrakenWsExecution,
 │   │                            #   KrakenRestTrade) — mirrors official Kraken API docs
 │   ├── listener/                # WebSocket listener service
@@ -548,12 +548,18 @@ source of truth**. Service-specific files (`models_listener.py`,
 `models_poller.py`) are re-export shims so existing imports like
 `from models_listener import Fill` keep working. **Shims only re-export
 models and types** (Pydantic models, enums, type aliases). Utility functions
-(`aggregate_fills`, `normalize_order_type`, `_dedup_id`) must be imported
+(`aggregate_fills`, `normalize_order_type`) must be imported
 directly from the owning module (`from shared import aggregate_fills`). Never
 re-export functions through model shims. Shared models must be added to
 `shared` and re-exported with `X as X` for mypy strict re-export compatibility.
 Service-specific models (not shared across services) may be defined directly in
 the shim file with their own `SCHEMA_MODELS` for TypeScript generation.
+
+> **Exchange-specific utilities:** Some exchanges need a `_dedup_id()` helper
+> when the raw fill data offers multiple ID fields with a fallback chain (e.g.
+> IBKR's `ibExecId → transactionId → tradeID`). If the exchange provides a
+> single canonical execution ID, `_dedup_id()` is unnecessary — just use
+> `fill.execId` directly.
 
 The shared module also exports reusable utility functions (e.g.
 `normalize_order_type()`) that are used by both parsers. This eliminates
@@ -660,6 +666,57 @@ class WebhookPayload(BaseModel):
 
 SCHEMA_MODELS: list[type[BaseModel]] = [WebhookPayload, Trade, Fill]
 ```
+
+### aggregate_fills()
+
+The shared module also provides `aggregate_fills()` — a generic function that
+groups fills by `orderId` and computes aggregated `Trade` objects:
+
+- `volume` — sum of all fills
+- `price` — quantity-weighted average (VWAP)
+- `cost`, `fee` — summed
+- `timestamp` — latest fill's value (lexicographic max)
+- `execIds` — one per fill
+- `fillCount` — number of fills in the group
+- `raw` — first fill's raw dict
+
+```python
+def aggregate_fills(fills: list[Fill]) -> list[Trade]:
+    """Group fills by orderId and compute aggregated Trade objects."""
+    groups: dict[str, list[Fill]] = {}
+    for fill in fills:
+        if not fill.orderId:
+            continue
+        groups.setdefault(fill.orderId, []).append(fill)
+
+    trades: list[Trade] = []
+    for _order_id, order_fills in groups.items():
+        abs_total = sum(abs(f.volume) for f in order_fills)
+        avg_price = (
+            sum(abs(f.volume) * f.price for f in order_fills) / abs_total
+            if abs_total else 0.0
+        )
+        last = order_fills[-1]
+        trades.append(Trade(
+            orderId=last.orderId,
+            symbol=last.symbol,
+            side=last.side,
+            orderType=last.orderType,
+            price=round(avg_price, 8),
+            volume=sum(f.volume for f in order_fills),
+            cost=round(sum(f.cost for f in order_fills), 4),
+            fee=round(sum(f.fee for f in order_fills), 4),
+            fillCount=len(order_fills),
+            execIds=[f.execId for f in order_fills],
+            timestamp=max(f.timestamp for f in order_fills),
+            source=last.source,
+            raw=order_fills[0].raw,
+        ))
+    return trades
+```
+
+This logic is exchange-agnostic — every relay project should use this shared
+implementation rather than duplicating it per service.
 
 **`Trade.raw`** comes from the **first fill** of the aggregation. For
 multi-fill trades, symbol/order metadata is identical across fills for the same
@@ -1350,18 +1407,42 @@ test:
 	PYTHONPATH=.:services/listener:services/poller:services/shared:services $(PYTHON) -m pytest -v
 ```
 
-### `types` target — single namespace
+### `types` target — namespace convention
 
-The `types` target generates TypeScript types from the shared models only:
+All relay projects export TypeScript types using a two-tier namespace pattern:
+
+- **`types/shared/`** → exported as the **relay's primary namespace** (named
+  after the exchange: `Kraken`, `Ibkr`, etc.). Contains the CommonFill models
+  generated from `services/shared/__init__.py` SCHEMA_MODELS. Every relay has
+  this.
+- **`types/<module>/`** → exported as **`<RelayName><ModuleName>`** (e.g.
+  `IbkrPoller`, `IbkrHttp`). Contains service-specific types generated from
+  that module's `SCHEMA_MODELS`. Only created when a service needs unique
+  exported types not present in shared.
+
+The barrel `types/index.d.ts` ties them together:
+
+```ts
+// Minimal (shared only, e.g. kraken_relay):
+export * as Kraken from "./shared";
+
+// With service-specific types (e.g. ibkr_relay):
+import * as Ibkr from "./shared";
+import * as IbkrPoller from "./poller";
+import * as IbkrHttp from "./http";
+export { Ibkr, IbkrPoller, IbkrHttp };
+```
+
+The minimal `types` target generates shared types only:
 
 ```makefile
 types:
-	PYTHONPATH=services/shared $(PYTHON) schema_gen.py shared types/shared/types
+	PYTHONPATH=services/shared $(PYTHON) schema_gen.py shared > types/shared/types.schema.json
+	npx --yes json-schema-to-typescript types/shared/types.schema.json > types/shared/types.d.ts
 ```
 
-This produces a single `Kraken` namespace. Service-specific shim models with
-their own `SCHEMA_MODELS` can add additional `schema_gen.py` invocations if
-needed.
+To add service-specific namespaces, append more `schema_gen.py` invocations
+(one per module with its own `SCHEMA_MODELS`).
 
 ---
 
@@ -1469,7 +1550,7 @@ every step.
 12. **Terraform** — `main.tf`, `variables.tf`, `outputs.tf`, `cloud-init.sh`, `env.tftpl`.
 13. **Caddy** — `Caddyfile` (standalone), `kraken.caddy` (shared snippet).
 14. **Shared mode** — `docker-compose.shared.yml`, snippet validation, deploy integration.
-15. **TypeScript types** — `schema_gen.py`, `types/` package with single `Kraken` namespace, `make types`.
+15. **TypeScript types** — `schema_gen.py`, `types/` package with `<Exchange>` primary namespace from shared, optional `<Exchange><Module>` namespaces for service-specific types, `make types`.
 16. **E2E tests** — against a real Kraken account with API keys (paper/small balance).
 17. **CI** — GitHub Actions workflow.
 
