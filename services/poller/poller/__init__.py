@@ -11,7 +11,7 @@ import httpx
 
 from dedup import get_processed_ids, mark_processed_batch, prune
 from dedup import init_db as _init_dedup_db
-from models_poller import Trade, WebhookPayload
+from models_poller import Trade, WebhookPayloadTrades
 from notifier import notify
 from notifier.base import BaseNotifier
 from shared import aggregate_fills
@@ -210,7 +210,7 @@ def poll_once(
                 replay_fills = sorted_fills[:replay]
                 trades = aggregate_fills(replay_fills)
                 log.info("Replay mode: resending %d fill(s) as %d trade(s)", len(replay_fills), len(trades))
-                notify(notifiers or [], WebhookPayload(trades=trades, errors=parse_errors))
+                notify(notifiers or [], WebhookPayloadTrades(data=trades, errors=parse_errors))
                 return trades
             log.info("No new fills")
             return []
@@ -227,7 +227,7 @@ def poll_once(
             )
 
         # Send a single webhook with all trades
-        notify(notifiers or [], WebhookPayload(trades=trades, errors=parse_errors))
+        notify(notifiers or [], WebhookPayloadTrades(data=trades, errors=parse_errors))
 
         # Mark all fills as processed after successful webhook
         all_new_ids = [did for t in trades for did in t.execIds]

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from client.listener import ListenerNamespace, _fill_to_trade, _map_to_fill
-from models_poller import BuySell, Fill, WebhookPayload
+from models_poller import BuySell, Fill, WebhookPayloadTrades
 
 # ── Mock factories ───────────────────────────────────────────────────────
 
@@ -209,9 +209,9 @@ class TestListenerDispatchImmediate:
 
         mock_notify.assert_called_once()
         payload = mock_notify.call_args[0][1]
-        assert isinstance(payload, WebhookPayload)
-        assert payload.trades[0].source == "execDetailsEvent"
-        assert payload.trades[0].symbol == "AAPL"
+        assert isinstance(payload, WebhookPayloadTrades)
+        assert payload.data[0].source == "execDetailsEvent"
+        assert payload.data[0].symbol == "AAPL"
 
     @patch("client.listener.notify")
     def test_commission_report_dispatches(self, mock_notify: MagicMock) -> None:
@@ -231,9 +231,9 @@ class TestListenerDispatchImmediate:
 
         mock_notify.assert_called_once()
         payload = mock_notify.call_args[0][1]
-        assert isinstance(payload, WebhookPayload)
-        assert payload.trades[0].source == "commissionReportEvent"
-        assert payload.trades[0].fee == 1.5
+        assert isinstance(payload, WebhookPayloadTrades)
+        assert payload.data[0].source == "commissionReportEvent"
+        assert payload.data[0].fee == 1.5
 
     @patch("client.listener.notify")
     def test_commission_report_dedup_skips_duplicate(self, mock_notify: MagicMock) -> None:
@@ -315,7 +315,7 @@ class TestDebounceAggregatesRapidFills:
 
         mock_notify.assert_called_once()
         payload = mock_notify.call_args[0][1]
-        trade = payload.trades[0]
+        trade = payload.data[0]
         assert trade.symbol == "NVDA"
         assert trade.volume == 100.0
         assert trade.fillCount == 2
@@ -383,7 +383,7 @@ class TestDebounceDifferentOrdersIndependent:
             loop.close()
 
         assert mock_notify.call_count == 2
-        symbols = {mock_notify.call_args_list[i][0][1].trades[0].symbol for i in range(2)}
+        symbols = {mock_notify.call_args_list[i][0][1].data[0].symbol for i in range(2)}
         assert symbols == {"AAPL", "TSLA"}
 
 
@@ -411,7 +411,7 @@ class TestDebounceEnqueueDedup:
 
         mock_notify.assert_called_once()
         payload = mock_notify.call_args[0][1]
-        trade = payload.trades[0]
+        trade = payload.data[0]
         assert trade.fillCount == 1
         assert trade.execIds == ["DUP1"]
         assert trade.volume == 10.0
@@ -445,7 +445,7 @@ class TestDebounceDedup:
 
         mock_notify.assert_called_once()
         payload = mock_notify.call_args[0][1]
-        trade = payload.trades[0]
+        trade = payload.data[0]
         # Only E2 should be in the trade (E1 filtered out)
         assert trade.fillCount == 1
         assert trade.execIds == ["E2"]

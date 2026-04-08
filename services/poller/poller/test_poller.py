@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from dedup import get_processed_ids, mark_processed_batch
-from models_poller import BuySell, Fill, Trade, WebhookPayload
+from models_poller import BuySell, Fill, Trade, WebhookPayloadTrades
 from poller import (
     get_last_poll_ts,
     init_dedup_db,
@@ -234,8 +234,8 @@ class TestPollOnce:
         assert result[0].symbol == "AAPL"
         mock_notify.assert_called_once()
         sent_payload = mock_notify.call_args[0][1]
-        assert isinstance(sent_payload, WebhookPayload)
-        assert len(sent_payload.trades) == 1
+        assert isinstance(sent_payload, WebhookPayloadTrades)
+        assert len(sent_payload.data) == 1
 
     @patch("poller.notify")
     @patch("poller.aggregate_fills")
@@ -462,7 +462,7 @@ class TestPollOnce:
         assert len(result) == 2
         mock_notify.assert_called_once()
         sent_payload = mock_notify.call_args[0][1]
-        assert len(sent_payload.trades) == 2
+        assert len(sent_payload.data) == 2
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -527,7 +527,7 @@ class TestPollOnceE2E:
         # Webhook sent with the aggregated trade
         mock_notify.assert_called_once()
         sent_payload = mock_notify.call_args[0][1]
-        assert len(sent_payload.trades) == 1
+        assert len(sent_payload.data) == 1
         assert sent_payload.errors == []
 
         # Fills marked as processed

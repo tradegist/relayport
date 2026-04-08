@@ -688,14 +688,19 @@ class Trade(BaseModel):
     source: Source               # Origin of the fills
     raw: dict[str, Any]          # Raw payload from the first fill
 
-class WebhookPayload(BaseModel):
-    """Payload sent to the target webhook URL."""
+class WebhookPayloadTrades(BaseModel):
+    """Webhook payload for trade execution events."""
     model_config = ConfigDict(extra="forbid")
 
-    trades: list[Trade]
+    relay: Literal["ibkr"] = "ibkr"
+    type: Literal["trades"] = "trades"
+    data: list[Trade]
     errors: list[str]            # Parse errors, if any
 
-SCHEMA_MODELS: list[type[BaseModel]] = [WebhookPayload, Trade, Fill]
+# Discriminated union — grows as new event types are added.
+WebhookPayload = WebhookPayloadTrades
+
+SCHEMA_MODELS: list[type[BaseModel]] = [WebhookPayloadTrades, Trade, Fill]
 ```
 
 ### aggregate_fills()

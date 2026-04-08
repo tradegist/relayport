@@ -31,17 +31,17 @@ class WebhookNotifier(BaseNotifier):
     @staticmethod
     def _dry_run_summary(payload: BaseModel) -> str:
         payload_data = payload.model_dump()
-        trades = payload_data.get("trades")
-        if isinstance(trades, list):
+        data = payload_data.get("data")
+        if isinstance(data, list):
             symbols = sorted(
                 {
                     trade["symbol"]
-                    for trade in trades
+                    for trade in data
                     if isinstance(trade, dict) and isinstance(trade.get("symbol"), str)
                 }
             )
             return (
-                f"{payload.__class__.__name__}(trade_count={len(trades)}, "
+                f"{payload.__class__.__name__}(trade_count={len(data)}, "
                 f"symbols={symbols})"
             )
         return payload.__class__.__name__

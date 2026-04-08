@@ -93,11 +93,21 @@
       "title": "Trade",
       "type": "object"
     },
-    "WebhookPayload": {
+    "WebhookPayloadTrades": {
       "additionalProperties": false,
-      "description": "Payload sent to the target webhook URL.",
+      "description": "Webhook payload for trade execution events.",
       "properties": {
-        "trades": {
+        "relay": {
+          "const": "ibkr",
+          "default": "ibkr",
+          "type": "string"
+        },
+        "type": {
+          "const": "trades",
+          "default": "trades",
+          "type": "string"
+        },
+        "data": {
           "items": {
             "$ref": "#/$defs/Trade"
           },
@@ -111,10 +121,12 @@
         }
       },
       "required": [
-        "trades",
-        "errors"
+        "data",
+        "errors",
+        "relay",
+        "type"
       ],
-      "title": "WebhookPayload",
+      "title": "WebhookPayloadTrades",
       "type": "object"
     },
     "Fill": {
@@ -198,7 +210,7 @@
   },
   "anyOf": [
     {
-      "$ref": "#/$defs/WebhookPayload"
+      "$ref": "#/$defs/WebhookPayloadTrades"
     },
     {
       "$ref": "#/$defs/Trade"

@@ -5,14 +5,16 @@
  * and run json-schema-to-typescript to regenerate this file.
  */
 
-export type TypesSchema = WebhookPayload | Trade | Fill;
+export type TypesSchema = WebhookPayloadTrades | Trade | Fill;
 export type BuySell = "buy" | "sell";
 
 /**
- * Payload sent to the target webhook URL.
+ * Webhook payload for trade execution events.
  */
-export interface WebhookPayload {
-  trades: Trade[];
+export interface WebhookPayloadTrades {
+  relay: "ibkr";
+  type: "trades";
+  data: Trade[];
   errors: string[];
 }
 /**

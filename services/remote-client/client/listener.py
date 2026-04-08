@@ -21,7 +21,7 @@ from models_poller import (
     Fill,
     Source,
     Trade,
-    WebhookPayload,
+    WebhookPayloadTrades,
 )
 from notifier import notify
 from notifier.base import BaseNotifier
@@ -284,7 +284,7 @@ class ListenerNamespace:
         shared ``self._db`` connection is never touched from multiple
         threads concurrently.
         """
-        payload = WebhookPayload(trades=[trade], errors=[])
+        payload = WebhookPayloadTrades(data=[trade], errors=[])
 
         async def _send_and_mark() -> None:
             await asyncio.to_thread(notify, self._notifiers, payload)

@@ -289,7 +289,7 @@ services/poller/
 
 - **`services/poller/poller/`** contains core logic: SQLite dedup, Flex Web Service two-step fetch, and `poll_once()`. Notification delivery is delegated to the notifier package (see below).
 - **`services/poller/poller_routes/`** contains the HTTP API for on-demand polls (`POST /ibkr/poller/run`).
-- **`services/poller/models_poller.py`** is a re-export shim for shared models plus poller-specific API types (`RunPollResponse`, `HealthResponse`). The shared models (`Fill`, `Trade`, `WebhookPayload`) live in `services/shared/__init__.py`.
+- **`services/poller/models_poller.py`** is a re-export shim for shared models plus poller-specific API types (`RunPollResponse`, `HealthResponse`). The shared models (`Fill`, `Trade`, `WebhookPayloadTrades`, `WebhookPayload`) live in `services/shared/__init__.py`.
 
 ## Notifier Structure
 
@@ -352,7 +352,7 @@ This project has **three model locations** — a shared source of truth and two 
 
 | File                                             | Domain                | Contains                                                                                                |
 | ------------------------------------------------ | --------------------- | ------------------------------------------------------------------------------------------------------- |
-| `services/shared/__init__.py`                    | CommonFill (outbound) | `Fill`, `Trade`, `WebhookPayload`, `BuySell`, `OrderType`, `Source`, `aggregate_fills()`, `_dedup_id()` |
+| `services/shared/__init__.py`                    | CommonFill (outbound) | `Fill`, `Trade`, `WebhookPayloadTrades`, `WebhookPayload`, `BuySell`, `OrderType`, `Source`, `aggregate_fills()`, `_dedup_id()` |
 | `services/poller/models_poller.py`               | Poller API (outbound) | Re-exports shared models + `RunPollResponse`, `HealthResponse`                                          |
 | `services/remote-client/models_remote_client.py` | Order API (inbound)   | `ContractPayload`, `OrderPayload`, `PlaceOrderPayload`, `PlaceOrderResponse` — REST API types           |
 
@@ -360,7 +360,7 @@ This project has **three model locations** — a shared source of truth and two 
 - **Unique filenames** (`models_poller.py`, `models_remote_client.py`) prevent import collisions when both `services/poller/` and `services/remote-client/` are on `sys.path` (via the `.pth` file). Use `from shared import Fill` for shared types, `from models_poller import RunPollResponse` for poller-specific types.
 - **Model shims only re-export models and types** (Pydantic models, enums, type aliases). Utility functions (`aggregate_fills`, `normalize_order_type`, `_dedup_id`) must be imported directly from the owning module: `from shared import aggregate_fills`. Never re-export functions through model shims.
 - `models_poller.py` re-exports shared models and defines poller-specific API types. Its `SCHEMA_MODELS` contains only `[RunPollResponse, HealthResponse]`.
-- `shared/__init__.py` defines `SCHEMA_MODELS = [WebhookPayload, Trade, Fill]` for the shared types.
+- `shared/__init__.py` defines `SCHEMA_MODELS = [WebhookPayloadTrades, Trade, Fill]` for the shared types.
 - `models_remote_client.py` is the source of truth for `IbkrHttp` TypeScript types (`make types`).
 - `models_remote_client.py` uses strict `Literal` types (`Action`, `OrderType`, `SecType`, `TimeInForce`) aligned with `ib_async` field names.
 - All external-contract models use `ConfigDict(extra="forbid")` for strict validation.
@@ -415,7 +415,7 @@ The `POST /ibkr/order` endpoint accepts a nested payload mirroring `ib.placeOrde
 
 All relay projects export TypeScript types using a two-tier namespace pattern:
 
-- **`types/shared/`** → exported as the **relay's primary namespace** (named after the exchange: `Ibkr`, `Kraken`, etc.). Contains the CommonFill models (`Fill`, `Trade`, `WebhookPayload`, `BuySell`) generated from `services/shared/__init__.py` SCHEMA_MODELS. Every relay has this.
+- **`types/shared/`** → exported as the **relay's primary namespace** (named after the exchange: `Ibkr`, `Kraken`, etc.). Contains the CommonFill models (`Fill`, `Trade`, `WebhookPayloadTrades`, `WebhookPayload`, `BuySell`) generated from `services/shared/__init__.py` SCHEMA_MODELS. Every relay has this.
 - **`types/<module>/`** → exported as **`<RelayName><ModuleName>`** (e.g. `IbkrPoller`, `IbkrHttp`). Contains service-specific types generated from that module's `SCHEMA_MODELS`. Only created when a service has unique types not in shared.
 
 The barrel `types/index.d.ts` ties them together:
@@ -438,7 +438,7 @@ export * as Kraken from "./shared";
 - Types are published as `@tradegist/ibkr-relay-types` (npm package in `types/`, not yet published).
 - **Three namespaces**: `Ibkr` (shared webhook payload types), `IbkrPoller` (poller-specific API types), and `IbkrHttp` (order API types).
 - **`make types`** regenerates all three from Pydantic models:
-  - `services/shared/__init__.py` → `types/shared/types.d.ts` (CommonFill models: WebhookPayload, Trade, Fill, BuySell)
+  - `services/shared/__init__.py` → `types/shared/types.d.ts` (CommonFill models: WebhookPayloadTrades, Trade, Fill, BuySell)
   - `services/poller/models_poller.py` → `types/poller/types.d.ts` (poller-specific: RunPollResponse, HealthResponse)
   - `services/remote-client/models_remote_client.py` → `types/http/types.d.ts` (order API types)
 - **Structure:**
@@ -447,7 +447,7 @@ export * as Kraken from "./shared";
     index.d.ts                 # Barrel: exports Ibkr, IbkrPoller, IbkrHttp namespaces
     package.json               # @tradegist/ibkr-relay-types
     shared/
-      index.d.ts               # Re-exports: BuySell, Fill, Trade, WebhookPayload
+      index.d.ts               # Re-exports: BuySell, Fill, Trade, WebhookPayloadTrades, WebhookPayload
       types.d.ts               # Generated from shared/__init__.py (SCHEMA_MODELS)
       types.schema.json         # Intermediate JSON Schema
     poller/
@@ -530,7 +530,7 @@ cli/                    # Python CLI (operator scripts)
 services/               # Business-logic services (user-facing features)
   remote-client/        # remote-client service (see Remote Client Structure above)
   poller/               # Flex poller service (see Poller Structure above)
-    models_poller.py    # Pydantic models: Fill, Trade, WebhookPayload, BuySell, Source
+    models_poller.py    # Pydantic models: Fill, Trade, WebhookPayloadTrades, WebhookPayload, BuySell, Source
   notifier/             # Pluggable notification backends (library, no container)
   dedup/                # Shared SQLite dedup library (library, no container)
 infra/                  # Infrastructure backbone (no business logic)

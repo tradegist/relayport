@@ -12,7 +12,7 @@ from shared import Fill as Fill
 from shared import OrderType as OrderType
 from shared import Source as Source
 from shared import Trade as Trade
-from shared import WebhookPayload as WebhookPayload
+from shared import WebhookPayloadTrades as WebhookPayloadTrades
 
 # ── POST /ibkr/poller/run ────────────────────────────────────────────
 
