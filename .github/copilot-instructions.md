@@ -20,6 +20,7 @@
 - **No logging of secrets or sensitive operational data** — never `log.info()` or `print()` tokens, passwords, or API keys. Log actions and outcomes, not credential values. When adding any `log.info()` or `log.debug()` call, check whether the logged value contains sensitive fields (e.g. `accountId`, `acctAlias`, account numbers, IPs, domains). Never log full model dumps at `info` level — use `log.debug` with explicit field exclusion: `log.debug("Trade: %s", trade.model_dump_json(exclude={"accountId", "acctAlias"}))`. Prefer logging counts, symbols, and statuses over full objects.
 - **`.env`, `*.tfvars`, and `.env.test` are gitignored** — never commit them. Use `.env.example` / `.env.test.example` with placeholder values as reference.
 - **Terraform state is gitignored** — `terraform.tfstate` contains SSH keys and IPs. Never commit it.
+- **Auth middleware must reject empty `API_TOKEN`.** `hmac.compare_digest("", "")` returns `True`, so an empty `API_TOKEN` env var silently disables authentication. Every auth middleware must check `if not _API_TOKEN:` and return HTTP 500 **before** reaching `compare_digest`. `API_TOKEN` is in `required_env` for deploy/sync — the CLI will block deployment if it is missing or empty.
 
 ## Type Safety (MANDATORY)
 
@@ -58,6 +59,7 @@
 - **Distinguish recoverable from fatal errors.** Recoverable errors (network timeout, temporary API failure) should be logged and retried or skipped. Fatal errors (missing required config, corrupted state) should fail fast with `raise SystemExit(1)` or `die()` and a clear message — do not attempt to limp along.
 - **Validate at system boundaries, trust internally.** Validate all external inputs (API payloads, env vars, webhook data, IB Gateway responses) at the point of entry. Once validated, internal code should not re-validate — the type system and Pydantic models carry the guarantees.
 - **Never assume a default for financial enum fields.** When mapping external data to a constrained set (e.g. buy/sell side, order type), validate that the value is an exact match. Never use an `else` branch that silently assigns a default — e.g. `BuySell.BUY if x == "buy" else BuySell.SELL` treats _any_ non-buy value (including typos, nulls, and garbage) as SELL. Always check every valid value explicitly and raise/error on unknown input. This applies to all trade direction, order type, asset class, and similar mappings.
+- **Never silently drop rows with missing identifiers.** When parsing external data (Flex XML, REST JSON, WebSocket messages), if a required identifier (e.g. `execId`) is missing or empty after all fallback chains, report it as a parse error and skip the row explicitly. Do not let it fall through to a later guard (like a dedup check on empty string) where the drop is invisible. Every skipped row must produce an error message explaining _why_ it was skipped.
 - **HTTP handlers must catch and map exceptions.** Every route handler must have a top-level `try/except` that catches unexpected errors and returns a proper HTTP error response (500 with structured JSON). Unhandled exceptions in aiohttp handlers produce ugly default responses and can leak internals.
 - **Include context in error messages.** Bad: `"Failed to place order"`. Good: `"Failed to place order: TSLA BUY 2 LMT @ 150.0 — IB Gateway returned error code 201: 'Order rejected'"`. The message should contain enough detail to diagnose without consulting logs.
 
@@ -77,6 +79,7 @@
 - **Lock acquisition must BE the check.** Use `asyncio.wait_for(lock.acquire(), timeout=0)` with `try/finally: lock.release()` to fail-fast, or accept that `async with lock:` will queue. Never separate "is it locked?" from "acquire it."
 - **This applies to all shared-state guards** — locks, database transactions, file locks, semaphores, balance checks. If the action is "check a condition, then act on it," both steps must be atomic.
 - **Never share a `sqlite3.Connection` across threads.** `sqlite3.Connection` is not thread-safe. When using `asyncio.to_thread()`, either pass the connection into a single synchronous function that does all DB work in one thread, or use an `asyncio.Lock` to ensure only one `to_thread()` call uses the connection at a time. Never allow two concurrent `to_thread()` calls to touch the same connection — this causes intermittent `OperationalError` and data corruption.
+- **Poller/listener `to_thread` pattern: create connections inside the worker thread.** Do NOT create `sqlite3.Connection` on the main (event-loop) thread and pass it into `asyncio.to_thread(poll_once, conn, ...)` — even with `check_same_thread=False`, this is cross-thread use and unsafe. Instead, `poll_once()` accepts `dedup_conn=None, meta_conn=None` and creates thread-local connections internally (via `init_dedup_db()` / `init_meta_db()`), closing them in a `finally` block. The caller (`_poll_loop`, `handle_run_poll`) passes only non-DB arguments. This ensures every `to_thread` call uses connections that were both created and closed on the same worker thread.
 - **Financial operations require extra scrutiny.** Any code path that places orders, moves money, or modifies account state must be reviewed for: race conditions, double-execution, partial failure (what if it crashes between two steps?), and idempotency.
 
 ## Local Development
@@ -212,6 +215,18 @@ The deployment mode is controlled by `DEPLOY_MODE` in `.env` (required, validate
 - **No cross-test dependencies.** Every test must be self-contained — it must not rely on state created by a previous test (e.g. a position opened by an earlier buy test). Pytest does not guarantee execution order, and tests may run selectively or in parallel. If a test needs preconditions, create them within the test itself or via an explicit fixture.
 - **E2E conftest fixtures must use `yield` with a context manager.** Never `return httpx.Client(...)` — the client is never closed and leaks sockets. Use `with httpx.Client(...) as client: yield client` instead. Scope to `session` (one client per test run). Every E2E `conftest.py` must also include a `_preflight_check` fixture (`scope="session"`, `autouse=True`) that hits `/health` and calls `pytest.exit()` if the stack is unreachable.
 
+### Routes Package Name Collision (KNOWN ISSUE)
+
+Both `services/remote-client/routes/` and `services/poller/routes/` define a package named `routes` with a `create_routes()` function. Each service's `main.py` does `from routes import create_routes`. This works today because:
+
+- **Docker isolates at runtime** — each container only has its own service on `sys.path`.
+- **mypy uses separate invocations** per service with the correct service directory first in `MYPYPATH`.
+- **pytest** runs a single invocation but tests don't import `main.py` directly.
+
+**This will break if both services share the same `sys.path`** — e.g. merging into a mono-repo, combined test runs, or a single container. Python will resolve `from routes import create_routes` to whichever `routes/` appears first on `sys.path` (currently `services/remote-client/` per the `.pth` file).
+
+**When restructuring:** rename the packages to service-specific names (`remote_client_routes/`, `poller_routes/`) or nest them inside a parent package (`remote_client.routes`, `poller.routes`). Update `main.py` imports, `pyproject.toml` paths, Dockerfile `COPY` directives, and Docker Compose volume mounts accordingly. The same issue exists in `kraken_relay` (`services/listener/routes/` and `services/poller/routes/`).
+
 ## Remote Client Structure
 
 The `services/remote-client/` service is organized into packages:
@@ -314,7 +329,7 @@ services/dedup/
 - **`mark_processed_batch(conn, exec_ids)`** — batch mark (used by poller).
 - **`prune(conn, days=30)`** — delete old entries.
 - **Shared dedup DB** — both services read/write the same `fills.db` at `DEDUP_DB_PATH` (default `/data/dedup/fills.db`) on a `dedup-data` Docker named volume. SQLite WAL mode + `timeout=5.0` enables safe concurrent access.
-- **Dedup key priority** — `ibExecId → transactionId → tradeID` (via `_dedup_id()` in `services/shared/__init__.py`). `ibExecId` is preferred because it is the common identifier between Flex XML fills and ib_async execution events.
+- **Dedup key priority** — `ibExecId → transactionId → tradeID`, resolved in `services/poller/poller/flex_parser.py` at parse time by setting `Fill.execId`. `services/shared/__init__.py::_dedup_id()` simply returns the already-resolved `fill.execId`. `ibExecId` is preferred because it is the common identifier between Flex XML fills and ib_async execution events.
 - The poller has a separate metadata DB at `META_DB_PATH` (default `/data/meta.db`) on a `poller-data` volume for the timestamp watermark. The poller's `init_dedup_db()` wraps `dedup.init_db()`; `init_meta_db()` manages the metadata table independently.
 
 ## Listener (Real-Time Trade Events)

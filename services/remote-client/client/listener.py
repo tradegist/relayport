@@ -168,7 +168,14 @@ class ListenerNamespace:
     # ── execDetailsEvent (always immediate, no dedup) ────────────────────
 
     def _on_exec_details(self, trade: IBTrade, fill: IBFill) -> None:
-        mapped = _map_to_fill(trade, fill, "execDetailsEvent")
+        try:
+            mapped = _map_to_fill(trade, fill, "execDetailsEvent")
+        except Exception:
+            log.exception(
+                "Failed to map execDetailsEvent (execId=%s, orderId=%s)",
+                fill.execution.execId, trade.order.permId,
+            )
+            return
         log.info(
             "execDetailsEvent: %s %s %s @ %.4f (execId=%s)",
             mapped.side.value, mapped.volume, mapped.symbol,
@@ -181,7 +188,14 @@ class ListenerNamespace:
     def _on_commission_report(
         self, trade: IBTrade, fill: IBFill, report: CommissionReport,
     ) -> None:
-        mapped = _map_to_fill(trade, fill, "commissionReportEvent")
+        try:
+            mapped = _map_to_fill(trade, fill, "commissionReportEvent")
+        except Exception:
+            log.exception(
+                "Failed to map commissionReportEvent (execId=%s, orderId=%s)",
+                fill.execution.execId, trade.order.permId,
+            )
+            return
 
         if self._debounce_s > 0:
             self._enqueue(mapped)

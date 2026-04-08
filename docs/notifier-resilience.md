@@ -27,12 +27,20 @@ mark_processed_batch(conn, ids)     ← always runs (data-loss vector 1)
 set_watermark(conn, max_timestamp)  ← always runs (data-loss vector 2)
 ```
 
-**Callers:**
+**Callers (6 code paths, 4 vulnerable):**
 
-- `kraken_relay` listener: `_handle_message()` — synchronous call in WS message handler
-- `kraken_relay` poller: `poll_once()` — synchronous, run via `asyncio.to_thread()`
-- `ibkr_relay` poller: `poll_once()` — synchronous, run via `asyncio.to_thread()`
-- `ibkr_relay` listener: `_send_and_mark()` — synchronous closure, run via `asyncio.to_thread()`
+| # | Project | Service | Code path | Vectors | Severity |
+|---|---------|---------|-----------|---------|----------|
+| 1 | `ibkr_relay` | poller | `poll_once()` — L230–238 | dedup mark + watermark | **CRITICAL** |
+| 2 | `ibkr_relay` | listener | `_dispatch_immediate()` → `_dispatch()` — immediate mode (`debounce_ms=0`) | dedup mark | **HIGH** |
+| 3 | `ibkr_relay` | listener | `_flush()` → `_dispatch()` — debounce mode (`debounce_ms>0`) | dedup mark | **HIGH** |
+| 4 | `kraken_relay` | poller | `poll_once()` — L163–177 | dedup mark + watermark | **CRITICAL** |
+| 5 | `kraken_relay` | listener | `_process_fills()` — synchronous in `to_thread` | **SAFE** — exception stops execution before mark | — |
+| 6 | Both | poller | replay mode | **SAFE** — no mark, no watermark (by design) | — |
+
+Notes:
+- ibkr listener `_on_exec_details` dispatches without `exec_ids` → no mark → not vulnerable.
+- kraken listener is currently safe because `notify()` and `mark_processed_batch()` are sequential in the same synchronous function — an exception from `notify()` prevents mark. However, this relies on the current `notify()` implementation *not* swallowing exceptions at the top level, which is fragile.
 
 ## Target Architecture
 

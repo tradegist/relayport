@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import sqlite3
 import sys
 
 from notifier import load_notifiers
@@ -27,8 +26,6 @@ log = logging.getLogger("poller")
 
 
 async def _poll_loop(
-    dedup_conn: sqlite3.Connection,
-    meta_conn: sqlite3.Connection,
     poll_lock: asyncio.Lock,
     notifiers: list[BaseNotifier],
 ) -> None:
@@ -36,7 +33,7 @@ async def _poll_loop(
     while True:
         try:
             async with poll_lock:
-                await asyncio.to_thread(poll_once, dedup_conn, meta_conn, notifiers=notifiers)
+                await asyncio.to_thread(poll_once, notifiers=notifiers)
         except Exception:
             log.exception("Poll cycle failed")
 
@@ -56,14 +53,15 @@ async def amain() -> None:
     if not notifiers:
         log.info("No notifiers configured — running in dry-run mode")
 
+    # One-time startup prune on the main thread
     dedup_conn = init_dedup_db()
-    meta_conn = init_meta_db()
     prune_old(dedup_conn)
+    dedup_conn.close()
 
     poll_lock = asyncio.Lock()
 
-    await start_api_server(dedup_conn, meta_conn, poll_lock, notifiers)
-    await _poll_loop(dedup_conn, meta_conn, poll_lock, notifiers)
+    await start_api_server(poll_lock, notifiers)
+    await _poll_loop(poll_lock, notifiers)
 
 
 def main_once() -> None:
