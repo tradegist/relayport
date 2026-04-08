@@ -122,7 +122,7 @@ e2e-up: ## Start E2E test stack (IB Gateway + remote-client + poller)
 		$(E2E_COMPOSE) up -d --build; \
 		echo "Waiting for remote-client to connect to IB Gateway..."; \
 		rc_ready=false; \
-		for i in $$(seq 1 12); do \
+		for i in $$(seq 1 24); do \
 			if curl -sf http://localhost:15010/health | grep -q '"connected": true'; then \
 				rc_ready=true; \
 				echo "remote-client ready"; break; \
@@ -146,7 +146,7 @@ e2e-up: ## Start E2E test stack (IB Gateway + remote-client + poller)
 			sleep 10; \
 		done; \
 		if [ "$$rc_ready" != "true" ]; then \
-			echo "ERROR: remote-client did not connect to IB Gateway within 120s"; \
+			echo "ERROR: remote-client did not connect to IB Gateway within 240s"; \
 			exit 1; \
 		fi; \
 		echo "Waiting for poller..."; \
