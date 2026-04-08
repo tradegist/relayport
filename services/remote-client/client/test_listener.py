@@ -129,6 +129,9 @@ class TestMapToFillExecDetails:
         ib_trade = _mock_ib_trade(secType="")
         f = _map_to_fill(ib_trade, _mock_fill(), "execDetailsEvent")
         assert f.assetClass == "other"
+
+
+class TestMapToFillCommissionReport:
     """Mapping on commissionReportEvent — includes commission data."""
 
     def test_commission_populated(self) -> None:
