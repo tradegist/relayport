@@ -39,6 +39,7 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             "body": json.loads(body),
             "signature": self.headers.get("X-Signature-256", ""),
             "raw": body,
+            "received_at": time.monotonic(),
         })
         self.send_response(200)
         self.end_headers()
@@ -117,7 +118,7 @@ def test_listener_fires_on_market_order(
         trade = payload["trades"][0]
         assert trade["source"] in ("execDetailsEvent", "commissionReportEvent")
         assert trade["symbol"] == "AAPL"
-        assert trade["buySell"] == "BUY"
+        assert trade["side"] == "buy"
 
     # Both event types must be present
     sources = {e["body"]["trades"][0]["source"] for e in new}
@@ -144,7 +145,7 @@ def test_webhook_hmac_signature(
 def test_commission_report_has_commission(
     webhook_payloads: list[dict[str, Any]],
 ) -> None:
-    """The commissionReportEvent webhook should include commission > 0."""
+    """The commissionReportEvent webhook should include fee > 0."""
     commission_entries = [
         e for e in webhook_payloads
         if e["body"]["trades"][0]["source"] == "commissionReportEvent"
@@ -154,4 +155,84 @@ def test_commission_report_has_commission(
 
     for entry in commission_entries:
         trade = entry["body"]["trades"][0]
-        assert trade["commission"] > 0, f"Expected commission > 0, got {trade['commission']}"
+        assert trade["fee"] > 0, f"Expected fee > 0, got {trade['fee']}"
+
+
+def test_debounce_path_fires_webhook(
+    api: httpx.Client, webhook_payloads: list[dict[str, Any]],
+) -> None:
+    """With LISTENER_EVENT_DEBOUNCE_TIME=2000, commissionReportEvent goes through
+    the debounce path: enqueue → timer → flush → aggregate → webhook.
+
+    Verify the webhook arrives after at least ~2s (the debounce window) and
+    contains the expected aggregated fields (execIds, fillCount).
+    """
+    baseline = len(webhook_payloads)
+
+    resp = api.post(
+        "/ibkr/order",
+        json={
+            "contract": {"symbol": "AAPL"},
+            "order": {"action": "BUY", "totalQuantity": 1, "orderType": "MKT"},
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    order_id = resp.json()["orderId"]
+    filled = _wait_for_fill(api, order_id, timeout=10)
+    if not filled:
+        pytest.skip("Market appears closed — order did not fill")
+
+    # execDetailsEvent arrives immediately (no debounce) — filter by THIS order
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        exec_events = [
+            e for e in webhook_payloads[baseline:]
+            if e["body"]["trades"][0]["source"] == "execDetailsEvent"
+            and str(e["body"]["trades"][0]["orderId"]) == str(order_id)
+        ]
+        if exec_events:
+            break
+        time.sleep(0.3)
+    assert exec_events, "execDetailsEvent webhook never arrived"
+
+    # commissionReportEvent should arrive after debounce (~2s window from fill)
+    # Filter by THIS order's orderId to avoid picking up stale events from
+    # prior tests whose debounced webhooks may arrive after our baseline.
+    deadline = time.monotonic() + 10
+    commission_event = None
+    while time.monotonic() < deadline:
+        for e in webhook_payloads[baseline:]:
+            t = e["body"]["trades"][0]
+            if (t["source"] == "commissionReportEvent"
+                    and str(t["orderId"]) == str(order_id)):
+                commission_event = e
+                break
+        if commission_event:
+            break
+        time.sleep(0.3)
+
+    assert commission_event is not None, "commissionReportEvent webhook never arrived"
+
+    # The debounce path produces aggregated fields
+    trade = commission_event["body"]["trades"][0]
+    assert "execIds" in trade, "Debounced webhook missing execIds"
+    assert isinstance(trade["execIds"], list)
+    assert len(trade["execIds"]) >= 1
+    assert "fillCount" in trade
+    assert trade["fillCount"] >= 1
+    assert trade["symbol"] == "AAPL"
+    assert trade["side"] == "buy"
+
+    # Measure the gap between execDetailsEvent and commissionReportEvent arrival
+    # times. The /ibkr/order API blocks until IB fills the order, so t0-based
+    # timing is unreliable. Instead, the gap between the two webhook arrivals
+    # approximates the debounce window (2s) because execDetailsEvent fires
+    # immediately while commissionReportEvent is buffered.
+    exec_arrived = exec_events[0]["received_at"]
+    comm_arrived = commission_event["received_at"]
+    gap = comm_arrived - exec_arrived
+    assert gap >= 1.5, (
+        f"commissionReportEvent arrived only {gap:.1f}s after execDetailsEvent, "
+        "debounce path may not have been used (expected >= 1.5s for 2s debounce)"
+    )

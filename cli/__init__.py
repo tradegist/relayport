@@ -158,6 +158,7 @@ _CONFIG = CoreConfig(
         "DO_API_TOKEN", "TWS_USERID", "TWS_PASSWORD",
         "VNC_SERVER_PASSWORD",
         "IBKR_FLEX_TOKEN", "IBKR_FLEX_QUERY_ID",
+        "API_TOKEN",
     ],
     service_map={
         "gateway": "ib-gateway",

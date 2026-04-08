@@ -111,7 +111,7 @@ def validate_notifier_env(suffix: str = "") -> bool:
             if not os.environ.get(f"{var}{suffix}")
         ]
         if missing:
-            from cli.core import die
+            from cli.core import die  # lazy: cli/ not available in Docker containers
             die(f"Notifier {name!r} partially configured. Missing: {', '.join(missing)}")
 
     return True

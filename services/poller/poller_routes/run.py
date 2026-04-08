@@ -12,7 +12,6 @@ log = logging.getLogger("poller")
 
 
 async def handle_run_poll(request: web.Request) -> web.Response:
-    db_conn = request.app["db_conn"]
     poll_lock: asyncio.Lock = request.app["poll_lock"]
     notifiers = request.app["notifiers"]
 
@@ -35,7 +34,7 @@ async def handle_run_poll(request: web.Request) -> web.Response:
 
     try:
         trades = await asyncio.to_thread(
-            poll_once, db_conn,
+            poll_once,
             flex_token=flex_token, flex_query_id=flex_query_id, replay=replay,
             notifiers=notifiers,
         )

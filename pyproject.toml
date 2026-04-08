@@ -21,14 +21,14 @@ disallow_untyped_defs = false
 disallow_untyped_calls = false
 
 [tool.pytest.ini_options]
-testpaths = ["services/poller", "services/remote-client", "services/notifier"]
+testpaths = ["services/poller", "services/remote-client", "services/notifier", "services/dedup", "services/shared"]
 norecursedirs = ["tests/e2e"]
 addopts = "--import-mode=importlib"
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["services/poller", "services/remote-client", "services/notifier", "cli"]
+src = ["services/poller", "services/remote-client", "services/notifier", "services/dedup", "services/shared", "cli"]
 
 [tool.ruff.lint]
 select = [
@@ -61,6 +61,6 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = [
-    "client", "routes", "poller", "notifier",
+    "client", "rc_routes", "poller_routes", "poller", "notifier", "shared", "dedup",
     "models_poller", "models_remote_client",
 ]

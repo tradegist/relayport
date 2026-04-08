@@ -5,14 +5,18 @@ import os
 import sqlite3
 import time
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import httpx
 
+from dedup import get_processed_ids, mark_processed_batch, prune
+from dedup import init_db as _init_dedup_db
 from models_poller import Trade, WebhookPayload
 from notifier import notify
 from notifier.base import BaseNotifier
+from shared import aggregate_fills
 
-from .flex_parser import _dedup_id, aggregate_fills, parse_fills
+from .flex_parser import parse_fills
 
 log = logging.getLogger("poller")
 
@@ -22,23 +26,26 @@ log = logging.getLogger("poller")
 FLEX_TOKEN = os.environ.get("IBKR_FLEX_TOKEN", "")
 FLEX_QUERY_ID = os.environ.get("IBKR_FLEX_QUERY_ID", "")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL_SECONDS", "600"))
-DB_PATH = os.environ.get("DB_PATH", "/data/poller.db")
+DEDUP_DB_PATH = os.environ.get("DEDUP_DB_PATH", "/data/dedup/fills.db")
+META_DB_PATH = os.environ.get("META_DB_PATH", "/data/meta.db")
 
 FLEX_BASE = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"
 USER_AGENT = "ibkr-relay/1.0"
 
 
 # ---------------------------------------------------------------------------
-# SQLite — deduplication of processed fills
+# SQLite — shared dedup DB + poller-specific metadata DB
 # ---------------------------------------------------------------------------
-def init_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS processed_fills (
-            exec_id TEXT PRIMARY KEY,
-            processed_at TEXT DEFAULT (datetime('now'))
-        )
-    """)
+def init_dedup_db() -> sqlite3.Connection:
+    """Open the shared dedup database (cross-service, WAL mode)."""
+    return _init_dedup_db(Path(DEDUP_DB_PATH))
+
+
+def init_meta_db() -> sqlite3.Connection:
+    """Open the poller-specific metadata database (watermark)."""
+    path = Path(META_DB_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS metadata (
             key TEXT PRIMARY KEY,
@@ -49,48 +56,25 @@ def init_db() -> sqlite3.Connection:
     return conn
 
 
-def get_last_poll_ts(conn: sqlite3.Connection) -> str:
+def get_last_poll_ts(meta_conn: sqlite3.Connection) -> str:
     """Return the last processed trade timestamp, or empty string."""
-    row = conn.execute(
+    row = meta_conn.execute(
         "SELECT value FROM metadata WHERE key = 'last_poll_ts'"
     ).fetchone()
     return row[0] if row else ""
 
 
-def set_last_poll_ts(conn: sqlite3.Connection, ts: str) -> None:
+def set_last_poll_ts(meta_conn: sqlite3.Connection, ts: str) -> None:
     """Update the last processed trade timestamp."""
-    conn.execute(
+    meta_conn.execute(
         "INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_poll_ts', ?)",
         (ts,),
     )
+    meta_conn.commit()
 
 
-def get_processed_ids(conn: sqlite3.Connection, exec_ids: set[str]) -> set[str]:
-    """Return the subset of exec_ids already in the DB."""
-    if not exec_ids:
-        return set()
-    placeholders = ",".join("?" for _ in exec_ids)
-    rows = conn.execute(
-        f"SELECT exec_id FROM processed_fills WHERE exec_id IN ({placeholders})",
-        list(exec_ids),
-    ).fetchall()
-    return {r[0] for r in rows}
-
-
-def mark_processed(conn: sqlite3.Connection, exec_ids: list[str]) -> None:
-    conn.executemany(
-        "INSERT OR IGNORE INTO processed_fills (exec_id) VALUES (?)",
-        [(eid,) for eid in exec_ids],
-    )
-    conn.commit()
-
-
-def prune_old(conn: sqlite3.Connection, days: int = 30) -> None:
-    conn.execute(
-        "DELETE FROM processed_fills WHERE processed_at < datetime('now', ?)",
-        (f"-{days} days",),
-    )
-    conn.commit()
+def prune_old(dedup_conn: sqlite3.Connection, days: int = 30) -> None:
+    prune(dedup_conn, days=days)
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +137,8 @@ def fetch_flex_report(flex_token: str | None = None, flex_query_id: str | None =
 # Poll cycle
 # ---------------------------------------------------------------------------
 def poll_once(
-    conn: sqlite3.Connection | None = None,
+    dedup_conn: sqlite3.Connection | None = None,
+    meta_conn: sqlite3.Connection | None = None,
     flex_token: str | None = None,
     flex_query_id: str | None = None,
     debug: bool = False,
@@ -161,9 +146,12 @@ def poll_once(
     notifiers: list[BaseNotifier] | None = None,
 ) -> list[Trade]:
     """Run a single poll. Returns list of new aggregated trades."""
-    close_conn = conn is None
-    if conn is None:
-        conn = init_db()
+    close_dedup = dedup_conn is None
+    close_meta = meta_conn is None
+    if dedup_conn is None:
+        dedup_conn = init_dedup_db()
+    if meta_conn is None:
+        meta_conn = init_meta_db()
 
     try:
         log.info("Polling Flex Web Service...")
@@ -184,11 +172,11 @@ def poll_once(
             print("--- End Raw Flex XML ---")
 
         if all_fills:
-            fill_times = [f.dateTime for f in all_fills]
+            fill_times = [f.timestamp for f in all_fills]
             log.info("Trade time range: %s to %s", min(fill_times), max(fill_times))
             for f in all_fills:
-                log.info("  Fill: %s %s dedup=%s dateTime=%s",
-                         f.buySell, f.symbol, _dedup_id(f), f.dateTime)
+                log.info("  Fill: %s %s dedup=%s timestamp=%s",
+                         f.side, f.symbol, f.execId, f.timestamp)
 
         # Always show a sample of the first aggregated trade for debugging
         all_trades = aggregate_fills(all_fills)
@@ -196,29 +184,30 @@ def poll_once(
             log.debug("Sample trade (first):\n%s", all_trades[0].model_dump_json(indent=2))
 
         # Pre-filter by timestamp watermark to reduce dedup work
-        last_ts = get_last_poll_ts(conn)
+        last_ts = get_last_poll_ts(meta_conn)
         if last_ts:
-            candidates = [f for f in all_fills if f.dateTime >= last_ts]
+            candidates = [f for f in all_fills if f.timestamp >= last_ts]
             log.info("Timestamp pre-filter: %d -> %d candidate(s) (watermark: %s)",
                      len(all_fills), len(candidates), last_ts)
             if len(candidates) < len(all_fills):
-                filtered = [f for f in all_fills if f.dateTime < last_ts]
+                filtered = [f for f in all_fills if f.timestamp < last_ts]
                 for f in filtered:
-                    log.info("  Filtered out: %s %s dateTime=%s < watermark %s",
-                             f.buySell, f.symbol, f.dateTime, last_ts)
+                    log.info("  Filtered out: %s %s timestamp=%s < watermark %s",
+                             f.side, f.symbol, f.timestamp, last_ts)
         else:
             candidates = all_fills
             log.info("No timestamp watermark — processing all %d fill(s)", len(candidates))
 
         # Dedup remaining candidates against stored exec IDs
-        candidate_ids = {_dedup_id(f) for f in candidates}
-        already_seen = get_processed_ids(conn, candidate_ids)
-        new_fills = [f for f in candidates if _dedup_id(f) not in already_seen]
+        candidate_ids = {f.execId for f in candidates}
+        already_seen = get_processed_ids(dedup_conn, candidate_ids)
+        new_fills = [f for f in candidates if f.execId not in already_seen]
         log.info("%d new fill(s) after dedup", len(new_fills))
 
         if not new_fills:
             if replay and all_fills:
-                replay_fills = all_fills[:replay]
+                sorted_fills = sorted(all_fills, key=lambda f: f.timestamp, reverse=True)
+                replay_fills = sorted_fills[:replay]
                 trades = aggregate_fills(replay_fills)
                 log.info("Replay mode: resending %d fill(s) as %d trade(s)", len(replay_fills), len(trades))
                 notify(notifiers or [], WebhookPayload(trades=trades, errors=parse_errors))
@@ -232,9 +221,9 @@ def poll_once(
 
         for trade in trades:
             log.info(
-                "New trade: %s %s %s @ price %s (qty %s, %d fill(s))",
-                trade.buySell, trade.symbol, trade.orderId,
-                trade.price, trade.quantity, trade.fillCount,
+                "New trade: %s %s %s @ price %s (vol %s, %d fill(s))",
+                trade.side, trade.symbol, trade.orderId,
+                trade.price, trade.volume, trade.fillCount,
             )
 
         # Send a single webhook with all trades
@@ -242,15 +231,17 @@ def poll_once(
 
         # Mark all fills as processed after successful webhook
         all_new_ids = [did for t in trades for did in t.execIds]
-        mark_processed(conn, all_new_ids)
+        mark_processed_batch(dedup_conn, all_new_ids)
 
         # Update timestamp watermark to the latest trade time
-        max_ts = max(f.dateTime for f in new_fills)
-        set_last_poll_ts(conn, max_ts)
+        max_ts = max(f.timestamp for f in new_fills)
+        set_last_poll_ts(meta_conn, max_ts)
         log.info("Updated timestamp watermark to %s", max_ts)
 
         log.info("Sent 1 webhook with %d trade(s)", len(trades))
         return trades
     finally:
-        if close_conn:
-            conn.close()
+        if close_dedup:
+            dedup_conn.close()
+        if close_meta:
+            meta_conn.close()

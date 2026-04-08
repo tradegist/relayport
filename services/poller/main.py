@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import sqlite3
 import sys
 
 from notifier import load_notifiers
@@ -11,11 +10,12 @@ from poller import (
     FLEX_QUERY_ID,
     FLEX_TOKEN,
     POLL_INTERVAL,
-    init_db,
+    init_dedup_db,
+    init_meta_db,
     poll_once,
     prune_old,
 )
-from routes import start_api_server
+from poller_routes import start_api_server
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,7 +26,6 @@ log = logging.getLogger("poller")
 
 
 async def _poll_loop(
-    db_conn: sqlite3.Connection,
     poll_lock: asyncio.Lock,
     notifiers: list[BaseNotifier],
 ) -> None:
@@ -34,7 +33,7 @@ async def _poll_loop(
     while True:
         try:
             async with poll_lock:
-                await asyncio.to_thread(poll_once, db_conn, notifiers=notifiers)
+                await asyncio.to_thread(poll_once, notifiers=notifiers)
         except Exception:
             log.exception("Poll cycle failed")
 
@@ -54,13 +53,15 @@ async def amain() -> None:
     if not notifiers:
         log.info("No notifiers configured — running in dry-run mode")
 
-    db_conn = init_db()
-    prune_old(db_conn)
+    # One-time startup prune on the main thread
+    dedup_conn = init_dedup_db()
+    prune_old(dedup_conn)
+    dedup_conn.close()
 
     poll_lock = asyncio.Lock()
 
-    await start_api_server(db_conn, poll_lock, notifiers)
-    await _poll_loop(db_conn, poll_lock, notifiers)
+    await start_api_server(poll_lock, notifiers)
+    await _poll_loop(poll_lock, notifiers)
 
 
 def main_once() -> None:
@@ -75,9 +76,11 @@ def main_once() -> None:
         idx = sys.argv.index("--replay")
         replay = int(sys.argv[idx + 1]) if idx + 1 < len(sys.argv) else 0
     notifiers = load_notifiers()
-    conn = init_db()
-    orders = poll_once(conn, debug=debug, replay=replay, notifiers=notifiers)
-    conn.close()
+    dedup_conn = init_dedup_db()
+    meta_conn = init_meta_db()
+    orders = poll_once(dedup_conn, meta_conn, debug=debug, replay=replay, notifiers=notifiers)
+    dedup_conn.close()
+    meta_conn.close()
     n = len(orders) if isinstance(orders, list) else 0
     print(f"Done — {n} new trade(s) processed")
 

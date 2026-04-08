@@ -5,11 +5,15 @@
  * and run json-schema-to-typescript to regenerate this file.
  */
 
-export type TypesSchema = RunPollResponse | HealthResponse;
+export type TypesSchema = WebhookPayload | Trade | Fill;
 export type BuySell = "buy" | "sell";
 
-export interface RunPollResponse {
+/**
+ * Payload sent to the target webhook URL.
+ */
+export interface WebhookPayload {
   trades: Trade[];
+  errors: string[];
 }
 /**
  * Aggregated trade (one or more fills for the same order).
@@ -31,6 +35,22 @@ export interface Trade {
     [k: string]: unknown;
   };
 }
-export interface HealthResponse {
-  status: string;
+/**
+ * Individual execution from IBKR (CommonFill spec).
+ */
+export interface Fill {
+  execId: string;
+  orderId: string;
+  symbol: string;
+  side: BuySell;
+  orderType?: ("market" | "limit" | "stop" | "stop_limit" | "trailing_stop") | null;
+  price: number;
+  volume: number;
+  cost: number;
+  fee: number;
+  timestamp: string;
+  source: "flex" | "execDetailsEvent" | "commissionReportEvent";
+  raw: {
+    [k: string]: unknown;
+  };
 }

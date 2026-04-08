@@ -5,10 +5,11 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase
 
-from routes import create_routes
+from models_remote_client import ListTradesResponse
+from rc_routes import create_routes
 
 # Patch API_TOKEN at module level in middlewares so auth passes with "test-token".
-_patcher = patch("routes.middlewares.API_TOKEN", "test-token")
+_patcher = patch("rc_routes.middlewares.API_TOKEN", "test-token")
 
 
 def setUpModule() -> None:
@@ -17,8 +18,6 @@ def setUpModule() -> None:
 
 def tearDownModule() -> None:
     _patcher.stop()
-
-from models_remote_client import ListTradesResponse
 
 
 def _make_client(connected: bool = True) -> MagicMock:

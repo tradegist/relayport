@@ -6,7 +6,7 @@ from client import IBClient
 
 
 async def handle_list_trades(request: web.Request) -> web.Response:
-    from routes import client_key
+    from rc_routes import client_key
 
     client: IBClient = request.app[client_key]
 

@@ -8,8 +8,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY services/remote-client/main.py ./
 COPY services/remote-client/models_remote_client.py ./
 COPY services/remote-client/client/ client/
-COPY services/remote-client/routes/ routes/
+COPY services/remote-client/rc_routes/ rc_routes/
 COPY services/poller/models_poller.py ./
 COPY services/notifier/ ./notifier/
+COPY services/dedup/ ./dedup/
+COPY services/shared/ ./shared/
 
 CMD ["python", "-u", "main.py"]

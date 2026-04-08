@@ -69,11 +69,13 @@ test-webhook: ## Send sample trades to webhook endpoint (make test-webhook [S=2]
 	$(CLI_RELAY_ENV) $(PYTHON) -m cli test-webhook $(S)
 
 types: ## Regenerate TypeScript types from Pydantic models
+	PYTHONPATH=services $(PYTHON) schema_gen.py shared > types/shared/types.schema.json
+	npx --yes json-schema-to-typescript types/shared/types.schema.json > types/shared/types.d.ts
 	PYTHONPATH=services/poller:services/remote-client:services $(PYTHON) schema_gen.py models_poller > types/poller/types.schema.json
 	npx --yes json-schema-to-typescript types/poller/types.schema.json > types/poller/types.d.ts
 	PYTHONPATH=services/poller:services/remote-client:services $(PYTHON) schema_gen.py models_remote_client > types/http/types.schema.json
 	npx --yes json-schema-to-typescript types/http/types.schema.json > types/http/types.d.ts
-	@echo "Generated types/poller/types.d.ts + types/http/types.d.ts"
+	@echo "Generated types/shared/types.d.ts + types/poller/types.d.ts + types/http/types.d.ts"
 
 test: ## Run unit tests
 	PYTHONPATH=.:services/poller:services/remote-client:services $(PYTHON) -m pytest -v
@@ -82,10 +84,12 @@ typecheck: ## Run mypy strict type checking
 	MYPYPATH=services/poller:services $(PYTHON) -m mypy services/poller/ cli/test_webhook.py
 	MYPYPATH=services/remote-client:services/poller:services $(PYTHON) -m mypy services/remote-client/
 	MYPYPATH=services $(PYTHON) -m mypy services/notifier/
+	MYPYPATH=services $(PYTHON) -m mypy services/dedup/
+	MYPYPATH=services $(PYTHON) -m mypy services/shared/
 	$(PYTHON) -m mypy schema_gen.py
 
 lint: ## Run ruff linter (use FIX=1 to auto-fix)
-	$(PYTHON) -m ruff check services/poller/ services/remote-client/ services/notifier/ cli/ schema_gen.py $(if $(FIX),--fix)
+	$(PYTHON) -m ruff check services/poller/ services/remote-client/ services/notifier/ services/dedup/ services/shared/ cli/ schema_gen.py $(if $(FIX),--fix)
 
 local-up: ## Start full stack locally (no TLS, direct port access)
 	@if [ -f .env ]; then \
@@ -110,14 +114,17 @@ local-down: ## Stop local stack
 	$(LOCAL_COMPOSE) down
 
 e2e-up: ## Start E2E test stack (IB Gateway + remote-client + poller)
+	@test -f $(E2E_ENV) || { echo "ERROR: $(E2E_ENV) not found — copy .env.test.example to .env.test and fill in credentials"; exit 1; }
 	@if curl -sf http://localhost:15010/health | grep -q '"connected": true' && \
 	    curl -sf http://localhost:15011/health | grep -q '"status": "ok"'; then \
 		echo "Stack already running and connected"; \
 	else \
 		$(E2E_COMPOSE) up -d --build; \
 		echo "Waiting for remote-client to connect to IB Gateway..."; \
+		rc_ready=false; \
 		for i in $$(seq 1 12); do \
 			if curl -sf http://localhost:15010/health | grep -q '"connected": true'; then \
+				rc_ready=true; \
 				echo "remote-client ready"; break; \
 			fi; \
 			if $(E2E_COMPOSE) logs ib-gateway 2>&1 | grep -q "Existing session detected"; then \
@@ -138,16 +145,27 @@ e2e-up: ## Start E2E test stack (IB Gateway + remote-client + poller)
 			fi; \
 			sleep 10; \
 		done; \
+		if [ "$$rc_ready" != "true" ]; then \
+			echo "ERROR: remote-client did not connect to IB Gateway within 120s"; \
+			exit 1; \
+		fi; \
 		echo "Waiting for poller..."; \
+		poller_ready=false; \
 		for i in $$(seq 1 10); do \
 			if curl -sf http://localhost:15011/health | grep -q '"status": "ok"'; then \
+				poller_ready=true; \
 				echo "poller ready"; break; \
 			fi; \
 			sleep 3; \
 		done; \
+		if [ "$$poller_ready" != "true" ]; then \
+			echo "ERROR: poller did not become healthy within 30s"; \
+			exit 1; \
+		fi; \
 	fi
 
 e2e-down: ## Stop and remove E2E test stack
+	@test -f $(E2E_ENV) || { echo "ERROR: $(E2E_ENV) not found — nothing to tear down"; exit 1; }
 	$(E2E_COMPOSE) down
 
 e2e-run: ## Run E2E tests (stack must be up)
@@ -155,6 +173,7 @@ e2e-run: ## Run E2E tests (stack must be up)
 	$(PYTHON) -m pytest services/remote-client/tests/e2e/ services/poller/tests/e2e/ -v
 
 e2e: ## Run E2E tests against local paper account (starts/stops stack)
+	@test -f $(E2E_ENV) || { echo "ERROR: $(E2E_ENV) not found — copy .env.test.example to .env.test and fill in credentials"; exit 1; }
 	@was_up=false; \
 	if curl -sf http://localhost:15010/health | grep -q '"connected": true' && \
 	   curl -sf http://localhost:15011/health | grep -q '"status": "ok"'; then \

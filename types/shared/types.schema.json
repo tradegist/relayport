@@ -93,42 +93,118 @@
       "title": "Trade",
       "type": "object"
     },
-    "RunPollResponse": {
+    "WebhookPayload": {
       "additionalProperties": false,
+      "description": "Payload sent to the target webhook URL.",
       "properties": {
         "trades": {
           "items": {
             "$ref": "#/$defs/Trade"
           },
           "type": "array"
+        },
+        "errors": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
-        "trades"
+        "trades",
+        "errors"
       ],
-      "title": "RunPollResponse",
+      "title": "WebhookPayload",
       "type": "object"
     },
-    "HealthResponse": {
+    "Fill": {
       "additionalProperties": false,
+      "description": "Individual execution from IBKR (CommonFill spec).",
       "properties": {
-        "status": {
+        "execId": {
           "type": "string"
+        },
+        "orderId": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "side": {
+          "$ref": "#/$defs/BuySell"
+        },
+        "orderType": {
+          "anyOf": [
+            {
+              "enum": [
+                "market",
+                "limit",
+                "stop",
+                "stop_limit",
+                "trailing_stop"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "price": {
+          "type": "number"
+        },
+        "volume": {
+          "type": "number"
+        },
+        "cost": {
+          "type": "number"
+        },
+        "fee": {
+          "type": "number"
+        },
+        "timestamp": {
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "flex",
+            "execDetailsEvent",
+            "commissionReportEvent"
+          ],
+          "type": "string"
+        },
+        "raw": {
+          "additionalProperties": true,
+          "type": "object"
         }
       },
       "required": [
-        "status"
+        "execId",
+        "orderId",
+        "symbol",
+        "side",
+        "price",
+        "volume",
+        "cost",
+        "fee",
+        "timestamp",
+        "source",
+        "raw"
       ],
-      "title": "HealthResponse",
+      "title": "Fill",
       "type": "object"
     }
   },
   "anyOf": [
     {
-      "$ref": "#/$defs/RunPollResponse"
+      "$ref": "#/$defs/WebhookPayload"
     },
     {
-      "$ref": "#/$defs/HealthResponse"
+      "$ref": "#/$defs/Trade"
+    },
+    {
+      "$ref": "#/$defs/Fill"
     }
   ]
 }

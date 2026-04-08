@@ -1,3 +1,4 @@
+import * as Ibkr from "./shared";
 import * as IbkrPoller from "./poller";
 import * as IbkrHttp from "./http";
-export { IbkrPoller, IbkrHttp };
+export { Ibkr, IbkrPoller, IbkrHttp };

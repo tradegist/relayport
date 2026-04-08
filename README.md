@@ -127,6 +127,8 @@ Six containers in a single Docker network:
 - **`poller`** — Python image that polls the IBKR Flex Web Service every 10 minutes for new fills and sends them via pluggable notification backends (see `services/notifier/`). Supports both **Trade Confirmation** and **Activity** Flex Query types. Uses SQLite for deduplication. **Does not hold an IBKR session** — trade normally via web/mobile.
 - **`gateway-controller`** — Lightweight Alpine sidecar with Docker CLI. Exposes a CGI endpoint so the noVNC page can start the gateway container from the browser.
 
+> **Dedup guarantee.** Both the poller and the listener share a SQLite dedup database so each fill is delivered at most once under normal operation. In the rare event of an internal crash between webhook delivery and dedup bookkeeping, a fill may be sent a second time. Design your webhook consumer to be idempotent (e.g. deduplicate on `execId`).
+
 ## Domains & HTTPS
 
 Two domain names are **required**. Caddy uses them to automatically provision TLS certificates from Let's Encrypt, providing secure HTTPS connections. Without valid domains, Caddy cannot obtain certificates and the services will not be accessible — there is no fallback to plain HTTP or IP-based access.
@@ -282,52 +284,55 @@ Webhook payload and order placement types are available as a TypeScript package 
 ```
 types/
   index.d.ts                 # Barrel: exports IbkrPoller, IbkrHttp namespaces
-  package.json               # @tradegist/ibkr-types
+  package.json               # @tradegist/ibkr-relay-types
   poller/
     index.d.ts               # Re-exports: BuySell, WebhookPayload, Trade
-    types.d.ts               # Generated from services/poller/models_poller.py
+    types.d.ts               # Generated from models_poller.py SCHEMA_MODELS
     types.schema.json         # Intermediate JSON Schema
   http/
     index.d.ts               # Re-exports: PlaceOrderPayload, ContractPayload, OrderPayload, PlaceOrderResponse
-    types.d.ts               # Generated from services/remote-client/models_remote_client.py
+    types.d.ts               # Generated from models_remote_client.py SCHEMA_MODELS
     types.schema.json         # Intermediate JSON Schema
 ```
 
 Usage:
 
 ```typescript
-import { IbkrPoller, IbkrHttp } from "@tradegist/ibkr-types";
+import { Ibkr, IbkrPoller, IbkrHttp } from "@tradegist/ibkr-relay-types";
 
-const payload: IbkrPoller.WebhookPayload = ...;
-const order: IbkrHttp.PlaceOrderPayload = ...;
+const payload: Ibkr.WebhookPayload = ...;   // shared webhook types
+const poll: IbkrPoller.RunPollResponse = ...; // poller-specific types
+const order: IbkrHttp.PlaceOrderPayload = ...; // order API types
 ```
 
-Types are auto-generated from the Pydantic models via `make types`. The package is not yet published to npm — the API is still evolving.
+Types are auto-generated from the Pydantic models via `make types`. The `Trade` type follows the CommonFill contract (`orderId`, `symbol`, `side`, `volume`, `price`, `fee`, `cost`, `orderType`, `timestamp`, `source`, `raw`, `fillCount`, `execIds`). The package is not yet published to npm — the API is still evolving.
 
 ## Configuration
 
 All configuration is via environment variables in `.env`:
 
-| Variable                | Required | Default            | Description                                                                                           |
-| ----------------------- | -------- | ------------------ | ----------------------------------------------------------------------------------------------------- |
-| `DO_API_TOKEN`          | Yes      | —                  | DigitalOcean API token                                                                                |
-| `TWS_USERID`            | Yes      | —                  | IBKR account username                                                                                 |
-| `TWS_PASSWORD`          | Yes      | —                  | IBKR account password                                                                                 |
-| `TRADING_MODE`          | No       | `paper`            | `paper` or `live`                                                                                     |
-| `VNC_SERVER_PASSWORD`   | Yes      | —                  | Password for noVNC browser access                                                                     |
-| `VNC_DOMAIN`            | Yes      | —                  | Domain for VNC access (see [Domains & HTTPS](#domains--https))                                        |
-| `SITE_DOMAIN`           | Yes      | —                  | Domain for trade API (see [Domains & HTTPS](#domains--https))                                         |
-| `API_TOKEN`             | Yes      | —                  | Bearer token for `/ibkr/*` endpoints (`openssl rand -hex 32`)                                         |
-| `IBKR_FLEX_TOKEN`       | Yes      | —                  | Flex Web Service token (from Client Portal)                                                           |
-| `IBKR_FLEX_QUERY_ID`    | Yes      | —                  | Flex Query ID (Trade Confirmation or Activity)                                                        |
-| `TARGET_WEBHOOK_URL`    | No       | —                  | Webhook endpoint (empty = log-only dry-run)                                                           |
-| `WEBHOOK_SECRET`        | No       | —                  | HMAC-SHA256 key for signing payloads (required if NOTIFIERS=webhook)                                  |
-| `NOTIFIERS`             | No       | —                  | Active notification backends (e.g. `webhook`). Empty = dry-run                                        |
-| `POLLER_ENABLED`        | No       | `true`             | Set to `false` to disable the poller container entirely                                               |
-| `REMOTE_CLIENT_ENABLED` | No       | `true`             | Set to `false` to disable ib-gateway, novnc, remote-client, and gateway-controller (poller-only mode) |
-| `DROPLET_SIZE`          | No       | —                  | Override droplet size slug (e.g. `s-1vcpu-512mb`). Ignores `JAVA_HEAP_SIZE` when set                  |
-| `POLL_INTERVAL_SECONDS` | No       | `600`              | Flex poll interval (seconds)                                                                          |
-| `TIME_ZONE`             | No       | `America/New_York` | Timezone (tz database format)                                                                         |
+| Variable                       | Required | Default            | Description                                                                                           |
+| ------------------------------ | -------- | ------------------ | ----------------------------------------------------------------------------------------------------- |
+| `DO_API_TOKEN`                 | Yes      | —                  | DigitalOcean API token                                                                                |
+| `TWS_USERID`                   | Yes      | —                  | IBKR account username                                                                                 |
+| `TWS_PASSWORD`                 | Yes      | —                  | IBKR account password                                                                                 |
+| `TRADING_MODE`                 | No       | `paper`            | `paper` or `live`                                                                                     |
+| `VNC_SERVER_PASSWORD`          | Yes      | —                  | Password for noVNC browser access                                                                     |
+| `VNC_DOMAIN`                   | Yes      | —                  | Domain for VNC access (see [Domains & HTTPS](#domains--https))                                        |
+| `SITE_DOMAIN`                  | Yes      | —                  | Domain for trade API (see [Domains & HTTPS](#domains--https))                                         |
+| `API_TOKEN`                    | Yes      | —                  | Bearer token for `/ibkr/*` endpoints (`openssl rand -hex 32`)                                         |
+| `IBKR_FLEX_TOKEN`              | Yes      | —                  | Flex Web Service token (from Client Portal)                                                           |
+| `IBKR_FLEX_QUERY_ID`           | Yes      | —                  | Flex Query ID (Trade Confirmation or Activity)                                                        |
+| `TARGET_WEBHOOK_URL`           | No       | —                  | Webhook endpoint (empty = log-only dry-run)                                                           |
+| `WEBHOOK_SECRET`               | No       | —                  | HMAC-SHA256 key for signing payloads (required if NOTIFIERS=webhook)                                  |
+| `NOTIFIERS`                    | No       | —                  | Active notification backends (e.g. `webhook`). Empty = dry-run                                        |
+| `POLLER_ENABLED`               | No       | `true`             | Set to `false` to disable the poller container entirely                                               |
+| `REMOTE_CLIENT_ENABLED`        | No       | `true`             | Set to `false` to disable ib-gateway, novnc, remote-client, and gateway-controller (poller-only mode) |
+| `DROPLET_SIZE`                 | No       | —                  | Override droplet size slug (e.g. `s-1vcpu-512mb`). Ignores `JAVA_HEAP_SIZE` when set                  |
+| `POLL_INTERVAL_SECONDS`        | No       | `600`              | Flex poll interval (seconds)                                                                          |
+| `LISTENER_ENABLED`             | No       | —                  | Set to any non-empty value to enable real-time trade event listener                                   |
+| `LISTENER_EVENT_DEBOUNCE_TIME` | No       | `0`                | Debounce window in ms for `commissionReportEvent` fills. `0` = immediate dispatch                     |
+| `TIME_ZONE`                    | No       | `America/New_York` | Timezone (tz database format)                                                                         |
 
 ## Webhook Payload
 
@@ -337,35 +342,61 @@ When orders fill, the relay POSTs a JSON payload with all trades batched into a 
 {
   "trades": [
     {
-      "accountId": "UXXXXXXX",
-      "symbol": "AAPL",
-      "underlyingSymbol": "AAPL",
-      "assetCategory": "STK",
-      "listingExchange": "NASDAQ",
-      "exchange": "IBDARK",
-      "buySell": "BUY",
-      "quantity": 1.0,
-      "price": 254.6,
-      "tradeDate": "20260402",
-      "dateTime": "20260402;093008",
-      "orderTime": "20260401;183713",
       "orderId": "684196618",
-      "transactionId": "10101388829",
-      "orderType": "MKT",
-      "commission": -1.0,
-      "commissionCurrency": "USD",
-      "currency": "USD",
-      "execIds": ["10101388829"],
-      "fillCount": 1
+      "symbol": "AAPL",
+      "side": "buy",
+      "orderType": "market",
+      "price": 254.6,
+      "volume": 1.0,
+      "cost": 254.6,
+      "fee": -1.0,
+      "fillCount": 1,
+      "execIds": ["0001f4e8.67890abc.01.01"],
+      "timestamp": "20260402;093008",
+      "source": "flex",
+      "raw": {
+        "accountId": "UXXXXXXX",
+        "assetCategory": "STK",
+        "currency": "USD",
+        "commission": -1.0,
+        "commissionCurrency": "USD",
+        "tradeDate": "20260402",
+        "dateTime": "20260402;093008",
+        "orderTime": "20260401;183713",
+        "orderType": "MKT",
+        "listingExchange": "NASDAQ",
+        "exchange": "IBDARK",
+        "underlyingSymbol": "AAPL"
+      }
     }
   ],
   "errors": []
 }
 ```
 
-The `trades` array contains one `Trade` object per order (fills are aggregated by `orderId`). The `errors` array contains warnings about unknown XML attributes or parse errors — it is empty when everything parsed cleanly. See [Flex XML Parsing](#flex-xml-parsing) for details.
+### CommonFill Contract
 
-Each `Trade` includes **all fields** from the IBKR Flex XML (see [`services/poller/models_poller.py`](services/poller/models_poller.py) for the full list). Most fields not present in the XML default to `""` or `0.0`, but `buySell` must be present; rows missing it are skipped and reported in `errors`.
+All exchange relays (IBKR, Kraken, etc.) use the same **CommonFill** model. The `trades` array contains `Trade` objects with these guaranteed fields:
+
+| Field       | Type                | Description                                                                               |
+| ----------- | ------------------- | ----------------------------------------------------------------------------------------- |
+| `orderId`   | `string`            | Permanent order identifier (unique per account)                                           |
+| `symbol`    | `string`            | Instrument symbol                                                                         |
+| `side`      | `"buy" \| "sell"`   | Trade direction (lowercase)                                                               |
+| `orderType` | `OrderType \| null` | Normalized: `"market"`, `"limit"`, `"stop"`, `"stop_limit"`, `"trailing_stop"`, or `null` |
+| `price`     | `number`            | VWAP when aggregated, single fill price otherwise                                         |
+| `volume`    | `number`            | Sum of fill quantities                                                                    |
+| `cost`      | `number`            | Total cost (sum of fills)                                                                 |
+| `fee`       | `number`            | Total fees/commissions (sum of fills)                                                     |
+| `fillCount` | `number`            | Number of fills aggregated into this trade                                                |
+| `execIds`   | `string[]`          | One execution ID per fill (for tracing back to individual fills)                          |
+| `timestamp` | `string`            | Latest fill timestamp                                                                     |
+| `source`    | `string`            | Origin: `"flex"`, `"execDetailsEvent"`, or `"commissionReportEvent"`                      |
+| `raw`       | `object`            | Original exchange-specific payload (all fields, unmodified)                               |
+
+The `raw` object preserves the full exchange-specific data. For IBKR Flex, this includes ~100 XML attributes (account info, security details, financial fields, dates). For ib_async listener events, it includes a smaller set of fields from the execution/commission report objects. Consumers should treat `raw` as opaque exchange data — the CommonFill fields above are the stable contract.
+
+The `errors` array contains warnings about parse problems — it is empty when everything parsed cleanly.
 
 The payload is signed with HMAC-SHA256. Verify using the `X-Signature-256` header:
 
@@ -563,6 +594,8 @@ make sync LOCAL_FILES=1  # deploy to your droplet
 ├── docker-compose.local.yml # Local dev override (direct port access, no TLS)
 ├── docker-compose.test.yml # E2E test stack (ib-gateway + remote-client)
 ├── services/                  # Business-logic services (user-facing features)
+│   ├── shared/                    # Single source of truth for models + utilities
+│   │   └── __init__.py            # Fill, Trade, WebhookPayload, BuySell, OrderType, aggregate_fills()
 │   ├── remote-client/
 │   │   ├── Dockerfile
 │   │   ├── requirements.txt       # ib_async, aiohttp
@@ -572,7 +605,7 @@ make sync LOCAL_FILES=1  # deploy to your droplet
 │   │   │   ├── __init__.py        # IBClient class (connection management)
 │   │   │   ├── orders.py          # OrdersNamespace (place orders)
 │   │   │   └── listener.py        # ListenerNamespace (real-time trade events → webhooks)
-│   │   ├── routes/                # HTTP route handlers
+│   │   ├── rc_routes/             # HTTP route handlers
 │   │   │   ├── __init__.py        # Route orchestrator (create_routes)
 │   │   │   ├── middlewares.py     # Auth middleware (Bearer token)
 │   │   │   ├── order_place.py     # POST /ibkr/order
@@ -585,13 +618,13 @@ make sync LOCAL_FILES=1  # deploy to your droplet
 │       ├── Dockerfile
 │       ├── requirements.txt       # httpx, pydantic, aiohttp
 │       ├── main.py                # Entrypoint (polling loop + HTTP API)
-│       ├── models_poller.py       # Pydantic models (Fill, Trade, WebhookPayload, BuySell)
+│       ├── models_poller.py       # Re-export shim (shared models + poller-specific API types)
 │       ├── poller/                # Core polling logic (package)
 │       │   ├── __init__.py        # SQLite dedup, Flex fetch, poll_once()
 │       │   ├── flex_parser.py     # Flex XML parser (Activity + Trade Confirmation)
 │       │   ├── test_flex_parser.py # Tests for flex_parser
 │       │   └── test_poller.py     # Tests for poller core logic
-│       └── routes/                # HTTP API
+│       └── poller_routes/         # HTTP API
 │           ├── __init__.py        # Route orchestrator (create_routes, start_api_server)
 │           ├── middlewares.py     # Auth middleware (Bearer token)
 │           └── run.py             # POST /ibkr/poller/run handler
@@ -599,6 +632,8 @@ make sync LOCAL_FILES=1  # deploy to your droplet
 │       ├── __init__.py            # Registry, load_notifiers(), validate_notifier_env(), notify()
 │       ├── base.py                # BaseNotifier ABC
 │       └── webhook.py             # WebhookNotifier: HMAC-SHA256 signed HTTP POST
+│   └── dedup/                     # Shared SQLite dedup library (library, no container)
+│       └── __init__.py            # init_db(), is_processed(), mark_processed(), get_processed_ids(), prune()
 ├── infra/                         # Infrastructure backbone (no business logic)
 │   ├── caddy/
 │   │   ├── Caddyfile              # Reverse proxy config (VNC + Site domains)
@@ -612,15 +647,15 @@ make sync LOCAL_FILES=1  # deploy to your droplet
 │       ├── Dockerfile
 │       ├── start-gateway.sh       # CGI script to start ib-gateway
 │       └── gateway-status.sh      # CGI script to check ib-gateway status
-└── types/                     # @tradegist/ibkr-types npm package
+└── types/                     # @tradegist/ibkr-relay-types npm package
     ├── index.d.ts             # Barrel: exports IbkrPoller, IbkrHttp namespaces
     ├── package.json
     ├── poller/                # IbkrPoller namespace
     │   ├── index.d.ts
-    │   └── types.d.ts         # Generated from services/poller/models_poller.py
+    │   └── types.d.ts         # Generated from models_poller.py SCHEMA_MODELS
     └── http/                  # IbkrHttp namespace
         ├── index.d.ts
-        └── types.d.ts         # Generated from services/remote-client/models_remote_client.py
+        └── types.d.ts         # Generated from models_remote_client.py SCHEMA_MODELS
 
 ```
 
@@ -852,7 +887,7 @@ make logs S=ib-gateway
 - [x] Makefile CLI (`make deploy`, `make order`, etc.)
 - [x] Gateway management (browser Start Gateway button + `make gateway`)
 - [x] Unified Flex XML parsing (Activity + Trade Confirmation)
-- [x] TypeScript type definitions (`@tradegist/ibkr-types`, not yet published)
+- [x] TypeScript type definitions (`@tradegist/ibkr-relay-types`, not yet published)
 - [x] E2E test infrastructure (Docker-based, paper account)
 - [x] Real-time listener (opt-in, `LISTENER_ENABLED`)
 - [x] Optional poller disable (`POLLER_ENABLED=false`)
@@ -877,18 +912,18 @@ The poller supports both **Activity Flex Queries** (`<Trade>` tags) and **Trade 
   | `settleDateTarget`   | `settleDateTarget`      | `settleDate`                 |
   | `tradeMoney`         | `tradeMoney`            | `amount`                     |
 
-- **All known fields are forwarded as-is** from the XML. The full list of supported fields is defined in [`services/poller/models_poller.py`](services/poller/models_poller.py). Unknown XML attributes are silently dropped but reported in the `errors` array of the webhook payload.
+- **All known fields are preserved in `raw`** — the full IBKR XML attributes are captured in the `raw` dict on each Fill (and propagated to Trade). CommonFill fields (`execId`, `symbol`, `side`, `volume`, `price`, `fee`, `cost`, `timestamp`, `orderType`, `source`) are extracted as top-level fields. Unknown XML attributes also appear in `raw` but are not reported as errors.
 
 - **Fills are aggregated into trades** by `orderId`. When an order has multiple fills:
-  - `quantity` is the sum of all fills
-  - `price` is the quantity-weighted average
-  - Financial fields (`commission`, `taxes`, `cost`, `tradeMoney`, `proceeds`, `netCash`, `fifoPnlRealized`, `mtmPnl`, `accruedInt`) are summed
-  - `dateTime` and `tradeDate` use the latest value across fills
-  - All other fields use the last fill's value
-  - `execIds` is an array of `transactionId` values (one per fill), so you can trace back to individual executions
+  - `volume` is the sum of all fills
+  - `price` is the quantity-weighted average (VWAP)
+  - Financial fields (`cost`, `fee`) are summed
+  - `timestamp` uses the latest value across fills
+  - `raw` comes from the first fill
+  - `execIds` is an array of execution IDs (one per fill), so you can trace back to individual executions
   - `fillCount` is the number of fills in the group
 
-- **Deduplication** uses `transactionId` as the primary key (falling back to `ibExecId` → `tradeID`). Processed IDs are stored in SQLite to prevent double-sending across poll cycles.
+- **Deduplication** uses `execId` as the primary key. For Flex XML, `execId` is resolved via a fallback chain: `ibExecId` → `transactionId` → `tradeID`. `ibExecId` is preferred because it is the common identifier between Flex XML fills and real-time ib_async execution events, enabling cross-service dedup. Processed IDs are stored in a shared SQLite database (WAL mode) that both the poller and listener read/write concurrently.
 
 - **Parse errors never break the runtime.** Malformed rows are skipped and reported in the `errors` array. Bad float values default to `0.0`.
 
@@ -905,7 +940,7 @@ IBKR uses different field names for the same identifiers across its APIs. This t
 | **Permanent order ID** | `permId`       | `ibOrderID`        | `orderID`               | Account-wide, survives reconnects. The only reliable cross-session order identifier. Exposed as `orderId` in this project's API. |
 | Session order ID       | `orderId`      | —                  | —                       | Client-scoped `int`, resets on reconnect. Not used in this project.                                                              |
 | Execution / fill ID    | `execId`       | `ibExecID`         | `execID`                | Per-fill unique ID. Format: `hex.hex.seq.seq`. Join key between real-time and Flex at the fill level.                            |
-| Transaction ID         | —              | `transactionId`    | —                       | Flex-only monotonic ID. Used as the primary dedup key in the poller.                                                             |
+| Transaction ID         | —              | `transactionId`    | —                       | Flex-only monotonic ID. Fallback dedup key when `ibExecId` is absent.                                                            |
 | Trade ID               | —              | `tradeID`          | —                       | Flex reporting grouping key. No real-time equivalent.                                                                            |
 | Brokerage order ID     | —              | `brokerageOrderID` | —                       | IBKR internal routing ID.                                                                                                        |
 | Exchange order ID      | —              | `exchOrderId`      | —                       | ID assigned by the exchange.                                                                                                     |
@@ -916,7 +951,7 @@ IBKR uses different field names for the same identifiers across its APIs. This t
 - **Order level:** `permId` (TWS) ↔ `ibOrderID` (Flex AF) ↔ `orderID` (Flex TC)
 - **Fill level:** `execId` (TWS) ↔ `ibExecID` (Flex AF) ↔ `execID` (Flex TC)
 
-**This project's convention:** The permanent order ID (`permId` from ib_async) is exposed as `orderId` in all API responses (`PlaceOrderResponse`, `TradeDetail`). The session-scoped `orderId` from ib_async is never exposed — it resets on reconnect and is useless for cross-session tracking.
+**This project's convention:** The permanent order ID (`permId` from ib_async) is exposed as `orderId` in all API responses (`PlaceOrderResponse`, `Trade`). The session-scoped `orderId` from ib_async is never exposed — it resets on reconnect and is useless for cross-session tracking. The execution/fill ID is exposed as `execId` on `Fill` and in the `execIds` array on `Trade`. The dedup key is `execId`, resolved via the fallback chain `ibExecId` → `transactionId` → `tradeID` at parse time.
 
 ## Real-Time Listener
 
@@ -929,7 +964,7 @@ When enabled, the remote-client subscribes to two ib_async events:
 - **`execDetailsEvent`** — fires when an execution occurs (fill price, quantity, exchange). Commission is not yet available.
 - **`commissionReportEvent`** — fires shortly after with commission and realized P&L.
 
-Each event produces a separate webhook with a single `Trade` object. The `source` field indicates the origin:
+Each event produces a webhook with `Trade` objects. The `source` field indicates the origin:
 
 | Source                  | Commission | Latency        |
 | ----------------------- | ---------- | -------------- |
@@ -937,7 +972,11 @@ Each event produces a separate webhook with a single `Trade` object. The `source
 | `commissionReportEvent` | Populated  | ~0.5s after    |
 | `flex`                  | Populated  | Minutes (poll) |
 
-Both events fire for every fill — consumers receive two webhooks per fill and can choose which to act on (e.g. use `execDetailsEvent` for instant notification, `commissionReportEvent` for final commission data).
+`execDetailsEvent` is always dispatched immediately (no dedup, no debounce). `commissionReportEvent` is deduplicated by `execId` via the shared `services/dedup/` SQLite module — duplicates after reconnect are skipped.
+
+When **debounce** is enabled (`LISTENER_EVENT_DEBOUNCE_TIME` > 0), `commissionReportEvent` fills are buffered per `orderId` and aggregated into a single webhook per order. Each new fill resets the debounce timer. This is useful for orders that produce rapid partial fills — instead of N separate webhooks, you get one aggregated trade after the fills settle.
+
+The listener also prunes the shared dedup DB at startup and every 24 hours (30-day retention).
 
 ### Enable
 
@@ -952,10 +991,18 @@ WEBHOOK_SECRET=your_hmac_secret_key
 
 The listener reuses the same notifier configuration as the poller (`NOTIFIERS`, `TARGET_WEBHOOK_URL`, `WEBHOOK_SECRET`, etc.).
 
-### No cross-service dedup
+### Dedup
 
-The listener and poller fire independently. If the Gateway is connected and `LISTENER_ENABLED=true`, the same trade may produce webhooks from both the listener (real-time) and the poller (next poll cycle). Consumers should use the `source` field to distinguish or deduplicate by `ibExecId`.
+Both the listener and poller share the same SQLite dedup database at `DEDUP_DB_PATH` (default `/data/dedup/fills.db`) on a `dedup-data` Docker named volume. SQLite WAL mode with `timeout=5.0` enables safe concurrent access from both containers.
+
+A fill processed by the listener is automatically skipped by the next poll cycle, and vice versa. The dedup key is `execId` (resolved by the Flex parser via the `ibExecId` → `transactionId` → `tradeID` fallback chain; the listener uses `execId` from ib_async directly).
+
+The poller has a separate metadata DB at `META_DB_PATH` (default `/data/meta.db`) on a private `poller-data` volume for its timestamp watermark.
 
 ### Field mapping
 
-The listener maps ib_async event objects to the same `Trade` model used by the poller. Since the events provide a different set of fields than Flex XML, some Trade fields will be empty strings or `0.0` (e.g. `tradeDate`, `tradeMoney`, `proceeds`). The key fields (`symbol`, `buySell`, `quantity`, `price`, `orderId`, `ibExecId`, `commission`, `dateTime`) are always populated.
+The listener maps ib_async event objects to `Fill` via `_map_to_fill()`, then wraps them in `Trade` objects (via `_fill_to_trade()` for immediate dispatch, or `aggregate_fills()` when debouncing). The ib_async objects are not directly serializable, so the listener manually extracts fields from `Execution`, `CommissionReport`, `Order`, and `Contract` into a flat `raw` dict.
+
+Since listener events provide a different set of fields than Flex XML, the `raw` dict contains a smaller set (~15 keys vs ~100 for Flex). The CommonFill fields (`symbol`, `side`, `volume`, `price`, `orderId`, `execId`, `fee`, `timestamp`) are always populated. `orderType` is `None` for listener events (ib_async doesn't expose it at the fill level). `cost` is `0.0`.
+
+The `raw` keys for listener events: `ibExecId`, `orderId`, `side`, `quantity`, `price`, `symbol`, `assetCategory`, `exchange`, `currency`, `commission`, `commissionCurrency`, `fifoPnlRealized`, `dateTime`, `accountId`.

@@ -3,7 +3,8 @@
 import pytest
 
 from models_poller import BuySell, Fill, Trade
-from poller.flex_parser import _dedup_id, aggregate_fills, parse_fills
+from poller.flex_parser import parse_fills
+from shared import aggregate_fills
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -174,76 +175,101 @@ class TestParseFillsBasic:
 
 
 # ═════════════════════════════════════════════════════════════════════════
-#  Alias / field normalization
+#  Alias / field normalization — CommonFill fields
 # ═════════════════════════════════════════════════════════════════════════
 
 class TestFieldNormalization:
-    """AF and TC use different XML attribute names for the same Fill field."""
+    """AF and TC aliases map correctly into CommonFill fields and raw dict."""
 
-    def test_af_ibCommission_becomes_commission(self) -> None:
+    def test_af_ibCommission_maps_to_fee(self) -> None:
         xml = _wrap_af(AF_AAPL)
         fills, _ = parse_fills(xml)
-        assert fills[0].commission == pytest.approx(-0.62125)
+        assert fills[0].fee == pytest.approx(-0.62125)
 
-    def test_af_ibCommissionCurrency_becomes_commissionCurrency(self) -> None:
+    def test_af_ibCommission_preserved_in_raw(self) -> None:
         xml = _wrap_af(AF_AAPL)
         fills, _ = parse_fills(xml)
-        assert fills[0].commissionCurrency == "USD"
+        assert fills[0].raw["commission"] == pytest.approx(-0.62125)
 
-    def test_af_ibOrderID_becomes_orderId(self) -> None:
+    def test_af_ibCommissionCurrency_in_raw(self) -> None:
+        xml = _wrap_af(AF_AAPL)
+        fills, _ = parse_fills(xml)
+        assert fills[0].raw["commissionCurrency"] == "USD"
+
+    def test_af_ibOrderID_maps_to_orderId(self) -> None:
         xml = _wrap_af(AF_AAPL)
         fills, _ = parse_fills(xml)
         assert fills[0].orderId == "333333333"
 
-    def test_af_tradePrice_becomes_price(self) -> None:
+    def test_af_tradePrice_maps_to_price(self) -> None:
         xml = _wrap_af(AF_AAPL)
         fills, _ = parse_fills(xml)
         assert fills[0].price == pytest.approx(254.6)
 
-    def test_af_ibExecID_becomes_ibExecId(self) -> None:
+    def test_af_ibExecID_maps_to_execId(self) -> None:
         xml = _wrap_af(AF_AAPL)
         fills, _ = parse_fills(xml)
-        assert fills[0].ibExecId == "00018d97.00000001.01.01"
+        assert fills[0].execId == "00018d97.00000001.01.01"
 
-    def test_af_transactionID_becomes_transactionId(self) -> None:
+    def test_af_transactionID_in_raw(self) -> None:
         xml = _wrap_af(AF_AAPL)
         fills, _ = parse_fills(xml)
-        assert fills[0].transactionId == "22222222222"
+        assert fills[0].raw["transactionId"] == "22222222222"
 
-    def test_tc_orderID_becomes_orderId(self) -> None:
+    def test_tc_orderID_maps_to_orderId(self) -> None:
         xml = _wrap_tc(TC_AAPL)
         fills, _ = parse_fills(xml)
         assert fills[0].orderId == "333333333"
 
-    def test_tc_execID_becomes_ibExecId(self) -> None:
+    def test_tc_execID_maps_to_execId(self) -> None:
         xml = _wrap_tc(TC_AAPL)
         fills, _ = parse_fills(xml)
-        assert fills[0].ibExecId == "00018d97.00000001.01.01"
+        assert fills[0].execId == "00018d97.00000001.01.01"
 
-    def test_tc_tax_becomes_taxes(self) -> None:
+    def test_tc_tax_in_raw_as_taxes(self) -> None:
         xml = _wrap_tc(TC_AAPL)
         fills, _ = parse_fills(xml)
-        assert fills[0].taxes == pytest.approx(0.0)
+        assert fills[0].raw["taxes"] == pytest.approx(0.0)
 
-    def test_tc_settleDate_becomes_settleDateTarget(self) -> None:
+    def test_tc_settleDate_in_raw_as_settleDateTarget(self) -> None:
         xml = _wrap_tc(TC_AAPL)
         fills, _ = parse_fills(xml)
-        assert fills[0].settleDateTarget == "20250407"
+        assert fills[0].raw["settleDateTarget"] == "20250407"
 
-    def test_tc_amount_becomes_tradeMoney(self) -> None:
+    def test_tc_amount_in_raw_as_tradeMoney(self) -> None:
         xml = _wrap_tc(TC_AAPL)
         fills, _ = parse_fills(xml)
-        assert fills[0].tradeMoney == pytest.approx(254.6)
+        assert fills[0].raw["tradeMoney"] == pytest.approx(254.6)
 
     def test_tc_price_maps_directly(self) -> None:
         xml = _wrap_tc(TC_AAPL)
         fills, _ = parse_fills(xml)
         assert fills[0].price == pytest.approx(254.6)
 
-    def test_tc_commission_maps_directly(self) -> None:
+    def test_tc_commission_maps_to_fee(self) -> None:
         xml = _wrap_tc(TC_AAPL)
         fills, _ = parse_fills(xml)
-        assert fills[0].commission == pytest.approx(-0.62125)
+        assert fills[0].fee == pytest.approx(-0.62125)
+
+    def test_af_buySell_maps_to_side(self) -> None:
+        xml = _wrap_af(AF_AAPL)
+        fills, _ = parse_fills(xml)
+        assert fills[0].side == BuySell.BUY
+
+    def test_af_quantity_maps_to_volume(self) -> None:
+        xml = _wrap_af(AF_AAPL)
+        fills, _ = parse_fills(xml)
+        assert fills[0].volume == pytest.approx(1.0)
+
+    def test_af_dateTime_maps_to_timestamp(self) -> None:
+        xml = _wrap_af(AF_AAPL)
+        fills, _ = parse_fills(xml)
+        assert fills[0].timestamp == "20250403;153000"
+
+    def test_af_orderType_normalized(self) -> None:
+        xml = _wrap_af(AF_AAPL)
+        fills, _ = parse_fills(xml)
+        assert fills[0].orderType == "market"
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -251,7 +277,7 @@ class TestFieldNormalization:
 # ═════════════════════════════════════════════════════════════════════════
 
 class TestAFTCParity:
-    """The same trade parsed from AF and TC should yield identical canonical values."""
+    """The same trade parsed from AF and TC should yield identical CommonFill values."""
 
     @pytest.fixture()
     def af_fill(self) -> Fill:
@@ -269,38 +295,41 @@ class TestAFTCParity:
     def test_orderId_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
         assert af_fill.orderId == tc_fill.orderId == "333333333"
 
-    def test_ibExecId_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
-        assert af_fill.ibExecId == tc_fill.ibExecId
+    def test_execId_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
+        assert af_fill.execId == tc_fill.execId
 
     def test_price_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
         assert af_fill.price == tc_fill.price
 
-    def test_quantity_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
-        assert af_fill.quantity == tc_fill.quantity
+    def test_volume_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
+        assert af_fill.volume == tc_fill.volume
 
-    def test_commission_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
-        assert af_fill.commission == tc_fill.commission
+    def test_fee_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
+        assert af_fill.fee == tc_fill.fee
 
-    def test_taxes_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
-        assert af_fill.taxes == tc_fill.taxes
+    def test_side_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
+        assert af_fill.side == tc_fill.side == BuySell.BUY
 
-    def test_tradeMoney_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
-        assert af_fill.tradeMoney == tc_fill.tradeMoney
+    def test_timestamp_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
+        assert af_fill.timestamp == tc_fill.timestamp
 
-    def test_proceeds_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
-        assert af_fill.proceeds == tc_fill.proceeds
+    def test_raw_taxes_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
+        assert af_fill.raw["taxes"] == tc_fill.raw["taxes"]
 
-    def test_netCash_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
-        assert af_fill.netCash == tc_fill.netCash
+    def test_raw_tradeMoney_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
+        assert af_fill.raw["tradeMoney"] == tc_fill.raw["tradeMoney"]
 
-    def test_settleDateTarget_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
-        assert af_fill.settleDateTarget == tc_fill.settleDateTarget == "20250407"
+    def test_raw_proceeds_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
+        assert af_fill.raw["proceeds"] == tc_fill.raw["proceeds"]
 
-    def test_tradeDate_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
-        assert af_fill.tradeDate == tc_fill.tradeDate
+    def test_raw_netCash_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
+        assert af_fill.raw["netCash"] == tc_fill.raw["netCash"]
 
-    def test_dateTime_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
-        assert af_fill.dateTime == tc_fill.dateTime
+    def test_raw_settleDateTarget_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
+        assert af_fill.raw["settleDateTarget"] == tc_fill.raw["settleDateTarget"] == "20250407"
+
+    def test_raw_tradeDate_matches(self, af_fill: Fill, tc_fill: Fill) -> None:
+        assert af_fill.raw["tradeDate"] == tc_fill.raw["tradeDate"]
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -315,7 +344,7 @@ class TestFloatParsing:
             '<Trade transactionID="1" buySell="BUY" quantity="42.5" tradePrice="100.25" />'
         )
         fills, _errors = parse_fills(xml)
-        assert fills[0].quantity == pytest.approx(42.5)
+        assert fills[0].volume == pytest.approx(42.5)
         assert fills[0].price == pytest.approx(100.25)
 
     def test_negative_float(self) -> None:
@@ -323,22 +352,22 @@ class TestFloatParsing:
             '<Trade transactionID="1" buySell="BUY" ibCommission="-1.5" />'
         )
         fills, _ = parse_fills(xml)
-        assert fills[0].commission == pytest.approx(-1.5)
+        assert fills[0].fee == pytest.approx(-1.5)
 
     def test_zero(self) -> None:
         xml = _wrap_af('<Trade transactionID="1" buySell="BUY" taxes="0" />')
         fills, _ = parse_fills(xml)
-        assert fills[0].taxes == 0.0
+        assert fills[0].raw["taxes"] == 0.0
 
     def test_empty_string_becomes_zero(self) -> None:
         xml = _wrap_af('<Trade transactionID="1" buySell="BUY" quantity="" />')
         fills, _ = parse_fills(xml)
-        assert fills[0].quantity == 0.0
+        assert fills[0].volume == 0.0
 
     def test_bad_float_reports_error(self) -> None:
         xml = _wrap_af('<Trade transactionID="1" buySell="BUY" quantity="abc" />')
         fills, errors = parse_fills(xml)
-        assert fills[0].quantity == 0.0
+        assert fills[0].volume == 0.0
         assert any("Bad float" in e and "quantity" in e for e in errors)
 
     def test_bad_float_includes_value_in_error(self) -> None:
@@ -352,11 +381,11 @@ class TestFloatParsing:
         )
         fills, _ = parse_fills(xml)
         assert fills[0].symbol == "AAPL"
-        assert fills[0].buySell == "BUY"
+        assert fills[0].side == BuySell.BUY
 
 
 # ═════════════════════════════════════════════════════════════════════════
-#  Deduplication
+#  Deduplication (within a single XML document)
 # ═════════════════════════════════════════════════════════════════════════
 
 class TestDedup:
@@ -395,10 +424,11 @@ class TestDedup:
         assert len(fills) == 2
 
     def test_fill_with_no_id_skipped(self) -> None:
-        """A fill with no transactionId, ibExecId, or tradeID is skipped."""
+        """A fill with no transactionId, ibExecId, or tradeID is skipped with an error."""
         xml = _wrap_af('<Trade buySell="BUY" symbol="AAPL" />')
-        fills, _ = parse_fills(xml)
+        fills, errors = parse_fills(xml)
         assert len(fills) == 0
+        assert any("no execId" in e for e in errors)
 
     def test_cross_format_dedup(self) -> None:
         """Same trade in both <Trade> and <TradeConfirm> is deduped by ibExecId."""
@@ -413,81 +443,74 @@ class TestDedup:
             "</FlexStatement></FlexStatements></FlexQueryResponse>"
         )
         fills, _ = parse_fills(xml)
-        # Both have dedup_id = "exec.001" (ibExecId), so only one kept
         assert len(fills) == 1
 
 
 # ═════════════════════════════════════════════════════════════════════════
-#  _dedup_id fallback chain
+#  execId fallback chain (resolved at parse time)
 # ═════════════════════════════════════════════════════════════════════════
 
-class TestDedupId:
-    """_dedup_id returns the best available unique identifier."""
+class TestExecIdFallback:
+    """Parser resolves execId from ibExecId → transactionId → tradeID."""
 
-    def test_prefers_transactionId(self) -> None:
-        fill = Fill(buySell=BuySell.BUY, source="flex", transactionId="T1", ibExecId="E1", tradeID="X1")
-        assert _dedup_id(fill) == "T1"
+    def test_prefers_ibExecId(self) -> None:
+        xml = _wrap_af(
+            '<Trade ibExecID="E1" transactionID="T1" tradeID="X1" buySell="BUY" />'
+        )
+        fills, _ = parse_fills(xml)
+        assert fills[0].execId == "E1"
 
-    def test_falls_back_to_ibExecId(self) -> None:
-        fill = Fill(buySell=BuySell.BUY, source="flex", transactionId="", ibExecId="E1", tradeID="X1")
-        assert _dedup_id(fill) == "E1"
+    def test_falls_back_to_transactionId(self) -> None:
+        xml = _wrap_af(
+            '<Trade transactionID="T1" tradeID="X1" buySell="BUY" />'
+        )
+        fills, _ = parse_fills(xml)
+        assert fills[0].execId == "T1"
 
     def test_falls_back_to_tradeID(self) -> None:
-        fill = Fill(buySell=BuySell.BUY, source="flex", transactionId="", ibExecId="", tradeID="X1")
-        assert _dedup_id(fill) == "X1"
-
-    def test_empty_when_no_ids(self) -> None:
-        fill = Fill(buySell=BuySell.BUY, source="flex")
-        assert _dedup_id(fill) == ""
+        xml = _wrap_af(
+            '<Trade tradeID="X1" buySell="BUY" />'
+        )
+        fills, _ = parse_fills(xml)
+        assert fills[0].execId == "X1"
 
 
 # ═════════════════════════════════════════════════════════════════════════
-#  Unknown attributes
+#  Raw dict — all XML attributes preserved
 # ═════════════════════════════════════════════════════════════════════════
 
-class TestUnknownAttributes:
-    """Attributes not in the model are reported but do not crash."""
+class TestRawDict:
+    """All XML attributes are preserved in the raw dict."""
 
-    def test_unknown_attr_reported(self) -> None:
+    def test_extra_attrs_in_raw(self) -> None:
         xml = _wrap_af(
             '<Trade transactionID="1" buySell="BUY" symbol="AAPL" fakeField="xyz" />'
         )
-        fills, errors = parse_fills(xml)
-        assert len(fills) == 1
-        assert any("fakeField" in e for e in errors)
+        fills, _ = parse_fills(xml)
+        assert fills[0].raw["fakeField"] == "xyz"
 
-    def test_unknown_attr_reported_once(self) -> None:
-        """Same unknown field on multiple rows → reported only once."""
-        xml = _wrap_af(
-            '<Trade transactionID="1" buySell="BUY" fakeField="a" />',
-            '<Trade transactionID="2" buySell="BUY" fakeField="b" />',
-        )
-        _fills, errors = parse_fills(xml)
-        count = sum(1 for e in errors if "fakeField" in e)
-        assert count == 1
+    def test_raw_has_canonicalized_names(self) -> None:
+        """Aliases apply in raw: ibCommission → commission, ibOrderID → orderId."""
+        xml = _wrap_af(AF_AAPL)
+        fills, _ = parse_fills(xml)
+        raw = fills[0].raw
+        assert "commission" in raw  # ibCommission aliased
+        assert "ibCommission" not in raw
+        assert "orderId" in raw  # ibOrderID aliased
+        assert "ibOrderID" not in raw
 
-    def test_tc_specific_fields_reported_as_unknown(self) -> None:
-        """TC-only attributes (no model field) are correctly reported."""
-        xml = _wrap_tc(
-            '<TradeConfirm tradeID="1" buySell="BUY" blockID="99" code="P" salesTax="0" />'
-        )
-        _fills, errors = parse_fills(xml)
-        unknown_line = next(e for e in errors if "Unknown XML" in e)
-        assert "blockID" in unknown_line
-        assert "code" in unknown_line
-        assert "salesTax" in unknown_line
+    def test_raw_floats_parsed(self) -> None:
+        xml = _wrap_af(AF_AAPL)
+        fills, _ = parse_fills(xml)
+        assert isinstance(fills[0].raw["quantity"], float)
+        assert isinstance(fills[0].raw["price"], float)
+        assert isinstance(fills[0].raw["commission"], float)
 
-    def test_multiple_unknown_attrs_sorted(self) -> None:
-        xml = _wrap_af(
-            '<Trade transactionID="1" buySell="BUY" zzz="1" aaa="2" mmm="3" />'
-        )
-        _, errors = parse_fills(xml)
-        unknown_line = next(e for e in errors if "Unknown XML" in e)
-        # Attributes should be sorted alphabetically
-        idx_a = unknown_line.index("aaa")
-        idx_m = unknown_line.index("mmm")
-        idx_z = unknown_line.index("zzz")
-        assert idx_a < idx_m < idx_z
+    def test_raw_strings_preserved(self) -> None:
+        xml = _wrap_af(AF_AAPL)
+        fills, _ = parse_fills(xml)
+        assert fills[0].raw["symbol"] == "AAPL"
+        assert fills[0].raw["buySell"] == "BUY"  # Original XML value, not enum
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -505,8 +528,8 @@ class TestMalformedRows:
         )
         fills, _errors = parse_fills(xml)
         assert len(fills) == 2
-        assert fills[0].quantity == 0.0
-        assert fills[1].quantity == 10.0
+        assert fills[0].volume == 0.0
+        assert fills[1].volume == 10.0
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -540,59 +563,75 @@ class TestFillTags:
 
 
 # ═════════════════════════════════════════════════════════════════════════
-#  All fields round-trip
+#  All fields round-trip: CommonFill fields + raw dict
 # ═════════════════════════════════════════════════════════════════════════
 
 class TestAllFieldsRoundTrip:
-    """A row with every canonical field set ends up on the Fill correctly."""
+    """A row with every field set produces correct CommonFill + raw dict."""
 
-    def test_af_all_key_fields(self) -> None:
+    def test_af_common_fill_fields(self) -> None:
         xml = _wrap_af(AF_AAPL)
         fills, _ = parse_fills(xml)
         f = fills[0]
-        assert f.accountId == "UXXXXXXX"
-        assert f.currency == "USD"
-        assert f.fxRateToBase == pytest.approx(1.0)
-        assert f.assetCategory == "STK"
-        assert f.symbol == "AAPL"
-        assert f.description == "APPLE INC"
-        assert f.conid == "265598"
-        assert f.securityID == "US0378331005"
-        assert f.securityIDType == "ISIN"
-        assert f.cusip == "037833100"
-        assert f.isin == "US0378331005"
-        assert f.listingExchange == "NASDAQ"
-        assert f.multiplier == "1"
-        assert f.tradeID == "1111111111"
-        assert f.ibExecId == "00018d97.00000001.01.01"
-        assert f.brokerageOrderID == "002e.00018d97.01.01"
-        assert f.transactionId == "22222222222"
+        assert f.execId == "00018d97.00000001.01.01"
         assert f.orderId == "333333333"
-        assert f.transactionType == "ExchTrade"
-        assert f.exchange == "ISLAND"
-        assert f.buySell == "BUY"
-        assert f.quantity == pytest.approx(1.0)
+        assert f.symbol == "AAPL"
+        assert f.side == BuySell.BUY
+        assert f.orderType == "market"
         assert f.price == pytest.approx(254.6)
-        assert f.taxes == pytest.approx(0.0)
-        assert f.commission == pytest.approx(-0.62125)
-        assert f.commissionCurrency == "USD"
+        assert f.volume == pytest.approx(1.0)
         assert f.cost == pytest.approx(254.6)
-        assert f.fifoPnlRealized == pytest.approx(0.0)
-        assert f.tradeMoney == pytest.approx(254.6)
-        assert f.proceeds == pytest.approx(-254.6)
-        assert f.netCash == pytest.approx(-255.22125)
-        assert f.closePrice == pytest.approx(254.49)
-        assert f.mtmPnl == pytest.approx(-0.11)
-        assert f.tradeDate == "20250403"
-        assert f.dateTime == "20250403;153000"
-        assert f.reportDate == "20250403"
-        assert f.settleDateTarget == "20250407"
-        assert f.openCloseIndicator == "O"
-        assert f.notes == "P"
-        assert f.orderTime == "20250403;152959"
-        assert f.levelOfDetail == "EXECUTION"
-        assert f.orderType == "MKT"
-        assert f.isAPIOrder == "Y"
+        assert f.fee == pytest.approx(-0.62125)
+        assert f.timestamp == "20250403;153000"
+        assert f.source == "flex"
+
+    def test_af_raw_dict_ibkr_fields(self) -> None:
+        xml = _wrap_af(AF_AAPL)
+        fills, _ = parse_fills(xml)
+        raw = fills[0].raw
+        assert raw["accountId"] == "UXXXXXXX"
+        assert raw["currency"] == "USD"
+        assert raw["fxRateToBase"] == pytest.approx(1.0)
+        assert raw["assetCategory"] == "STK"
+        assert raw["symbol"] == "AAPL"
+        assert raw["description"] == "APPLE INC"
+        assert raw["conid"] == "265598"
+        assert raw["securityID"] == "US0378331005"
+        assert raw["securityIDType"] == "ISIN"
+        assert raw["cusip"] == "037833100"
+        assert raw["isin"] == "US0378331005"
+        assert raw["listingExchange"] == "NASDAQ"
+        assert raw["multiplier"] == "1"
+        assert raw["tradeID"] == "1111111111"
+        assert raw["ibExecId"] == "00018d97.00000001.01.01"
+        assert raw["brokerageOrderID"] == "002e.00018d97.01.01"
+        assert raw["transactionId"] == "22222222222"
+        assert raw["orderId"] == "333333333"
+        assert raw["transactionType"] == "ExchTrade"
+        assert raw["exchange"] == "ISLAND"
+        assert raw["buySell"] == "BUY"
+        assert raw["quantity"] == pytest.approx(1.0)
+        assert raw["price"] == pytest.approx(254.6)
+        assert raw["taxes"] == pytest.approx(0.0)
+        assert raw["commission"] == pytest.approx(-0.62125)
+        assert raw["commissionCurrency"] == "USD"
+        assert raw["cost"] == pytest.approx(254.6)
+        assert raw["fifoPnlRealized"] == pytest.approx(0.0)
+        assert raw["tradeMoney"] == pytest.approx(254.6)
+        assert raw["proceeds"] == pytest.approx(-254.6)
+        assert raw["netCash"] == pytest.approx(-255.22125)
+        assert raw["closePrice"] == pytest.approx(254.49)
+        assert raw["mtmPnl"] == pytest.approx(-0.11)
+        assert raw["tradeDate"] == "20250403"
+        assert raw["dateTime"] == "20250403;153000"
+        assert raw["reportDate"] == "20250403"
+        assert raw["settleDateTarget"] == "20250407"
+        assert raw["openCloseIndicator"] == "O"
+        assert raw["notes"] == "P"
+        assert raw["orderTime"] == "20250403;152959"
+        assert raw["levelOfDetail"] == "EXECUTION"
+        assert raw["orderType"] == "MKT"
+        assert raw["isAPIOrder"] == "Y"
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -610,15 +649,15 @@ class TestAggregateSingleFill:
         assert isinstance(t, Trade)
         assert t.symbol == "AAPL"
         assert t.price == pytest.approx(254.6)
-        assert t.quantity == pytest.approx(1.0)
-        assert t.commission == pytest.approx(-0.6212)  # rounded to 4 dp
+        assert t.volume == pytest.approx(1.0)
+        assert t.fee == pytest.approx(-0.6212)  # rounded to 4 dp
         assert t.fillCount == 1
         assert len(t.execIds) == 1
 
     def test_single_fill_exec_id(self) -> None:
         fills, _ = parse_fills(_wrap_af(AF_AAPL))
         trades = aggregate_fills(fills)
-        assert trades[0].execIds == ["22222222222"]
+        assert trades[0].execIds == ["00018d97.00000001.01.01"]
 
 
 class TestAggregateMultipleFills:
@@ -630,16 +669,10 @@ class TestAggregateMultipleFills:
         xml = _wrap_af(
             '<Trade transactionID="F1" ibOrderID="ORD1" buySell="BUY" symbol="TEST"'
             ' quantity="10" tradePrice="100" ibCommission="-1"'
-            ' taxes="-0.5" cost="1000" tradeMoney="1000"'
-            ' proceeds="-1000" netCash="-1001.5"'
-            ' fifoPnlRealized="10" mtmPnl="5" accruedInt="0.1"'
-            ' tradeDate="20250401" dateTime="20250401;100000" />',
+            ' cost="1000" dateTime="20250401;100000" />',
             '<Trade transactionID="F2" ibOrderID="ORD1" buySell="BUY" symbol="TEST"'
             ' quantity="20" tradePrice="110" ibCommission="-2"'
-            ' taxes="-1" cost="2200" tradeMoney="2200"'
-            ' proceeds="-2200" netCash="-2203"'
-            ' fifoPnlRealized="20" mtmPnl="15" accruedInt="0.2"'
-            ' tradeDate="20250402" dateTime="20250402;140000" />',
+            ' cost="2200" dateTime="20250402;140000" />',
         )
         fills, _ = parse_fills(xml)
         trades = aggregate_fills(fills)
@@ -650,35 +683,14 @@ class TestAggregateMultipleFills:
         # Weighted avg: (10*100 + 20*110) / (10+20) = 3200/30 = 106.666...
         assert two_fill_trade.price == pytest.approx(3200 / 30, rel=1e-6)
 
-    def test_summed_quantity(self, two_fill_trade: Trade) -> None:
-        assert two_fill_trade.quantity == pytest.approx(30.0)
+    def test_summed_volume(self, two_fill_trade: Trade) -> None:
+        assert two_fill_trade.volume == pytest.approx(30.0)
 
-    def test_summed_commission(self, two_fill_trade: Trade) -> None:
-        assert two_fill_trade.commission == pytest.approx(-3.0)
-
-    def test_summed_taxes(self, two_fill_trade: Trade) -> None:
-        assert two_fill_trade.taxes == pytest.approx(-1.5)
+    def test_summed_fee(self, two_fill_trade: Trade) -> None:
+        assert two_fill_trade.fee == pytest.approx(-3.0)
 
     def test_summed_cost(self, two_fill_trade: Trade) -> None:
         assert two_fill_trade.cost == pytest.approx(3200.0)
-
-    def test_summed_tradeMoney(self, two_fill_trade: Trade) -> None:
-        assert two_fill_trade.tradeMoney == pytest.approx(3200.0)
-
-    def test_summed_proceeds(self, two_fill_trade: Trade) -> None:
-        assert two_fill_trade.proceeds == pytest.approx(-3200.0)
-
-    def test_summed_netCash(self, two_fill_trade: Trade) -> None:
-        assert two_fill_trade.netCash == pytest.approx(-3204.5)
-
-    def test_summed_fifoPnlRealized(self, two_fill_trade: Trade) -> None:
-        assert two_fill_trade.fifoPnlRealized == pytest.approx(30.0)
-
-    def test_summed_mtmPnl(self, two_fill_trade: Trade) -> None:
-        assert two_fill_trade.mtmPnl == pytest.approx(20.0)
-
-    def test_summed_accruedInt(self, two_fill_trade: Trade) -> None:
-        assert two_fill_trade.accruedInt == pytest.approx(0.3)
 
     def test_fill_count(self, two_fill_trade: Trade) -> None:
         assert two_fill_trade.fillCount == 2
@@ -689,11 +701,11 @@ class TestAggregateMultipleFills:
     def test_last_fill_string_values(self, two_fill_trade: Trade) -> None:
         assert two_fill_trade.symbol == "TEST"
 
-    def test_max_dateTime(self, two_fill_trade: Trade) -> None:
-        assert two_fill_trade.dateTime == "20250402;140000"
+    def test_max_timestamp(self, two_fill_trade: Trade) -> None:
+        assert two_fill_trade.timestamp == "20250402;140000"
 
-    def test_max_tradeDate(self, two_fill_trade: Trade) -> None:
-        assert two_fill_trade.tradeDate == "20250402"
+    def test_raw_from_first_fill(self, two_fill_trade: Trade) -> None:
+        assert two_fill_trade.raw["transactionId"] == "F1"
 
 
 class TestAggregateEdgeCases:
@@ -735,20 +747,20 @@ class TestAggregateEdgeCases:
         )
         fills, _ = parse_fills(xml)
         trades = aggregate_fills(fills)
-        assert trades[0].quantity == pytest.approx(-20.0)
+        assert trades[0].volume == pytest.approx(-20.0)
         # Weighted avg uses abs(quantity): (5*100 + 15*110) / (5+15) = 2150/20
         assert trades[0].price == pytest.approx(107.5)
 
-    def test_trade_inherits_fill_fields(self) -> None:
-        """Trade is a subclass of Fill — all string fields are present."""
+    def test_trade_raw_from_first_fill(self) -> None:
+        """Trade.raw is the first fill's raw dict (IBKR-specific data preserved)."""
         xml = _wrap_af(AF_AAPL)
         fills, _ = parse_fills(xml)
         trades = aggregate_fills(fills)
         t = trades[0]
-        assert t.accountId == "UXXXXXXX"
-        assert t.assetCategory == "STK"
-        assert t.exchange == "ISLAND"
-        assert t.orderType == "MKT"
+        assert t.raw["accountId"] == "UXXXXXXX"
+        assert t.raw["assetCategory"] == "STK"
+        assert t.raw["exchange"] == "ISLAND"
+        assert t.raw["orderType"] == "MKT"
 
     def test_rounding_precision(self) -> None:
         """Aggregated financial fields are rounded to 4 decimal places."""
@@ -763,7 +775,7 @@ class TestAggregateEdgeCases:
         fills, _ = parse_fills(xml)
         trades = aggregate_fills(fills)
         # Sum = -1.0 exactly, but ensure rounding to 4 dp
-        assert trades[0].commission == pytest.approx(-1.0)
+        assert trades[0].fee == pytest.approx(-1.0)
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -790,12 +802,11 @@ class TestFullPipeline:
 
     def test_errors_propagate(self) -> None:
         xml = _wrap_af(
-            '<Trade transactionID="1" ibOrderID="O" buySell="BUY" quantity="bad" unknownField="x" />'
+            '<Trade transactionID="1" ibOrderID="O" buySell="BUY" quantity="bad" />'
         )
         fills, errors = parse_fills(xml)
         assert any("Bad float" in e for e in errors)
-        assert any("unknownField" in e for e in errors)
-        # Fill still created with quantity=0.0
+        # Fill still created with volume=0.0
         trades = aggregate_fills(fills)
         assert len(trades) == 1
-        assert trades[0].quantity == 0.0
+        assert trades[0].volume == 0.0

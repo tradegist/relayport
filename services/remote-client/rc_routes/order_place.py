@@ -12,7 +12,7 @@ log = logging.getLogger("routes")
 
 
 async def handle_order(request: web.Request) -> web.Response:
-    from routes import client_key
+    from rc_routes import client_key
 
     client: IBClient = request.app[client_key]
 

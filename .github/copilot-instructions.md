@@ -4,8 +4,12 @@
 
 - **Always apply best practices by default.** Do not ask the user whether to follow a best practice — just do it. Use idiomatic Python naming, file organization, and patterns. When there is a clearly better approach (naming, structure, error handling), use it directly and explain why.
 - **No unused imports.** After writing or editing any Python file, verify every `import` is actually used in the file. Remove any that are not. This applies to new files and edits to existing files alike.
+- **No `__all__`.** All imports are explicit (`from module import X`). `__all__` only controls star-imports, which we never use.
 - **No `assert` for runtime guards.** `assert` is stripped under `python -O`, turning invariant checks into silent `None`/`AttributeError`. Use `if ... raise RuntimeError(...)` (or `die()`) for any check that must hold at runtime.
+- **Makefile must mirror CLI arguments.** When adding a new parameter to a `cli/` command, always add the corresponding `$(if $(VAR),--flag $(VAR))` to the Makefile target so `make <target> VAR=value` works.
+- **Update README.md when changing public interfaces.** When adding or modifying CLI commands, Makefile targets, API endpoints, or env vars, always update the README to reflect the change.
 - **Run `make lint` after every code change.** Ruff enforces unused imports (F401), import ordering (I001), unused variables, common pitfalls (bugbear), and modern Python idioms. If ruff fails, fix before committing. Use `make lint FIX=1` to auto-fix safe issues (import sorting, etc.).
+- **Register new modules in `pyproject.toml`.** When adding a new Python service, package, or standalone module under `services/`, immediately add it to all four places in `pyproject.toml`: (1) `tool.pytest.ini_options.testpaths`, (2) `tool.ruff.src`, (3) `tool.ruff.lint.isort.known-first-party`, and (4) the mypy invocation in the Makefile. Missing any of these causes silent miscategorisation (isort), missed tests (pytest), or unchecked code (mypy).
 
 ## Security Rules (MANDATORY)
 
@@ -16,6 +20,7 @@
 - **No logging of secrets or sensitive operational data** — never `log.info()` or `print()` tokens, passwords, or API keys. Log actions and outcomes, not credential values. When adding any `log.info()` or `log.debug()` call, check whether the logged value contains sensitive fields (e.g. `accountId`, `acctAlias`, account numbers, IPs, domains). Never log full model dumps at `info` level — use `log.debug` with explicit field exclusion: `log.debug("Trade: %s", trade.model_dump_json(exclude={"accountId", "acctAlias"}))`. Prefer logging counts, symbols, and statuses over full objects.
 - **`.env`, `*.tfvars`, and `.env.test` are gitignored** — never commit them. Use `.env.example` / `.env.test.example` with placeholder values as reference.
 - **Terraform state is gitignored** — `terraform.tfstate` contains SSH keys and IPs. Never commit it.
+- **Auth middleware must reject empty `API_TOKEN`.** `hmac.compare_digest("", "")` returns `True`, so an empty `API_TOKEN` env var silently disables authentication. Every auth middleware must check `if not _API_TOKEN:` and return HTTP 500 **before** reaching `compare_digest`. `API_TOKEN` is in `required_env` for deploy/sync — the CLI will block deployment if it is missing or empty.
 
 ## Type Safety (MANDATORY)
 
@@ -23,7 +28,7 @@
 - **Run `make typecheck` before copying ANY Python file to the droplet.** This is non-negotiable. If mypy fails, do NOT push the code.
 - **Run `make test` before assuming work is done and before copying ANY file to the droplet.** If tests fail, fix them first. Never deploy untested code.
 - **Run `make test` and `make typecheck` after every code change**, even refactors. Do not wait until the end — verify immediately.
-- **Run E2E tests after adding or modifying any E2E test.** E2E tests require the Docker stack — `make test` (unit tests) does not run them. Never assume an E2E test passes without actually running the stack. The E2E workflow is:
+- **Run E2E tests after modifying any E2E test OR infrastructure file.** Infrastructure files include `docker-compose*.yml`, `Dockerfile`, `Caddyfile`, `.env.test.example`, and anything under `infra/`. E2E tests require the Docker stack — `make test` (unit tests) does not run them. Never assume an E2E test passes without actually running the stack. The E2E workflow is:
   1. `make e2e-up` — start the stack (idempotent, skips if already running).
   2. `make e2e-run` — run the tests.
   3. Fix code → `make e2e-run` → repeat until all tests pass. Volume mounts keep code in sync — no rebuild needed.
@@ -46,15 +51,25 @@
 
 ## Error Handling (MANDATORY)
 
-- **Every error must produce a clear, actionable message.** Whether the consumer is an API caller or a developer reading logs, the error must explain *what* failed and *why*. Never raise or return a generic "something went wrong" — include the relevant context (operation, input identifier, upstream status code, etc.).
+- **Every error must produce a clear, actionable message.** Whether the consumer is an API caller or a developer reading logs, the error must explain _what_ failed and _why_. Never raise or return a generic "something went wrong" — include the relevant context (operation, input identifier, upstream status code, etc.).
 - **API responses must never leak internal details.** Return structured error JSON with an appropriate HTTP status code and a human-readable `error` field. Never expose raw Python tracebacks, file paths, or internal class names to API callers. Log the full exception server-side at `error`/`exception` level for debugging.
 - **Isolate failures — one bad component must not take down the system.** When dispatching to multiple backends, plugins, or external services, wrap each call in `try/except Exception`, log the failure, and continue. A single broken notifier, webhook endpoint, or third-party API must not crash the poll cycle, block other notifiers, or kill the HTTP server.
 - **Never silently swallow errors.** Every `except` block must either log the exception (`log.exception(...)`) or re-raise. A bare `except: pass` is never acceptable — it hides bugs and makes debugging impossible.
 - **Use `log.exception()` for unexpected errors.** It automatically includes the traceback at `ERROR` level. Reserve `log.error()` for known/expected failure conditions where a traceback would be noise.
 - **Distinguish recoverable from fatal errors.** Recoverable errors (network timeout, temporary API failure) should be logged and retried or skipped. Fatal errors (missing required config, corrupted state) should fail fast with `raise SystemExit(1)` or `die()` and a clear message — do not attempt to limp along.
 - **Validate at system boundaries, trust internally.** Validate all external inputs (API payloads, env vars, webhook data, IB Gateway responses) at the point of entry. Once validated, internal code should not re-validate — the type system and Pydantic models carry the guarantees.
+- **Never assume a default for financial enum fields.** When mapping external data to a constrained set (e.g. buy/sell side, order type), validate that the value is an exact match. Never use an `else` branch that silently assigns a default — e.g. `BuySell.BUY if x == "buy" else BuySell.SELL` treats _any_ non-buy value (including typos, nulls, and garbage) as SELL. Always check every valid value explicitly and raise/error on unknown input. This applies to all trade direction, order type, asset class, and similar mappings.
+- **Never silently drop rows with missing identifiers.** When parsing external data (Flex XML, REST JSON, WebSocket messages), if a required identifier (e.g. `execId`) is missing or empty after all fallback chains, report it as a parse error and skip the row explicitly. Do not let it fall through to a later guard (like a dedup check on empty string) where the drop is invisible. Every skipped row must produce an error message explaining _why_ it was skipped.
 - **HTTP handlers must catch and map exceptions.** Every route handler must have a top-level `try/except` that catches unexpected errors and returns a proper HTTP error response (500 with structured JSON). Unhandled exceptions in aiohttp handlers produce ugly default responses and can leak internals.
 - **Include context in error messages.** Bad: `"Failed to place order"`. Good: `"Failed to place order: TSLA BUY 2 LMT @ 150.0 — IB Gateway returned error code 201: 'Order rejected'"`. The message should contain enough detail to diagnose without consulting logs.
+
+## Reliability (MANDATORY)
+
+- **Mark-after-notify, never before.** `mark_processed_batch()` (or `mark_processed()`) must only run AFTER `notify()` completes successfully. A crash between mark and notify silently drops fills — the fill is recorded as processed but the webhook was never sent. Neither the listener (dedup skips it) nor the poller (dedup skips it) will ever retry it. This is an unrecoverable data loss.
+- **The correct pattern:** run `notify()` and `mark_processed_batch()` sequentially in the same execution context (same thread or same `asyncio.to_thread` call). If `notify()` raises, the fill remains unprocessed and will be retried on the next cycle.
+- **Never separate mark from notify with an `await` boundary.** In async code, an `await` between mark and notify allows the process to crash between the two operations. Keep them atomic within a single synchronous block (e.g. inside `asyncio.to_thread`).
+- **Replay mode is the exception.** `poll --replay N` intentionally skips dedup — it resends the last N fills without marking them. This is by design for debugging/recovery.
+- **SQLite commits must be explicit.** After any `INSERT`/`UPDATE` to SQLite (dedup DB or metadata DB), call `conn.commit()` immediately. Without an explicit commit, a crash loses the write silently. Never rely on implicit commit behavior.
 
 ## Concurrency Safety (MANDATORY)
 
@@ -63,7 +78,10 @@
 - **Never use TOCTOU (Time of Check, Time of Use) patterns with locks.** Do NOT check `lock.locked()` and then `async with lock:` — another coroutine can acquire the lock between the check and the acquisition, defeating the guard. This is a race condition.
 - **Lock acquisition must BE the check.** Use `asyncio.wait_for(lock.acquire(), timeout=0)` with `try/finally: lock.release()` to fail-fast, or accept that `async with lock:` will queue. Never separate "is it locked?" from "acquire it."
 - **This applies to all shared-state guards** — locks, database transactions, file locks, semaphores, balance checks. If the action is "check a condition, then act on it," both steps must be atomic.
+- **Never share a `sqlite3.Connection` across threads.** `sqlite3.Connection` is not thread-safe. When using `asyncio.to_thread()`, either pass the connection into a single synchronous function that does all DB work in one thread, or use an `asyncio.Lock` to ensure only one `to_thread()` call uses the connection at a time. Never allow two concurrent `to_thread()` calls to touch the same connection — this causes intermittent `OperationalError` and data corruption.
+- **Poller/listener `to_thread` pattern: create connections inside the worker thread.** Do NOT create `sqlite3.Connection` on the main (event-loop) thread and pass it into `asyncio.to_thread(poll_once, conn, ...)` — even with `check_same_thread=False`, this is cross-thread use and unsafe. Instead, `poll_once()` accepts `dedup_conn=None, meta_conn=None` and creates thread-local connections internally (via `init_dedup_db()` / `init_meta_db()`), closing them in a `finally` block. The caller (`_poll_loop`, `handle_run_poll`) passes only non-DB arguments. This ensures every `to_thread` call uses connections that were both created and closed on the same worker thread.
 - **Financial operations require extra scrutiny.** Any code path that places orders, moves money, or modifies account state must be reviewed for: race conditions, double-execution, partial failure (what if it crashes between two steps?), and idempotency.
+- **Use `asyncio.get_running_loop()`, never `asyncio.get_event_loop()`.** `get_event_loop()` is deprecated since Python 3.10 for contexts without a running loop and emits `DeprecationWarning` in 3.12+. Code that calls `loop.call_later()`, `loop.create_task()`, etc. always runs on the event-loop thread, so `get_running_loop()` is correct, explicit, and raises `RuntimeError` immediately if accidentally called off-loop.
 
 ## Local Development
 
@@ -86,21 +104,22 @@
 - **`REMOTE_CLIENT_ENABLED=false`** disables the entire gateway stack: `ib-gateway`, `novnc`, `remote-client`, and `gateway-controller`. Same mechanism as poller: `deploy.replicas: ${GATEWAY_REPLICAS:-1}` on all four services, mapped from `REMOTE_CLIENT_ENABLED` via `_compose_env()` and the Makefile `REMOTE_CLIENT` flag. Gateway-specific required env vars (`TWS_USERID`, `TWS_PASSWORD`, `VNC_SERVER_PASSWORD`) use `:-` defaults in compose and are validated by the CLI when the gateway is enabled.
 - **`.dockerignore` uses an allowlist** (`*` to exclude everything, then `!services/poller/**` to include the whole module). Tests, `__pycache__`, and the Dockerfile itself are re-excluded. This means adding new source files to `services/poller/` requires **no** `.dockerignore` or Dockerfile changes.
 - **When adding a new standalone module** (e.g. `services/notifier/`), you must add a `!services/<module>/**` entry to `.dockerignore` — the allowlist excludes everything by default. Also add exclusions for test files and `__pycache__` under the new module. Without this, `COPY services/<module>/ ./<module>/` in the Dockerfile will fail with a cryptic "not found" error.
-- The poller Dockerfile uses directory COPYs (`COPY services/poller/poller/ ./poller/`, `COPY services/poller/routes/ ./routes/`) so new files are picked up automatically.
+- The poller Dockerfile uses directory COPYs (`COPY services/poller/poller/ ./poller/`, `COPY services/poller/poller_routes/ ./poller_routes/`) so new files are picked up automatically.
+- **`poller-2` must mirror `poller` configuration.** The `poller-2` service is an optional second poller instance (behind the `poller2` profile) for a different IBKR account. Its `environment:` and `volumes:` blocks must stay in sync with `poller` — same env var names (with `_2` suffix for account-specific values), same `DEDUP_DB_PATH` pointing to the shared `dedup-data` volume, and its own `META_DB_PATH` (e.g. `/data/meta/poller-2.db`) on a dedicated `poller-2-data` volume. When modifying the `poller` service block, always check whether `poller-2` needs the same change.
 - **Never nest bind mounts in `docker-compose.test.yml`.** If a service mounts `./services/poller:/app` and you also need `services/notifier/` available, do NOT mount `./services/notifier:/app/notifier` (inside the first mount). Docker will auto-create an empty `services/poller/notifier/` directory on the host to back the nested mount point. On `docker compose restart`, this empty host directory shadows the real content, causing `ImportError`. Instead, mount the extra module at a separate path outside `/app` (e.g. `./services/notifier:/opt/notifier`) and add `PYTHONPATH: /opt` to the service's `environment:` block so Python can find it.
 
 ## Architecture
 
 Six Docker containers in a single Compose stack on a DigitalOcean droplet:
 
-| Service              | Role                                                                           |
-| -------------------- | ------------------------------------------------------------------------------ |
-| `ib-gateway`         | IBKR Gateway (gnzsnz/ib-gateway). Restart policy: `on-failure` (not `always`). |
-| `novnc`              | Browser VNC proxy for 2FA authentication                                       |
-| `caddy`              | Reverse proxy with automatic HTTPS (Let's Encrypt)                             |
-| `remote-client`     | Python API server — places orders via IB Gateway, optional real-time listener. Disabled (with entire gateway stack) via `REMOTE_CLIENT_ENABLED=false` |
-| `poller`             | Polls IBKR Flex for trade confirmations, fires webhooks. Disabled via `POLLER_ENABLED=false` |
-| `gateway-controller` | Lightweight sidecar — starts ib-gateway container via Docker socket            |
+| Service              | Role                                                                                                                                                  |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ib-gateway`         | IBKR Gateway (gnzsnz/ib-gateway). Restart policy: `on-failure` (not `always`).                                                                        |
+| `novnc`              | Browser VNC proxy for 2FA authentication                                                                                                              |
+| `caddy`              | Reverse proxy with automatic HTTPS (Let's Encrypt)                                                                                                    |
+| `remote-client`      | Python API server — places orders via IB Gateway, optional real-time listener. Disabled (with entire gateway stack) via `REMOTE_CLIENT_ENABLED=false` |
+| `poller`             | Polls IBKR Flex for trade confirmations, fires webhooks. Disabled via `POLLER_ENABLED=false`                                                          |
+| `gateway-controller` | Lightweight sidecar — starts ib-gateway container via Docker socket                                                                                   |
 
 All secrets are injected via `.env` → `environment` in `docker-compose.yml`.
 Caddy reads `VNC_DOMAIN` and `SITE_DOMAIN` from env vars — the Caddyfile uses `{$VNC_DOMAIN}` / `{$SITE_DOMAIN}` syntax.
@@ -119,6 +138,7 @@ infra/caddy/
 ```
 
 Shared projects deploy snippets to `/opt/caddy-shared/{sites,domains}/` on the droplet (not into the host project's directory). The host Caddy mounts both:
+
 - `./infra/caddy/sites/` → `/etc/caddy/sites/` (host project's own routes)
 - `/opt/caddy-shared/sites/` → `/etc/caddy/shared-sites/` (shared projects' routes)
 - Same pattern for `domains/` and `shared-domains/`.
@@ -194,6 +214,16 @@ The deployment mode is controlled by `DEPLOY_MODE` in `.env` (required, validate
   - **`@patch(...)`** decorator — for single-test or single-class patches.
   - Never use bare `_patcher.start()` without registering a `.stop()`.
 - **No cross-test dependencies.** Every test must be self-contained — it must not rely on state created by a previous test (e.g. a position opened by an earlier buy test). Pytest does not guarantee execution order, and tests may run selectively or in parallel. If a test needs preconditions, create them within the test itself or via an explicit fixture.
+- **E2E conftest fixtures must use `yield` with a context manager.** Never `return httpx.Client(...)` — the client is never closed and leaks sockets. Use `with httpx.Client(...) as client: yield client` instead. Scope to `session` (one client per test run). Every E2E `conftest.py` must also include a `_preflight_check` fixture (`scope="session"`, `autouse=True`) that hits `/health` and calls `pytest.exit()` if the stack is unreachable.
+
+### Routes Package Names
+
+Each service has a uniquely-named routes package to avoid `sys.modules` collisions when both services share `sys.path` (e.g. in pytest, mono-repo):
+
+- `services/remote-client/rc_routes/` — remote-client HTTP handlers (`from rc_routes import create_routes`)
+- `services/poller/poller_routes/` — poller HTTP handlers (`from poller_routes import create_routes`)
+
+The same convention is used in `kraken_relay` (`listener_routes/`, `poller_routes/`).
 
 ## Remote Client Structure
 
@@ -211,7 +241,7 @@ services/remote-client/
     test_trades.py         # Tests for trades namespace
     listener.py            # ListenerNamespace: subscribe to trade events → webhooks
     test_listener.py       # Tests for listener namespace
-  routes/                  # HTTP route handlers
+  rc_routes/               # HTTP route handlers
     __init__.py            # Orchestrator: create_routes()
     middlewares.py         # Auth middleware (Bearer token)
     order_place.py         # POST /ibkr/order
@@ -239,13 +269,13 @@ The `services/poller/` service follows the same package pattern:
 ```
 services/poller/
   main.py                  # Entrypoint (polling loop + HTTP API startup)
-  models_poller.py         # Pydantic models: Fill, Trade, WebhookPayload, BuySell
+  models_poller.py         # Re-export shim (shared models + poller-specific API types)
   poller/                  # Core polling logic (package)
     __init__.py            # SQLite dedup, Flex fetch, poll_once()
     flex_parser.py         # XML parser (Activity Flex + Trade Confirmation)
     test_flex_parser.py    # Tests for flex_parser
     test_poller.py         # Tests for poller core logic
-  routes/                  # HTTP API
+  poller_routes/            # HTTP API
     __init__.py            # Orchestrator: create_routes(), start_api_server()
     middlewares.py         # Auth middleware (Bearer token)
     run.py                 # POST /ibkr/poller/run handler
@@ -258,8 +288,8 @@ services/poller/
 ```
 
 - **`services/poller/poller/`** contains core logic: SQLite dedup, Flex Web Service two-step fetch, and `poll_once()`. Notification delivery is delegated to the notifier package (see below).
-- **`services/poller/routes/`** contains the HTTP API for on-demand polls (`POST /ibkr/poller/run`).
-- **`services/poller/models_poller.py`** is the source of truth for TypeScript types (`make types`).
+- **`services/poller/poller_routes/`** contains the HTTP API for on-demand polls (`POST /ibkr/poller/run`).
+- **`services/poller/models_poller.py`** is a re-export shim for shared models plus poller-specific API types (`RunPollResponse`, `HealthResponse`). The shared models (`Fill`, `Trade`, `WebhookPayload`) live in `services/shared/__init__.py`.
 
 ## Notifier Structure
 
@@ -280,35 +310,60 @@ services/notifier/
 - **Adding a new backend** — create `services/notifier/<name>.py` with a class extending `BaseNotifier`, add it to `REGISTRY` in `__init__.py`.
 - **The poller calls `notify(notifiers, payload)`** — notifiers are loaded once at startup and passed through to `poll_once()`. The poller has no direct knowledge of webhook delivery mechanics.
 
+## Dedup Structure
+
+The `services/dedup/` package is a **standalone library** (no container, no Dockerfile). It provides SQLite dedup logic used by both the poller and the remote-client listener.
+
+```
+services/dedup/
+  __init__.py              # init_db(), is_processed(), mark_processed(), get_processed_ids(), mark_processed_batch(), prune()
+  test_dedup.py            # Tests for dedup module
+```
+
+- **`init_db(db_path)`** creates the `processed_fills` table and returns a `sqlite3.Connection`.
+- **`is_processed(conn, exec_id)`** — single-ID check (used by listener).
+- **`get_processed_ids(conn, exec_ids)`** — batch check (used by poller).
+- **`mark_processed(conn, exec_id)`** — single-ID mark (used by listener).
+- **`mark_processed_batch(conn, exec_ids)`** — batch mark (used by poller).
+- **`prune(conn, days=30)`** — delete old entries.
+- **Shared dedup DB** — both services read/write the same `fills.db` at `DEDUP_DB_PATH` (default `/data/dedup/fills.db`) on a `dedup-data` Docker named volume. SQLite WAL mode + `timeout=5.0` enables safe concurrent access.
+- **Dedup key priority** — `ibExecId → transactionId → tradeID`, resolved in `services/poller/poller/flex_parser.py` at parse time by setting `Fill.execId`. `services/shared/__init__.py::_dedup_id()` simply returns the already-resolved `fill.execId`. `ibExecId` is preferred because it is the common identifier between Flex XML fills and ib_async execution events.
+- The poller has a separate metadata DB at `META_DB_PATH` (default `/data/meta.db`) on a `poller-data` volume for the timestamp watermark. The poller's `init_dedup_db()` wraps `dedup.init_db()`; `init_meta_db()` manages the metadata table independently.
+
 ## Listener (Real-Time Trade Events)
 
 The listener is an **opt-in** feature (`LISTENER_ENABLED` env var) that subscribes to ib_async trade events and fires webhooks immediately when orders fill.
 
 - **Lives in `client/listener.py`** inside the remote-client service — it is a `ListenerNamespace`, same pattern as `OrdersNamespace`.
-- **Subscribes to two events**: `execDetailsEvent` (fill without commission) and `commissionReportEvent` (fill with commission). Both fire per fill → two webhooks per fill.
+- **Subscribes to two events**: `execDetailsEvent` (fill without commission) and `commissionReportEvent` (fill with commission). `execDetailsEvent` always fires immediately (no dedup, no debounce). `commissionReportEvent` is deduplicated by `execId` via the shared `services/dedup/` module — duplicates after reconnect are skipped.
 - **Event subscriptions survive reconnects** — ib_async creates events in `__init__`, not in `connectAsync()`.
-- **Maps ib_async objects to the poller's `Trade` model** via `_map_to_trade()`. Since events provide different fields than Flex XML, some Trade fields are empty/zero (e.g. `tradeDate`, `tradeMoney`, `proceeds`). Key fields (`symbol`, `buySell`, `quantity`, `price`, `orderId`, `ibExecId`, `commission`, `dateTime`) are always populated.
+- **Maps ib_async objects to `Fill`** via `_map_to_fill()`. A helper `_fill_to_trade()` wraps a single `Fill` in a 1-fill `Trade` for immediate dispatch. When debouncing, fills are aggregated into multi-fill `Trade` objects via `aggregate_fills()`.
 - **The `source` field** on `Trade` distinguishes origin: `"flex"`, `"execDetailsEvent"`, or `"commissionReportEvent"`.
-- **No cross-service dedup** — the listener and poller fire independently. Consumers use `source` or `ibExecId` to deduplicate.
-- **No buffering** — each event fires a webhook immediately.
+- **Shared dedup DB** — the listener uses the same `dedup-data` volume and `DEDUP_DB_PATH` as the poller. Both services read/write `fills.db` concurrently (SQLite WAL + `timeout=5.0`). This means a fill processed by the listener is automatically skipped by the next poll cycle, and vice versa.
+- **Debounce** — controlled by `LISTENER_EVENT_DEBOUNCE_TIME` env var (milliseconds, default `0` = disabled). When enabled, `commissionReportEvent` fills are buffered per `orderId` in `_pending`. Each new fill resets the debounce timer (`asyncio.get_event_loop().call_later`). When the timer fires, `_flush()` does batch dedup → `aggregate_fills()` → `mark_processed_batch()` → dispatch. This aggregates rapid partial fills into a single webhook per order.
+- **Prune** — the listener prunes the dedup DB at startup and every 24 hours via `_schedule_prune()` → `_run_scheduled_prune()` → reschedule cycle using `call_later`. 30-day retention.
 - **Async dispatch** — `asyncio.ensure_future(asyncio.to_thread(notify, ...))` fire-and-forget. The `notify()` function uses synchronous `httpx.post`, so it runs in a thread to avoid blocking the ib_async event loop.
 - **Side mapping**: `"BOT"` → `BuySell.BUY`, `"SLD"` → `BuySell.SELL`.
 - **UNSET sentinel**: ib_async uses `1.7976931348623157e308` for unset floats — the listener treats this as `0.0`.
 
-## Models (Two Separate Files)
+## Models (Three Locations)
 
-This project has **two independent model files** with unique names to avoid import ambiguity:
+This project has **three model locations** — a shared source of truth and two service-specific files:
 
-| File                                             | Domain                      | Contains                                                                                      |
-| ------------------------------------------------ | --------------------------- | --------------------------------------------------------------------------------------------- |
-| `services/poller/models_poller.py`               | Webhook payloads (outbound) | `Fill`, `Trade`, `WebhookPayload`, `BuySell` — parsed from IBKR Flex XML                      |
-| `services/remote-client/models_remote_client.py` | Order API (inbound)         | `ContractPayload`, `OrderPayload`, `PlaceOrderPayload`, `PlaceOrderResponse` — REST API types |
+| File                                             | Domain                | Contains                                                                                                |
+| ------------------------------------------------ | --------------------- | ------------------------------------------------------------------------------------------------------- |
+| `services/shared/__init__.py`                    | CommonFill (outbound) | `Fill`, `Trade`, `WebhookPayload`, `BuySell`, `OrderType`, `Source`, `aggregate_fills()`, `_dedup_id()` |
+| `services/poller/models_poller.py`               | Poller API (outbound) | Re-exports shared models + `RunPollResponse`, `HealthResponse`                                          |
+| `services/remote-client/models_remote_client.py` | Order API (inbound)   | `ContractPayload`, `OrderPayload`, `PlaceOrderPayload`, `PlaceOrderResponse` — REST API types           |
 
-- **Unique filenames** (`models_poller.py`, `models_remote_client.py`) prevent import collisions when both `services/poller/` and `services/remote-client/` are on `sys.path` (via the `.pth` file). Use `from models_poller import ...` and `from models_remote_client import ...` everywhere.
-- `models_poller.py` is the source of truth for `IbkrPoller` TypeScript types (`make types`).
+- **`services/shared/__init__.py`** is the single source of truth for all webhook payload models. Both poller and remote-client import from it.
+- **Unique filenames** (`models_poller.py`, `models_remote_client.py`) prevent import collisions when both `services/poller/` and `services/remote-client/` are on `sys.path` (via the `.pth` file). Use `from shared import Fill` for shared types, `from models_poller import RunPollResponse` for poller-specific types.
+- **Model shims only re-export models and types** (Pydantic models, enums, type aliases). Utility functions (`aggregate_fills`, `normalize_order_type`, `_dedup_id`) must be imported directly from the owning module: `from shared import aggregate_fills`. Never re-export functions through model shims.
+- `models_poller.py` re-exports shared models and defines poller-specific API types. Its `SCHEMA_MODELS` contains only `[RunPollResponse, HealthResponse]`.
+- `shared/__init__.py` defines `SCHEMA_MODELS = [WebhookPayload, Trade, Fill]` for the shared types.
 - `models_remote_client.py` is the source of truth for `IbkrHttp` TypeScript types (`make types`).
 - `models_remote_client.py` uses strict `Literal` types (`Action`, `OrderType`, `SecType`, `TimeInForce`) aligned with `ib_async` field names.
-- Both use `ConfigDict(extra="forbid")` for strict validation.
+- All external-contract models use `ConfigDict(extra="forbid")` for strict validation.
 
 ## Naming Convention for API Models
 
@@ -356,27 +411,56 @@ The `POST /ibkr/order` endpoint accepts a nested payload mirroring `ib.placeOrde
 
 ## TypeScript Types
 
-- Types are published as `@tradegist/ibkr-types` (npm package in `types/`, not yet published).
-- **Two namespaces**: `IbkrPoller` (webhook payload types) and `IbkrHttp` (order API types).
-- **`make types`** regenerates both from Pydantic models:
-  - `services/poller/models_poller.py` → `types/poller/webhook.d.ts`
-  - `services/remote-client/models_remote_client.py` → `types/http/order.d.ts`
+### Namespace Convention (cross-relay standard)
+
+All relay projects export TypeScript types using a two-tier namespace pattern:
+
+- **`types/shared/`** → exported as the **relay's primary namespace** (named after the exchange: `Ibkr`, `Kraken`, etc.). Contains the CommonFill models (`Fill`, `Trade`, `WebhookPayload`, `BuySell`) generated from `services/shared/__init__.py` SCHEMA_MODELS. Every relay has this.
+- **`types/<module>/`** → exported as **`<RelayName><ModuleName>`** (e.g. `IbkrPoller`, `IbkrHttp`). Contains service-specific types generated from that module's `SCHEMA_MODELS`. Only created when a service has unique types not in shared.
+
+The barrel `types/index.d.ts` ties them together:
+
+```ts
+import * as Ibkr from "./shared";
+import * as IbkrPoller from "./poller";
+import * as IbkrHttp from "./http";
+export { Ibkr, IbkrPoller, IbkrHttp };
+```
+
+A relay with no service-specific types (e.g. kraken_relay) has only the shared namespace:
+
+```ts
+export * as Kraken from "./shared";
+```
+
+### IBKR Relay Types
+
+- Types are published as `@tradegist/ibkr-relay-types` (npm package in `types/`, not yet published).
+- **Three namespaces**: `Ibkr` (shared webhook payload types), `IbkrPoller` (poller-specific API types), and `IbkrHttp` (order API types).
+- **`make types`** regenerates all three from Pydantic models:
+  - `services/shared/__init__.py` → `types/shared/types.d.ts` (CommonFill models: WebhookPayload, Trade, Fill, BuySell)
+  - `services/poller/models_poller.py` → `types/poller/types.d.ts` (poller-specific: RunPollResponse, HealthResponse)
+  - `services/remote-client/models_remote_client.py` → `types/http/types.d.ts` (order API types)
 - **Structure:**
   ```
   types/
-    index.d.ts                 # Barrel: exports IbkrPoller, IbkrHttp namespaces
-    package.json               # @tradegist/ibkr-types
+    index.d.ts                 # Barrel: exports Ibkr, IbkrPoller, IbkrHttp namespaces
+    package.json               # @tradegist/ibkr-relay-types
+    shared/
+      index.d.ts               # Re-exports: BuySell, Fill, Trade, WebhookPayload
+      types.d.ts               # Generated from shared/__init__.py (SCHEMA_MODELS)
+      types.schema.json         # Intermediate JSON Schema
     poller/
-      index.d.ts               # Re-exports: BuySell, WebhookPayload, Trade
-      types.d.ts               # Generated from poller/models_poller.py
+      index.d.ts               # Re-exports: RunPollResponse, HealthResponse
+      types.d.ts               # Generated from poller/models_poller.py (SCHEMA_MODELS)
       types.schema.json         # Intermediate JSON Schema
     http/
       index.d.ts               # Re-exports: PlaceOrderPayload, ContractPayload, OrderPayload, PlaceOrderResponse
-      types.d.ts               # Generated from remote-client/models_remote_client.py
+      types.d.ts               # Generated from remote-client/models_remote_client.py (SCHEMA_MODELS)
       types.schema.json         # Intermediate JSON Schema
   ```
-- **Usage:** `import { IbkrPoller, IbkrHttp } from "@tradegist/ibkr-types"`
-- Each model file declares a `SCHEMA_MODELS` list at the bottom — `schema_gen.py` reads it to generate the JSON Schema. **To export a new model to TypeScript, append it to `SCHEMA_MODELS` in the relevant `models_*.py` file and update the corresponding `types/*/index.d.ts` re-exports.**
+- **Usage:** `import { Ibkr, IbkrPoller, IbkrHttp } from "@tradegist/ibkr-relay-types"`
+- Each model file declares a `SCHEMA_MODELS` list at the bottom — `schema_gen.py` reads it to generate the JSON Schema. **To export a new model to TypeScript, append it to `SCHEMA_MODELS` in the relevant `models_*.py` or `shared/__init__.py` file and update the corresponding `types/*/index.d.ts` re-exports.**
 
 ## Code Style
 
@@ -448,6 +532,7 @@ services/               # Business-logic services (user-facing features)
   poller/               # Flex poller service (see Poller Structure above)
     models_poller.py    # Pydantic models: Fill, Trade, WebhookPayload, BuySell, Source
   notifier/             # Pluggable notification backends (library, no container)
+  dedup/                # Shared SQLite dedup library (library, no container)
 infra/                  # Infrastructure backbone (no business logic)
   caddy/Caddyfile       # Reverse proxy config (uses env vars for domains)
   caddy/sites/          # Route snippets imported inside {$SITE_DOMAIN}
@@ -456,7 +541,7 @@ infra/                  # Infrastructure backbone (no business logic)
     ibkr-vnc.caddy      # {$VNC_DOMAIN} block (novnc + gateway-controller)
   gateway-controller/   # CGI sidecar (Alpine, busybox httpd)
   novnc/index.html      # Custom VNC UI (Tailwind CSS)
-types/                  # @tradegist/ibkr-types npm package (IbkrPoller + IbkrHttp namespaces)
+types/                  # @tradegist/ibkr-relay-types npm package (IbkrPoller + IbkrHttp namespaces)
 docker-compose.test.yml # E2E test stack
 terraform/              # Infrastructure as code (DigitalOcean)
 ```
