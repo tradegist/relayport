@@ -1,0 +1,7 @@
+# Secrets and credentials — never send to Copilot
+.env
+.env.*
+!.env.example
+!.env.test.example
+*.tfvars
+terraform.tfstate*
