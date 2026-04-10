@@ -182,6 +182,7 @@ The deployment mode is controlled by `DEPLOY_MODE` in `.env` (required, validate
 ## Auth Pattern
 
 - API endpoints under `/ibkr/*` require `Authorization: Bearer <API_TOKEN>` (HMAC-safe comparison via `hmac.compare_digest`).
+- **All authenticated routes must use the `AUTH_PREFIX` constant** (from `poller_routes.middlewares`) when registering with the router. The auth middleware uses the same constant to decide which requests require a token — hardcoding the path in either place causes them to drift out of sync.
 - Webhook payloads are signed with HMAC-SHA256 (`X-Signature-256` header) via the notifier package.
 
 ## E2E Testing

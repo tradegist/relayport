@@ -8,7 +8,7 @@ from aiohttp import web
 
 from notifier.base import BaseNotifier
 from poller_routes.health import handle_health
-from poller_routes.middlewares import auth_middleware
+from poller_routes.middlewares import AUTH_PREFIX, auth_middleware
 from poller_routes.run import handle_run_poll
 
 log = logging.getLogger("poller")
@@ -33,7 +33,7 @@ def create_routes(
     app["poll_lock"] = poll_lock
     app["notifiers"] = notifiers or []
     app.router.add_get("/health", handle_health)
-    app.router.add_post("/ibkr/poller/run", handle_run_poll)
+    app.router.add_post(f"{AUTH_PREFIX}/poller/run", handle_run_poll)
     return app
 
 

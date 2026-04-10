@@ -9,6 +9,10 @@ from aiohttp import web
 
 log = logging.getLogger("poller")
 
+# Path prefix guarded by auth middleware. Route registration and middleware
+# must both reference this so they stay in sync.
+AUTH_PREFIX = "/ibkr"
+
 
 def get_api_token() -> str:
     return os.environ.get("API_TOKEN", "").strip()
@@ -22,8 +26,8 @@ async def auth_middleware(
     request: web.Request,
     handler: _Handler,
 ) -> web.StreamResponse:
-    """Verify Bearer token on all /ibkr/ routes."""
-    if request.path.startswith("/ibkr/"):
+    """Verify Bearer token on all routes under AUTH_PREFIX."""
+    if request.path.startswith(f"{AUTH_PREFIX}/"):
         api_token = get_api_token()
         if not api_token:
             log.error("API_TOKEN not configured — rejecting request")
