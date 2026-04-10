@@ -10,7 +10,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from client import IBClient
+from client import IBClient, get_trading_mode
 from client.listener import ListenerNamespace
 from dedup import init_db
 from notifier import load_notifiers
@@ -23,15 +23,27 @@ logging.basicConfig(
 )
 log = logging.getLogger("remote-client")
 
-API_PORT = int(os.environ.get("API_PORT", "5000"))
-DEDUP_DB_PATH = os.environ.get("DEDUP_DB_PATH", "/data/dedup/fills.db")
-DEBOUNCE_MS = int(os.environ.get("LISTENER_EVENT_DEBOUNCE_TIME", "0"))
+
+def get_api_port() -> int:
+    return int(os.environ.get("API_PORT", "5000"))
+
+
+def get_dedup_db_path() -> str:
+    return os.environ.get("DEDUP_DB_PATH", "/data/dedup/fills.db").strip()
+
+
+def get_debounce_ms() -> int:
+    return int(os.environ.get("LISTENER_EVENT_DEBOUNCE_TIME", "0"))
 
 
 async def amain() -> None:
+    api_port = get_api_port()
+    dedup_db_path = get_dedup_db_path()
+    debounce_ms = get_debounce_ms()
+
     client = IBClient()
 
-    log.info("IBKR Remote Client starting (mode=%s)", os.environ.get("TRADING_MODE", "paper"))
+    log.info("IBKR Remote Client starting (mode=%s)", get_trading_mode())
 
     await client.connect()
 
@@ -40,14 +52,14 @@ async def amain() -> None:
     # Start listener if enabled
     listener_flag = os.environ.get("LISTENER_ENABLED", "").lower()
     if listener_flag and listener_flag not in ("0", "false", "no"):
-        db_path = Path(DEDUP_DB_PATH)
+        db_path = Path(dedup_db_path)
         db = init_db(db_path)
         notifiers = load_notifiers()
         exec_flag = os.environ.get("LISTENER_EXEC_EVENTS_ENABLED", "").lower()
         exec_events_enabled = bool(exec_flag and exec_flag not in ("0", "false", "no"))
         client.listener = ListenerNamespace(
             client.ib, notifiers, db,
-            debounce_ms=DEBOUNCE_MS,
+            debounce_ms=debounce_ms,
             exec_events_enabled=exec_events_enabled,
         )
         client.listener.start()
@@ -61,15 +73,15 @@ async def amain() -> None:
     client._background_tasks.add(watchdog_task)
     watchdog_task.add_done_callback(client._background_tasks.discard)
 
-    log.info("Remote client ready. Starting HTTP API on port %d ...", API_PORT)
+    log.info("Remote client ready. Starting HTTP API on port %d ...", api_port)
 
     app = create_routes(client)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", API_PORT)
+    site = web.TCPSite(runner, "0.0.0.0", api_port)
     await site.start()
 
-    log.info("HTTP API listening on 0.0.0.0:%d", API_PORT)
+    log.info("HTTP API listening on 0.0.0.0:%d", api_port)
 
     while True:
         await asyncio.sleep(1)

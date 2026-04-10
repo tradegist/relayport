@@ -13,7 +13,9 @@ from poller_routes.run import handle_run_poll
 
 log = logging.getLogger("poller")
 
-API_PORT = int(os.environ.get("POLLER_API_PORT", "8000"))
+
+def get_poller_api_port() -> int:
+    return int(os.environ.get("POLLER_API_PORT", "8000"))
 
 
 def create_routes(
@@ -36,6 +38,7 @@ async def start_api_server(
     app = create_routes(poll_lock, notifiers)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", API_PORT)
+    api_port = get_poller_api_port()
+    site = web.TCPSite(runner, "0.0.0.0", api_port)
     await site.start()
-    log.info("Poll API listening on 0.0.0.0:%d", API_PORT)
+    log.info("Poll API listening on 0.0.0.0:%d", api_port)

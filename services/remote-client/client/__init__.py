@@ -12,18 +12,24 @@ from client.trades import TradesNamespace
 
 log = logging.getLogger("ib-client")
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-IB_HOST = os.environ.get("IB_HOST", "ib-gateway")
-TRADING_MODE = os.environ.get("TRADING_MODE", "paper")
-IB_PORT = int(os.environ.get(
-    "IB_LIVE_PORT" if TRADING_MODE == "live" else "IB_PAPER_PORT", "4004"
-))
 CLIENT_ID = 1
-
 INITIAL_RETRY_DELAY = 10
 MAX_RETRY_DELAY = 300
+
+
+def get_ib_host() -> str:
+    return os.environ.get("IB_HOST", "ib-gateway").strip()
+
+
+def get_trading_mode() -> str:
+    return os.environ.get("TRADING_MODE", "paper").strip()
+
+
+def get_ib_port() -> int:
+    mode = get_trading_mode()
+    return int(os.environ.get(
+        "IB_LIVE_PORT" if mode == "live" else "IB_PAPER_PORT", "4004"
+    ))
 
 
 class IBClient:
@@ -43,11 +49,13 @@ class IBClient:
 
     async def connect(self) -> None:
         """Connect to IB Gateway with exponential backoff retry."""
+        ib_host = get_ib_host()
+        ib_port = get_ib_port()
         while True:
             try:
-                log.info("Connecting to IB Gateway at %s:%d ...", IB_HOST, IB_PORT)
+                log.info("Connecting to IB Gateway at %s:%d ...", ib_host, ib_port)
                 await self.ib.connectAsync(
-                    IB_HOST, IB_PORT, clientId=CLIENT_ID, timeout=20
+                    ib_host, ib_port, clientId=CLIENT_ID, timeout=20
                 )
                 log.info("Connected — %d account(s)", len(self.ib.managedAccounts()))
                 self._retry_delay = INITIAL_RETRY_DELAY

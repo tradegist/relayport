@@ -1,5 +1,6 @@
 """Unit tests for routes/trades_list.py — GET /ibkr/trades error paths."""
 
+import os
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 from aiohttp import web
@@ -8,8 +9,8 @@ from aiohttp.test_utils import AioHTTPTestCase
 from rc_models import ListTradesResponse
 from rc_routes import create_routes
 
-# Patch API_TOKEN at module level in middlewares so auth passes with "test-token".
-_patcher = patch("rc_routes.middlewares.API_TOKEN", "test-token")
+# Set API_TOKEN in env so auth middleware passes with "test-token".
+_patcher = patch.dict(os.environ, {"API_TOKEN": "test-token"})
 
 
 def setUpModule() -> None:

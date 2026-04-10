@@ -9,7 +9,10 @@ from aiohttp import web
 
 log = logging.getLogger("poller")
 
-API_TOKEN = os.environ.get("API_TOKEN", "")
+
+def get_api_token() -> str:
+    return os.environ.get("API_TOKEN", "").strip()
+
 
 _Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 
@@ -21,10 +24,11 @@ async def auth_middleware(
 ) -> web.StreamResponse:
     """Verify Bearer token on all /ibkr/ routes."""
     if request.path.startswith("/ibkr/"):
-        if not API_TOKEN:
+        api_token = get_api_token()
+        if not api_token:
             log.error("API_TOKEN not configured — rejecting request")
             return web.json_response({"error": "Server misconfigured"}, status=500)
         auth = request.headers.get("Authorization", "")
-        if not hmac.compare_digest(auth, f"Bearer {API_TOKEN}"):
+        if not hmac.compare_digest(auth, f"Bearer {api_token}"):
             return web.json_response({"error": "Unauthorized"}, status=401)
     return await handler(request)

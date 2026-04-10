@@ -1,5 +1,6 @@
 """Unit tests for auth middleware."""
 
+import os
 import unittest
 from unittest.mock import patch
 
@@ -22,17 +23,17 @@ class TestAuthMiddleware(AioHTTPTestCase):
         app.router.add_get("/ibkr/poller/run", _ok_handler)
         return app
 
-    @patch("poller_routes.middlewares.API_TOKEN", "test-token")
+    @patch.dict(os.environ, {"API_TOKEN": "test-token"})
     async def test_health_bypasses_auth(self) -> None:
         resp = await self.client.request("GET", "/health")
         self.assertEqual(resp.status, 200)
 
-    @patch("poller_routes.middlewares.API_TOKEN", "test-token")
+    @patch.dict(os.environ, {"API_TOKEN": "test-token"})
     async def test_missing_auth_header(self) -> None:
         resp = await self.client.request("GET", "/ibkr/poller/run")
         self.assertEqual(resp.status, 401)
 
-    @patch("poller_routes.middlewares.API_TOKEN", "test-token")
+    @patch.dict(os.environ, {"API_TOKEN": "test-token"})
     async def test_invalid_token(self) -> None:
         resp = await self.client.request(
             "GET", "/ibkr/poller/run",
@@ -40,7 +41,7 @@ class TestAuthMiddleware(AioHTTPTestCase):
         )
         self.assertEqual(resp.status, 401)
 
-    @patch("poller_routes.middlewares.API_TOKEN", "valid-token")
+    @patch.dict(os.environ, {"API_TOKEN": "valid-token"})
     async def test_valid_token(self) -> None:
         resp = await self.client.request(
             "GET", "/ibkr/poller/run",
@@ -48,7 +49,7 @@ class TestAuthMiddleware(AioHTTPTestCase):
         )
         self.assertEqual(resp.status, 200)
 
-    @patch("poller_routes.middlewares.API_TOKEN", "")
+    @patch.dict(os.environ, {"API_TOKEN": ""})
     async def test_empty_api_token_rejects_all(self) -> None:
         """Empty API_TOKEN must return 500, not silently accept empty Bearer."""
         resp = await self.client.request(
@@ -59,7 +60,7 @@ class TestAuthMiddleware(AioHTTPTestCase):
         body = await resp.json()
         self.assertIn("misconfigured", body["error"])
 
-    @patch("poller_routes.middlewares.API_TOKEN", "")
+    @patch.dict(os.environ, {"API_TOKEN": ""})
     async def test_empty_api_token_health_still_works(self) -> None:
         """Health endpoint works even when API_TOKEN is empty."""
         resp = await self.client.request("GET", "/health")
