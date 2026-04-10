@@ -3,20 +3,38 @@
 import os
 import unittest
 
-os.environ["DEBUG_WEBHOOK_PATH"] = "secret-path"
-os.environ["MAX_DEBUG_WEBHOOK_PAYLOADS"] = "3"
-
 from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase
 
-from debug_app import _inbox, create_app
+from debug_app import create_app
+
+_ORIG_ENV: dict[str, str | None] = {}
+_TEST_ENV = {
+    "DEBUG_WEBHOOK_PATH": "secret-path",
+    "MAX_DEBUG_WEBHOOK_PAYLOADS": "3",
+}
+
+
+def setUpModule() -> None:
+    """Save original env values, then set test overrides."""
+    for key, val in _TEST_ENV.items():
+        _ORIG_ENV[key] = os.environ.get(key)
+        os.environ[key] = val
+
+
+def tearDownModule() -> None:
+    """Restore original env values to avoid leaking into other test modules."""
+    for key, orig in _ORIG_ENV.items():
+        if orig is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = orig
 
 
 class TestDebugWebhookConfigured(AioHTTPTestCase):
     """Tests when DEBUG_WEBHOOK_PATH is set."""
 
     async def get_application(self) -> web.Application:
-        _inbox.clear()
         return create_app()
 
     async def test_health(self) -> None:

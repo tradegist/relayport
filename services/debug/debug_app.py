@@ -16,22 +16,28 @@ logging.basicConfig(
 log = logging.getLogger("debug-webhook")
 
 HTTP_PORT = 9000
-DEBUG_PATH = os.environ.get("DEBUG_WEBHOOK_PATH", "")
-_raw_max = os.environ.get("MAX_DEBUG_WEBHOOK_PAYLOADS", "100")
-try:
-    MAX_PAYLOADS = min(int(_raw_max), 150)
-except ValueError:
-    raise SystemExit(
-        f"Invalid MAX_DEBUG_WEBHOOK_PAYLOADS={_raw_max!r} — must be an integer"
-    ) from None
 
 PayloadEntry = dict[str, object]
-_inbox: list[PayloadEntry] = []
+
+_debug_path_key = web.AppKey("debug_path", str)
+_max_payloads_key = web.AppKey("max_payloads", int)
+_inbox_key = web.AppKey("inbox", list)
+
+
+def _parse_max_payloads() -> int:
+    raw = os.environ.get("MAX_DEBUG_WEBHOOK_PAYLOADS", "100")
+    try:
+        return min(int(raw), 150)
+    except ValueError:
+        raise SystemExit(
+            f"Invalid MAX_DEBUG_WEBHOOK_PAYLOADS={raw!r} — must be an integer"
+        ) from None
 
 
 def _path_matches(request: web.Request) -> bool:
     path = request.match_info.get("path", "")
-    if not DEBUG_PATH or path != DEBUG_PATH:
+    debug_path: str = request.app[_debug_path_key]
+    if not debug_path or path != debug_path:
         raise web.HTTPNotFound()
     return True
 
@@ -53,11 +59,13 @@ async def handle_post(request: web.Request) -> web.Response:
         "received_at": datetime.now(UTC).isoformat(),
     }
 
-    _inbox.append(entry)
-    while len(_inbox) > MAX_PAYLOADS:
-        _inbox.pop(0)
+    inbox: list[PayloadEntry] = request.app[_inbox_key]
+    max_payloads: int = request.app[_max_payloads_key]
+    inbox.append(entry)
+    while len(inbox) > max_payloads:
+        inbox.pop(0)
 
-    log.info("Captured webhook payload (%d/%d stored)", len(_inbox), MAX_PAYLOADS)
+    log.info("Captured webhook payload (%d/%d stored)", len(inbox), max_payloads)
     log.debug("Entry:\n%s", json.dumps(entry, indent=2, default=str))
 
     return web.json_response({"payload": payload, "headers": headers})
@@ -66,23 +74,30 @@ async def handle_post(request: web.Request) -> web.Response:
 async def handle_get(request: web.Request) -> web.Response:
     """Return all stored payloads."""
     _path_matches(request)
-    return web.json_response({"payloads": _inbox, "count": len(_inbox)})
+    inbox: list[PayloadEntry] = request.app[_inbox_key]
+    return web.json_response({"payloads": inbox, "count": len(inbox)})
 
 
 async def handle_delete(request: web.Request) -> web.Response:
     """Clear all stored payloads."""
     _path_matches(request)
-    _inbox.clear()
+    inbox: list[PayloadEntry] = request.app[_inbox_key]
+    inbox.clear()
     log.info("Debug webhook inbox cleared")
     return web.json_response({"cleared": True})
 
 
-async def handle_health(_request: web.Request) -> web.Response:
-    return web.json_response({"status": "ok", "debug_path_configured": bool(DEBUG_PATH)})
+async def handle_health(request: web.Request) -> web.Response:
+    return web.json_response(
+        {"status": "ok", "debug_path_configured": bool(request.app[_debug_path_key])}
+    )
 
 
 def create_app() -> web.Application:
     app = web.Application()
+    app[_debug_path_key] = os.environ.get("DEBUG_WEBHOOK_PATH", "")
+    app[_max_payloads_key] = _parse_max_payloads()
+    app[_inbox_key] = []
     app.router.add_post("/debug/webhook/{path}", handle_post)
     app.router.add_get("/debug/webhook/{path}", handle_get)
     app.router.add_delete("/debug/webhook/{path}", handle_delete)
@@ -91,12 +106,14 @@ def create_app() -> web.Application:
 
 
 if __name__ == "__main__":
-    if DEBUG_PATH:
+    debug_path = os.environ.get("DEBUG_WEBHOOK_PATH", "")
+    max_payloads = _parse_max_payloads()
+    if debug_path:
         log.info(
             "Debug webhook inbox starting on port %d (path=/debug/webhook/%s, max=%d)",
             HTTP_PORT,
-            DEBUG_PATH,
-            MAX_PAYLOADS,
+            debug_path,
+            max_payloads,
         )
     else:
         log.info(

@@ -225,6 +225,25 @@ The deployment mode is controlled by `DEPLOY_MODE` in `.env` (required, validate
   - **`with patch(...):`** inside the test — for single-test patches.
   - **`@patch(...)`** decorator — for single-test or single-class patches.
   - Never use bare `_patcher.start()` without registering a `.stop()`.
+- **Use `setUpModule()` / `tearDownModule()` for env var overrides.** When tests need specific `os.environ` values, save originals in `setUpModule()` and restore in `tearDownModule()`. Never mutate `os.environ` at module level without cleanup — the mutation leaks into every test module that runs afterward. The pattern:
+  ```python
+  _ORIG_ENV: dict[str, str | None] = {}
+  _TEST_ENV = {"MY_VAR": "test-value"}
+
+  def setUpModule() -> None:
+      for key, val in _TEST_ENV.items():
+          _ORIG_ENV[key] = os.environ.get(key)
+          os.environ[key] = val
+
+  def tearDownModule() -> None:
+      for key, orig in _ORIG_ENV.items():
+          if orig is None:
+              os.environ.pop(key, None)
+          else:
+              os.environ[key] = orig
+  ```
+  Both functions are called automatically by pytest/unittest — no manual invocation needed. Prefer this over `mock.patch.dict(os.environ, ...)` when the env vars must be set for the entire module (e.g. all test classes). For single-test env changes, use `with mock.patch.dict(os.environ, ...):` instead.
+- **Avoid reading env vars at module level in production code.** Module-level `os.environ` reads (e.g. `DEBUG_PATH = os.environ.get(...)`) bake values at import time, forcing tests to set env vars before imports — a fragile anti-pattern. Defer env reads to a factory function (e.g. `create_app()`) or constructor so tests can set env vars normally in `setUpModule()` and get fresh reads on each call.
 - **No cross-test dependencies.** Every test must be self-contained — it must not rely on state created by a previous test (e.g. a position opened by an earlier buy test). Pytest does not guarantee execution order, and tests may run selectively or in parallel. If a test needs preconditions, create them within the test itself or via an explicit fixture.
 - **E2E conftest fixtures must use `yield` with a context manager.** Never `return httpx.Client(...)` — the client is never closed and leaks sockets. Use `with httpx.Client(...) as client: yield client` instead. Scope to `session` (one client per test run). Every E2E `conftest.py` must also include a `_preflight_check` fixture (`scope="session"`, `autouse=True`) that hits `/health` and calls `pytest.exit()` if the stack is unreachable.
 - **E2E tests must use real Pydantic models, not `dict[str, Any]`.** When an E2E test receives a webhook payload or API response that matches a Pydantic model, parse it with `Model.model_validate_json(body)` (or `Model.model_validate(data)`) and access fields via attributes (`.data`, `.errors`), never via dict keys (`["data"]`). This ensures `make typecheck` catches field renames and typos at type-check time instead of at runtime. Never hand-roll TypedDicts that duplicate Pydantic model fields.
