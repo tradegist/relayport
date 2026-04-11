@@ -210,7 +210,7 @@ def _send_and_mark(
         # See docs/notifier-resilience.md for the planned fix:
         # notify() will raise NotificationError when ALL backends fail,
         # preventing mark and allowing retry on the next flush.
-        payload = WebhookPayloadTrades(data=trades, errors=[])
+        payload = WebhookPayloadTrades(relay="ibkr", data=trades, errors=[])
         notify(notifiers, payload)
 
         # Mark processed AFTER notify
@@ -236,7 +236,7 @@ def _send_no_mark(fills: list[Fill], notifiers: list[BaseNotifier]) -> None:
             "Listener preliminary: %s %s orderId=%s @ %s (no commission)",
             trade.side.value, trade.symbol, trade.orderId, trade.price,
         )
-    notify(notifiers, WebhookPayloadTrades(data=trades, errors=[]))
+    notify(notifiers, WebhookPayloadTrades(relay="ibkr", data=trades, errors=[]))
 
 
 # ── Debounce buffer ──────────────────────────────────────────────────

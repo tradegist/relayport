@@ -12,6 +12,7 @@ from .models import AssetClass as AssetClass
 from .models import BuySell as BuySell
 from .models import Fill as Fill
 from .models import OrderType as OrderType
+from .models import RelayName as RelayName
 from .models import Source as Source
 from .models import Trade as Trade
 from .models import WebhookPayload as WebhookPayload

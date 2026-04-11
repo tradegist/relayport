@@ -234,7 +234,7 @@ def poll_once(
                 replay_fills = sorted_fills[:replay]
                 trades = aggregate_fills(replay_fills)
                 log.info("Replay mode: resending %d fill(s) as %d trade(s)", len(replay_fills), len(trades))
-                notify(notifiers or [], WebhookPayloadTrades(data=trades, errors=parse_errors))
+                notify(notifiers or [], WebhookPayloadTrades(relay="ibkr", data=trades, errors=parse_errors))
                 return trades
             log.info("No new fills")
             return []
@@ -251,7 +251,7 @@ def poll_once(
             )
 
         # Send a single webhook with all trades
-        notify(notifiers or [], WebhookPayloadTrades(data=trades, errors=parse_errors))
+        notify(notifiers or [], WebhookPayloadTrades(relay="ibkr", data=trades, errors=parse_errors))
 
         # Mark all fills as processed after successful webhook
         all_new_ids = [did for t in trades for did in t.execIds]

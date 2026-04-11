@@ -21,14 +21,14 @@ disallow_untyped_defs = false
 disallow_untyped_calls = false
 
 [tool.pytest.ini_options]
-testpaths = ["services/poller", "services/notifier", "services/dedup", "services/shared", "services/debug", "services/listener"]
+testpaths = ["services/poller", "services/notifier", "services/dedup", "services/shared", "services/debug", "services/listener", "services/relay_core"]
 norecursedirs = ["tests/e2e"]
 addopts = "--import-mode=importlib"
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["services/poller", "services/notifier", "services/dedup", "services/shared", "services/debug", "services/listener", "cli", "types/python"]
+src = ["services/poller", "services/notifier", "services/dedup", "services/shared", "services/debug", "services/listener", "services/relay_core", "cli", "types/python"]
 
 [tool.ruff.lint]
 select = [
@@ -60,5 +60,5 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = [
     "poller_routes", "poller", "notifier", "shared", "dedup", "debug", "listener",
-    "poller_models", "ibkr_relay_types",
+    "relay_core", "poller_models", "ibkr_relay_types",
 ]
