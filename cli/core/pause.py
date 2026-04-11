@@ -94,7 +94,7 @@ def run(args):
     print()
     print("  Droplet billing has stopped.")
     print("  Snapshot cost: ~$0.06/GB/month")
-    print("  Reserved IP: free while unassigned")
+    print("  Reserved IP: billed while unassigned")
     print()
     print("  To resume: python3 -m cli resume")
     print("=" * 44)
