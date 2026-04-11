@@ -14,6 +14,7 @@ services:
       - ./services/notifier:/app/notifier:ro
       - ./services/dedup:/app/dedup:ro
       - ./services/shared:/app/shared:ro
+      - ./services/listener:/app/listener:ro
 
   poller-2:
     ports:
@@ -26,6 +27,7 @@ services:
       - ./services/notifier:/app/notifier:ro
       - ./services/dedup:/app/dedup:ro
       - ./services/shared:/app/shared:ro
+      - ./services/listener:/app/listener:ro
 
   ibkr-debug:
     ports:

@@ -35,8 +35,12 @@ services:
       DEBUG_WEBHOOK_PATH: ${DEBUG_WEBHOOK_PATH:-}
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-600}
       API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}
-      DEDUP_DB_PATH: /data/dedup/fills.db
       META_DB_PATH: /data/meta/poller.db
+      LISTENER_ENABLED: ${LISTENER_ENABLED:-}
+      LISTENER_EXEC_EVENTS_ENABLED: ${LISTENER_EXEC_EVENTS_ENABLED:-false}
+      LISTENER_EVENT_DEBOUNCE_TIME: ${LISTENER_EVENT_DEBOUNCE_TIME:-0}
+      BRIDGE_WS_URL: ${BRIDGE_WS_URL:-}
+      BRIDGE_API_TOKEN: ${BRIDGE_API_TOKEN:-}
     expose:
       - "8000"
     volumes:
@@ -62,7 +66,6 @@ services:
       DEBUG_WEBHOOK_PATH: ${DEBUG_WEBHOOK_PATH:-}
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS_2:-600}
       API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}
-      DEDUP_DB_PATH: /data/dedup/fills.db
       META_DB_PATH: /data/meta/poller-2.db
     expose:
       - "8000"

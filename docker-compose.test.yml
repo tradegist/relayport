@@ -19,6 +19,7 @@ services:
       - ./services/notifier:/opt/notifier
       - ./services/dedup:/opt/dedup
       - ./services/shared:/opt/shared
+      - ./services/listener:/opt/listener
     healthcheck:
       test:
         [
@@ -58,3 +59,7 @@ services:
   # Disable production-only services
   caddy:
     profiles: ["disabled"]
+
+networks:
+  default:
+    name: ibkr-relay-test
