@@ -88,5 +88,3 @@ class WebhookPayloadTrades(BaseModel):
 # intended discriminated-union API. Today there is only one webhook payload
 # variant, so the alias points directly to the trades payload model.
 WebhookPayload = WebhookPayloadTrades
-
-SCHEMA_MODELS: list[type[BaseModel]] = [WebhookPayloadTrades, Trade, Fill]

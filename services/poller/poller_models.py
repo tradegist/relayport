@@ -34,11 +34,3 @@ class HealthResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str
-
-
-# ── Schema export (used by schema_gen.py → make types) ──────────────
-
-SCHEMA_MODELS: list[type[BaseModel]] = [
-    RunPollResponse,
-    HealthResponse,
-]

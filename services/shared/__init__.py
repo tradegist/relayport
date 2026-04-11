@@ -22,9 +22,3 @@ from .utilities import _dedup_id as _dedup_id
 from .utilities import aggregate_fills as aggregate_fills
 from .utilities import normalize_asset_class as normalize_asset_class
 from .utilities import normalize_order_type as normalize_order_type
-
-# ── Schema export (used by schema_gen.py → make types) ──────────────
-# schema_gen.py imports ``shared`` and reads ``SCHEMA_MODELS``.
-# The models must resolve from *this* package so JSON Schema ``$ref``
-# paths stay correct.
-SCHEMA_MODELS = [WebhookPayloadTrades, Trade, Fill]

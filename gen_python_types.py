@@ -42,25 +42,6 @@ def _strip_docstring(source: str) -> str:
     return source
 
 
-def _strip_schema_models(source: str) -> str:
-    """Remove the SCHEMA_MODELS block (variable + any preceding comment)."""
-    lines = source.splitlines(keepends=True)
-    out: list[str] = []
-    in_block = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("SCHEMA_MODELS"):
-            in_block = True
-            continue
-        if in_block:
-            # Consume continuation lines (list items, closing bracket, blanks)
-            if stripped == "" or stripped.startswith("]") or stripped.endswith(","):
-                continue
-            in_block = False
-        out.append(line)
-    return "".join(out)
-
-
 def _rewrite_poller_imports(source: str) -> str:
     """Rewrite ``from shared import X`` to ``from .shared import X``."""
     return re.sub(r"^from shared import ", "from .shared import ", source, flags=re.MULTILINE)
@@ -74,7 +55,6 @@ def generate_shared() -> None:
 
     source = SHARED_SRC.read_text()
     body = _strip_docstring(source)
-    body = _strip_schema_models(body)
 
     out = OUT_DIR / "shared.py"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -91,7 +71,6 @@ def generate_poller() -> None:
     source = POLLER_SRC.read_text()
     body = _strip_docstring(source)
     body = _rewrite_poller_imports(body)
-    body = _strip_schema_models(body)
 
     out = OUT_DIR / "poller.py"
     out.parent.mkdir(parents=True, exist_ok=True)
