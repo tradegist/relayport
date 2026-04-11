@@ -209,11 +209,11 @@ types/typescript/
   package.json               # @tradegist/ibkr-relay-types
   shared/
     index.d.ts               # Re-exports: BuySell, Fill, Trade, WebhookPayloadTrades, WebhookPayload
-    types.d.ts               # Generated from shared/__init__.py SCHEMA_MODELS
+    types.d.ts               # Generated from services/shared/models.py (via schema_gen.py)
     types.schema.json         # Intermediate JSON Schema
   poller/
     index.d.ts               # Re-exports: RunPollResponse, HealthResponse
-    types.d.ts               # Generated from poller_models.py SCHEMA_MODELS
+    types.d.ts               # Generated from services/poller/poller_models.py (via schema_gen.py)
     types.schema.json         # Intermediate JSON Schema
 ```
 
@@ -601,10 +601,10 @@ make sync LOCAL_FILES=1  # deploy to your droplet
     │   ├── package.json
     │   ├── shared/            # Ibkr namespace (CommonFill models)
     │   │   ├── index.d.ts
-    │   │   └── types.d.ts     # Generated from services/shared/models.py SCHEMA_MODELS
+    │   │   └── types.d.ts     # Generated from services/shared/models.py (via schema_gen.py)
     │   └── poller/            # IbkrPoller namespace
     │       ├── index.d.ts
-    │       └── types.d.ts     # Generated from poller_models.py SCHEMA_MODELS
+    │       └── types.d.ts     # Generated from services/poller/poller_models.py (via schema_gen.py)
     └── python/                # ibkr-relay-types PyPI package
         ├── pyproject.toml
         └── ibkr_relay_types/

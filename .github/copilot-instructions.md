@@ -333,8 +333,8 @@ This project has **two model locations** — a shared source of truth and one se
 - **`services/shared/models.py`** is the single source of truth for all webhook payload models. The `__init__.py` barrel re-exports everything so `from shared import Fill` keeps working.
 - **`services/shared/utilities.py`** contains internal helpers (`aggregate_fills`, `normalize_order_type`, `normalize_asset_class`, `_dedup_id`). These are not exported to consumer packages.
 - **Model shims only re-export models and types** (Pydantic models, enums, type aliases). Utility functions (`aggregate_fills`, `normalize_order_type`, `_dedup_id`) must be imported directly from the owning module: `from shared import aggregate_fills`. Never re-export functions through model shims.
-- `poller_models.py` re-exports shared models and defines poller-specific API types. Its `SCHEMA_MODELS` contains only `[RunPollResponse, HealthResponse]`.
-- `shared/models.py` defines `SCHEMA_MODELS = [WebhookPayloadTrades, Trade, Fill]` for the shared types. The barrel `__init__.py` re-exports it for `schema_gen.py`.
+- `poller_models.py` re-exports shared models and defines poller-specific API types. Its exported models (`RunPollResponse`, `HealthResponse`) are listed in `schema_gen.py:SCHEMA_MODELS`.
+- `shared/models.py` exports the CommonFill contract (`WebhookPayloadTrades`, `Trade`, `Fill`). These are listed in `schema_gen.py:SCHEMA_MODELS`. The barrel `__init__.py` re-exports them so `from shared import X` keeps working.
 - All external-contract models use `ConfigDict(extra="forbid")` for strict validation.
 
 ## TypeScript Types
@@ -343,8 +343,8 @@ This project has **two model locations** — a shared source of truth and one se
 
 All relay projects export TypeScript types using a two-tier namespace pattern:
 
-- **`types/typescript/shared/`** → exported as the **relay's primary namespace** (named after the exchange: `Ibkr`, `Kraken`, etc.). Contains the CommonFill models (`Fill`, `Trade`, `WebhookPayloadTrades`, `WebhookPayload`, `BuySell`) generated from `services/shared/__init__.py` SCHEMA_MODELS. Every relay has this.
-- **`types/typescript/<module>/`** → exported as **`<RelayName><ModuleName>`** (e.g. `IbkrPoller`). Contains service-specific types generated from that module's `SCHEMA_MODELS`. Only created when a service has unique types not in shared.
+- **`types/typescript/shared/`** → exported as the **relay's primary namespace** (named after the exchange: `Ibkr`, `Kraken`, etc.). Contains the CommonFill models (`Fill`, `Trade`, `WebhookPayloadTrades`, `WebhookPayload`, `BuySell`) generated via `schema_gen.py` from `services/shared/models.py`. Every relay has this.
+- **`types/typescript/<module>/`** → exported as **`<RelayName><ModuleName>`** (e.g. `IbkrPoller`). Contains service-specific types generated via `schema_gen.py`. Only created when a service has unique types not in shared.
 
 The barrel `types/typescript/index.d.ts` ties them together:
 
@@ -365,7 +365,7 @@ export * as Kraken from "./shared";
 - Types are published as `@tradegist/ibkr-relay-types` (npm package in `types/typescript/`, not yet published).
 - **Two namespaces**: `Ibkr` (shared webhook payload types) and `IbkrPoller` (poller-specific API types).
 - **`make types`** regenerates both from Pydantic models:
-  - `services/shared/__init__.py` → `types/typescript/shared/types.d.ts` (CommonFill models: WebhookPayloadTrades, Trade, Fill, BuySell)
+  - `services/shared/models.py` → `types/typescript/shared/types.d.ts` (CommonFill models: WebhookPayloadTrades, Trade, Fill, BuySell)
   - `services/poller/poller_models.py` → `types/typescript/poller/types.d.ts` (poller-specific: RunPollResponse, HealthResponse)
   - `services/shared/models.py` → `types/python/ibkr_relay_types/shared.py` (Python, via `gen_python_types.py`)
   - `services/poller/poller_models.py` → `types/python/ibkr_relay_types/poller.py` (Python, via `gen_python_types.py`)
@@ -377,11 +377,11 @@ export * as Kraken from "./shared";
       package.json               # @tradegist/ibkr-relay-types
       shared/
         index.d.ts               # Re-exports: BuySell, Fill, Trade, WebhookPayloadTrades, WebhookPayload
-        types.d.ts               # Generated from services/shared/models.py (SCHEMA_MODELS)
+        types.d.ts               # Generated from services/shared/models.py (via schema_gen.py)
         types.schema.json         # Intermediate JSON Schema
       poller/
         index.d.ts               # Re-exports: RunPollResponse, HealthResponse
-        types.d.ts               # Generated from poller/poller_models.py (SCHEMA_MODELS)
+        types.d.ts               # Generated from services/poller/poller_models.py (via schema_gen.py)
         types.schema.json         # Intermediate JSON Schema
     python/
       pyproject.toml             # ibkr-relay-types, deps: pydantic
@@ -391,7 +391,7 @@ export * as Kraken from "./shared";
         poller.py                # Poller API types (generated from poller_models.py)
   ```
 - **Usage:** `import { Ibkr, IbkrPoller } from "@tradegist/ibkr-relay-types"`
-- Each model file declares a `SCHEMA_MODELS` list at the bottom — `schema_gen.py` reads it to generate the JSON Schema. **To export a new model to TypeScript, append it to `SCHEMA_MODELS` in the relevant model shim (`poller_models.py`) or `shared/__init__.py` file and update the corresponding `types/typescript/*/index.d.ts` re-exports.** The Python types package is auto-generated by `gen_python_types.py`.
+- `schema_gen.py` owns the `SCHEMA_MODELS` dict (keyed by module name, e.g. `"shared"` → `[WebhookPayloadTrades, Trade, Fill]`). **To export a new model to TypeScript, add it to the relevant entry in `schema_gen.py:SCHEMA_MODELS` and update the corresponding `types/typescript/*/index.d.ts` re-exports.** The Python types package is auto-generated by `gen_python_types.py`.
 
 ## Python Types Package
 
@@ -408,7 +408,7 @@ export * as Kraken from "./shared";
       poller.py                 # Poller API types (generated from poller_models.py)
   ```
 - **Usage:** `from ibkr_relay_types import Fill, Trade, WebhookPayload, BuySell`
-- **Auto-generated** — `shared.py` extracts from `shared/models.py` (stripping docstring and `SCHEMA_MODELS`). `poller.py` copies `poller_models.py` with imports rewritten from `shared` to `.shared`. Run `make types` to regenerate. Do not edit these files manually.
+- **Auto-generated** — `shared.py` copies `shared/models.py` with only the module docstring stripped. `poller.py` copies `poller_models.py` with the docstring stripped and imports rewritten from `shared` to `.shared`. Run `make types` to regenerate. Do not edit these files manually.
 
 ## Code Style
 
