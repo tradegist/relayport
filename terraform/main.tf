@@ -29,7 +29,8 @@ data "http" "deployer_ip" {
 }
 
 locals {
-  deployer_ip = chomp(data.http.deployer_ip.response_body)
+  deployer_ip   = chomp(data.http.deployer_ip.response_body)
+  deployer_cidr = can(regex(":", local.deployer_ip)) ? "${local.deployer_ip}/128" : "${local.deployer_ip}/32"
 }
 
 # ---------------------------------------------------------------------------
@@ -90,7 +91,7 @@ resource "digitalocean_firewall" "relay" {
   inbound_rule {
     protocol         = "tcp"
     port_range       = "22"
-    source_addresses = ["${local.deployer_ip}/32"]
+    source_addresses = [local.deployer_cidr]
   }
 
   # HTTPS (Caddy reverse proxy for noVNC)
