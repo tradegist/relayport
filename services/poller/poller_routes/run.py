@@ -28,7 +28,7 @@ async def handle_run_poll(request: web.Request) -> web.Response:
         pass  # no body or malformed — use env defaults
 
     try:
-        await asyncio.wait_for(poll_lock.acquire(), timeout=0)
+        await asyncio.wait_for(poll_lock.acquire(), timeout=0.01)
     except TimeoutError:
         return web.json_response({"error": "Poll already in progress"}, status=409)
 
