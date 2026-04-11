@@ -338,7 +338,7 @@ services/listener/
 - **Fill mapping**: `WsEnvelope` → `map_fill()` → `Fill`. Maps IB side (`BOT`/`SLD`) → `BuySell.BUY`/`SELL`, normalizes fee with `abs()`, sets `orderType=None`.
 - **Mark-after-notify**: Uses the same `_send_and_mark()` pattern as the poller — thread-local SQLite connection via `asyncio.to_thread()`, notify then mark (never reversed).
 - **`ListenerConfig`** dataclass built from env vars via `build_listener_config()`. Fail-fast `SystemExit` on missing required vars.
-- **Auto-reconnect**: On disconnect or error, waits with exponential backoff (10s initial, 300s max) and reconnects.
+- **Auto-reconnect**: On disconnect or error, waits with exponential backoff (5s initial, 300s max) and reconnects.
 - **Event types**: `connected`/`disconnected` (logged only), `execDetailsEvent` (optional fire-and-forget), `commissionReportEvent` (full dedup pipeline).
 
 ## Dedup Structure

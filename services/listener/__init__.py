@@ -274,6 +274,8 @@ class _DebounceBuffer:
             )
         except Exception:
             log.exception("Failed to dispatch %d buffered fill(s)", len(fills))
+            # Re-add to front so they are retried on next flush
+            self._buffer = fills + self._buffer
 
 
 # ── WebSocket event handler ──────────────────────────────────────────
