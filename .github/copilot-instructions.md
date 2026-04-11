@@ -170,7 +170,8 @@ The deployment mode is controlled by `DEPLOY_MODE` in `.env` (required, validate
 
 - Set `DROPLET_IP` and `SSH_KEY` in `.env` (no `DO_API_TOKEN` needed).
 - `make deploy` rsyncs files, pushes `.env`, and starts services using `docker-compose.shared.yml` overlay.
-- The shared overlay disables Caddy (the host project runs it) and connects all containers to `relay-net` external Docker network.
+- The shared overlay disables Caddy (the host project runs it) and connects all containers to the shared Docker network (`SHARED_NETWORK` env var, typically `relay-net`).
+- **`SHARED_NETWORK` controls cross-project networking.** The base `docker-compose.yml` uses `name: ${SHARED_NETWORK:-}` for the default network. When unset, Docker Compose creates a project-scoped network (isolated). When set to the same value across projects (e.g. `relay-net`), all projects share a single network and can reach each other's containers by service name. The shared overlay (`docker-compose.shared.yml`) sets the network to `external: true`, which merges on top of the base definition.
 - Caddy snippet files (`infra/caddy/sites/ibkr.caddy`) must be deployed to the host project's Caddy to enable routing.
 - `make sync` uses the shared compose overlay automatically.
 
@@ -432,7 +433,7 @@ python3 -m cli poll 2
 ```
 .env.example            # Template — copy to .env and fill in real values
 docker-compose.yml      # All services (caddy, poller, poller-2, ibkr-debug)
-docker-compose.shared.yml # Shared-mode overlay (disables Caddy, uses relay-net)
+docker-compose.shared.yml # Shared-mode overlay (disables Caddy, uses SHARED_NETWORK)
 docker-compose.local.yml  # Local dev override (direct port access, no TLS)
 docker-compose.test.yml   # Test stack override
 cli/                    # Python CLI (operator scripts)
