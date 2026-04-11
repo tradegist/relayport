@@ -81,7 +81,7 @@ typecheck: ## Run mypy strict type checking
 
 lint: ## Run ruff linter (use FIX=1 to auto-fix)
 	$(PYTHON) -m ruff check services/poller/ services/notifier/ services/dedup/ services/shared/ services/debug/ cli/ schema_gen.py gen_python_types.py $(if $(FIX),--fix)
-	@grep -rn '__all__' services/ types/ cli/ --include='*.py' && { echo "ERROR: __all__ is banned — use explicit re-exports"; exit 1; } || true
+	@if grep -rn '__all__' services/ types/ cli/ --include='*.py'; then echo "ERROR: __all__ is banned — use explicit re-exports"; exit 1; fi
 
 local-up: ## Start full stack locally (no TLS, direct port access)
 	@if [ -f .env ]; then \
