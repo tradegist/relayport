@@ -2,8 +2,10 @@
 
 !! PUBLIC CONTRACT — every type defined here is exported to consumers
 !! via the generated TypeScript and Python type packages (make types).
-!! Do NOT add internal helpers, mapping dicts, or utility functions
-!! here — those belong in utilities.py.
+!! Do NOT add general internal helpers, mapping dicts, or utility
+!! functions here — those belong in utilities.py. Private helpers that
+!! are only used to configure schema generation for models in this file
+!! (for example, ``json_schema_extra`` callbacks) are allowed.
 """
 
 from enum import Enum
