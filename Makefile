@@ -78,6 +78,7 @@ typecheck: ## Run mypy strict type checking
 	MYPYPATH=services $(PYTHON) -m mypy services/shared/
 	MYPYPATH=services/debug $(PYTHON) -m mypy services/debug/
 	$(PYTHON) -m mypy schema_gen.py
+	$(PYTHON) -m mypy gen_python_types.py
 	$(PYTHON) -m mypy types/python/ibkr_relay_types/
 
 lint: ## Run ruff linter (use FIX=1 to auto-fix)
