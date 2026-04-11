@@ -4,6 +4,12 @@ import asyncio
 import logging
 import sys
 
+from listener import (
+    ListenerConfig,
+    build_listener_config,
+    is_listener_enabled,
+    start_listener,
+)
 from notifier import load_notifiers
 from notifier.base import BaseNotifier
 from poller import (
@@ -42,6 +48,19 @@ async def _poll_loop(
         await asyncio.sleep(poll_interval)
 
 
+async def _run_listener(
+    cfg: ListenerConfig,
+    notifiers: list[BaseNotifier],
+) -> None:
+    """Run the listener, isolating runtime failures from the poller."""
+    try:
+        await start_listener(cfg, notifiers)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception("Listener crashed — poller continues unaffected")
+
+
 async def amain() -> None:
     """Continuous polling loop with HTTP API for on-demand polls."""
     get_flex_token()  # fail fast if missing
@@ -62,6 +81,18 @@ async def amain() -> None:
     poll_lock = asyncio.Lock()
 
     await start_api_server(poll_lock, notifiers)
+
+    # Start listener if enabled (runs as a background asyncio task).
+    # Config is built eagerly here so bad config (SystemExit) kills the
+    # process immediately — SystemExit inside an asyncio task is swallowed.
+    if is_listener_enabled():
+        listener_cfg = build_listener_config()
+        log.info(
+            "Listener enabled (exec_events=%s, debounce=%dms)",
+            listener_cfg.exec_events_enabled, listener_cfg.debounce_ms,
+        )
+        asyncio.create_task(_run_listener(listener_cfg, notifiers))  # noqa: RUF006 — fire-and-forget by design; poller continues if listener crashes
+
     await _poll_loop(poll_lock, notifiers)
 
 

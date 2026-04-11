@@ -11,6 +11,11 @@ services:
       API_TOKEN: test-token
       POLLER_API_PORT: "8000"
       DEBUG_WEBHOOK_PATH: test-debug-path
+      NOTIFIERS: webhook
+      WEBHOOK_SECRET: test-webhook-secret
+      LISTENER_ENABLED: "${LISTENER_ENABLED:-false}"
+      BRIDGE_WS_URL: "${BRIDGE_WS_URL:-}"
+      BRIDGE_API_TOKEN: "${BRIDGE_API_TOKEN:-}"
       PYTHONPATH: /opt
     ports:
       - "15011:8000"
@@ -19,6 +24,7 @@ services:
       - ./services/notifier:/opt/notifier
       - ./services/dedup:/opt/dedup
       - ./services/shared:/opt/shared
+      - ./services/listener:/opt/listener
     healthcheck:
       test:
         [
@@ -58,3 +64,7 @@ services:
   # Disable production-only services
   caddy:
     profiles: ["disabled"]
+
+networks:
+  default:
+    name: ibkr-relay-test

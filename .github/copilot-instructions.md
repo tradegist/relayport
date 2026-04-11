@@ -124,12 +124,12 @@
 
 Four Docker containers in a single Compose stack on a DigitalOcean droplet:
 
-| Service      | Role                                                                                                                                               |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `caddy`      | Reverse proxy with automatic HTTPS (Let's Encrypt)                                                                                                 |
-| `poller`     | Polls IBKR Flex for trade confirmations, fires webhooks. Disabled via `POLLER_ENABLED=false`                                                       |
-| `poller-2`   | Optional second poller instance for a different IBKR account. Behind `poller2` profile                                                             |
-| `ibkr-debug` | Debug webhook inbox — captures webhook payloads for inspection. Disabled by default (`DEBUG_REPLICAS=0`), enabled when `DEBUG_WEBHOOK_PATH` is set |
+| Service      | Role                                                                                                                                                               |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `caddy`      | Reverse proxy with automatic HTTPS (Let's Encrypt)                                                                                                                 |
+| `poller`     | Polls IBKR Flex for trade confirmations, fires webhooks. Also hosts the **listener** (real-time WS subscriber to ibkr_bridge). Disabled via `POLLER_ENABLED=false` |
+| `poller-2`   | Optional second poller instance for a different IBKR account. Behind `poller2` profile                                                                             |
+| `ibkr-debug` | Debug webhook inbox — captures webhook payloads for inspection. Disabled by default (`DEBUG_REPLICAS=0`), enabled when `DEBUG_WEBHOOK_PATH` is set                 |
 
 All secrets are injected via `.env` → `environment` in `docker-compose.yml`.
 Caddy reads `SITE_DOMAIN` from env vars — the Caddyfile uses `{$SITE_DOMAIN}` syntax.
@@ -196,6 +196,15 @@ The deployment mode is controlled by `DEPLOY_MODE` in `.env` (required, validate
 - **`make e2e-up` / `make e2e-down`** for manual stack management during debugging.
 - **`make e2e-run`** restarts `poller` and `ibkr-debug` containers (to pick up code changes from volume mounts), then runs the E2E tests. Safe to call repeatedly during development — no need to rebuild or restart manually.
 - **Test poller runs on `localhost:15011`** with hardcoded token `test-token`.
+
+### Listener E2E Tests
+
+- **Listener E2E tests are opt-in** — they require a running ibkr_bridge local stack (`make local-up` in ibkr_bridge) and `LISTENER_ENABLED=true` in `.env.test`.
+- **Preflight skip logic**: tests skip (not fail) when `LISTENER_ENABLED` is not set, bridge credentials are missing, or the bridge is unreachable.
+- **E2E conftest loads `.env.test` directly** using a stdlib `_load_env_test()` helper (key=value parser, no `python-dotenv` dependency). This avoids `set -a && . ./.env.test` in the Makefile — matching the ibkr_bridge pattern.
+- **`test_listener_ws_connected`** — checks poller container logs for "Connected to bridge WS".
+- **`test_listener_receives_commission_fill`** — places a MKT order via bridge API, polls the debug webhook inbox for fills (10s timeout), and `pytest.skip()`s if no fill arrives (market closed).
+- **Required `.env.test` vars**: `BRIDGE_WS_URL=ws://host.docker.internal:15101/ibkr/ws/events`, `BRIDGE_API_BASE_URL=http://localhost:15101`, `BRIDGE_API_TOKEN=<matching bridge's API_TOKEN>`.
 
 ## Test File Convention
 
@@ -305,9 +314,36 @@ services/debug/
 - **Port 9000** is hardcoded (`HTTP_PORT = 9000`). In production, Caddy reverse-proxies to `ibkr-debug:9000` — no host port mapping needed. Local dev uses `15003:9000` (`docker-compose.local.yml`), E2E uses `15012:9000` (`docker-compose.test.yml`).
 - **Module name**: `debug_app.py` (not `main.py`) to avoid `sys.modules` collisions with `services/poller/main.py` when both are on `sys.path`.
 
+## Listener Structure
+
+The `services/listener/` package is a **standalone library** (no container) that subscribes to ibkr_bridge's WebSocket event stream for real-time trade fills.
+
+```
+services/listener/
+  __init__.py              # WS subscriber: connect, map fills, dedup, notify (start_listener, build_listener_config)
+  bridge_models.py         # Mirrored WsEnvelope + related types from ibkr_bridge
+  test_listener.py         # Unit tests (map_fill, env getters, debounce)
+  tests/e2e/
+    conftest.py            # Fixtures + _load_env_test() + preflight skip logic
+    test_listener_fill.py  # E2E: WS connection + fill delivery pipeline
+```
+
+- **Runs inside the poller container** as a background `asyncio.create_task()`. Not a separate Docker service.
+- **Enabled via `LISTENER_ENABLED=true`** — when unset or falsy, the listener is not started.
+- **Env vars** (all optional, required only when enabled):
+  - `BRIDGE_WS_URL` — WebSocket URL (e.g. `ws://bridge:5000/ibkr/ws/events` same-droplet, `wss://trade.example.com/ibkr/ws/events` cross-droplet).
+  - `BRIDGE_API_TOKEN` — Bearer token for WS auth (must match bridge's `API_TOKEN`).
+  - `LISTENER_EXEC_EVENTS_ENABLED` — Enable `execDetailsEvent` webhooks (default `false`). Doubles volume but lower latency.
+  - `LISTENER_EVENT_DEBOUNCE_TIME` — Milliseconds to buffer fills before flushing (default `0`).
+- **Fill mapping**: `WsEnvelope` → `map_fill()` → `Fill`. Maps IB side (`BOT`/`SLD`) → `BuySell.BUY`/`SELL`, normalizes fee with `abs()`, sets `orderType=None`.
+- **Mark-after-notify**: Uses the same `_send_and_mark()` pattern as the poller — thread-local SQLite connection via `asyncio.to_thread()`, notify then mark (never reversed).
+- **`ListenerConfig`** dataclass built from env vars via `build_listener_config()`. Fail-fast `SystemExit` on missing required vars.
+- **Auto-reconnect**: On disconnect or error, waits with exponential backoff (5s initial, 300s max) and reconnects.
+- **Event types**: `connected`/`disconnected` (logged only), `execDetailsEvent` (optional fire-and-forget), `commissionReportEvent` (full dedup pipeline).
+
 ## Dedup Structure
 
-The `services/dedup/` package is a **standalone library** (no container, no Dockerfile). It provides SQLite dedup logic used by the poller.
+The `services/dedup/` package is a **standalone library** (no container, no Dockerfile). It provides SQLite dedup logic used by the poller and listener.
 
 ```
 services/dedup/
@@ -479,6 +515,7 @@ cli/                    # Python CLI (operator scripts)
 services/               # Business-logic services (user-facing features)
   poller/               # Flex poller service (see Poller Structure above)
     poller_models.py    # Pydantic models: Fill, Trade, WebhookPayloadTrades, WebhookPayload, BuySell, Source
+  listener/             # Real-time WS subscriber to ibkr_bridge (library, runs inside poller)
   debug/                # Debug webhook inbox service (see Debug Webhook Service above)
   notifier/             # Pluggable notification backends (library, no container)
   dedup/                # SQLite dedup library (library, no container)

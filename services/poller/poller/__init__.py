@@ -14,7 +14,7 @@ from dedup import init_db as _init_dedup_db
 from notifier import notify
 from notifier.base import BaseNotifier
 from poller_models import Trade, WebhookPayloadTrades
-from shared import aggregate_fills
+from shared import DEDUP_DB_PATH, aggregate_fills
 
 from .flex_parser import parse_fills
 
@@ -51,12 +51,9 @@ def get_poll_interval() -> int:
         ) from None
 
 
-def get_dedup_db_path() -> str:
-    return os.environ.get("DEDUP_DB_PATH", "/data/dedup/fills.db").strip()
-
-
 def get_meta_db_path() -> str:
-    return os.environ.get("META_DB_PATH", "/data/meta.db").strip()
+    val = os.environ.get("META_DB_PATH", "").strip()
+    return val if val else "/data/meta/poller.db"
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +61,7 @@ def get_meta_db_path() -> str:
 # ---------------------------------------------------------------------------
 def init_dedup_db(db_path: str | None = None) -> sqlite3.Connection:
     """Open the shared dedup database (cross-service, WAL mode)."""
-    path = db_path or get_dedup_db_path()
+    path = db_path or DEDUP_DB_PATH
     return _init_dedup_db(Path(path))
 
 

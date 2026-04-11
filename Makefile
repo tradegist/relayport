@@ -4,7 +4,7 @@ PROJECT = ibkr-relay
 PYTHON ?= .venv/bin/python3
 E2E_ENV = .env.test
 E2E_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
-E2E_COMPOSE_DOWN = docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test
+E2E_COMPOSE_DOWN = docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
 LOCAL_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.local.yml
 CLI_RELAY_ENV = $(if $(ENV),RELAY_ENV=$(ENV))
 
@@ -76,13 +76,14 @@ typecheck: ## Run mypy strict type checking
 	MYPYPATH=services $(PYTHON) -m mypy services/notifier/
 	MYPYPATH=services $(PYTHON) -m mypy services/dedup/
 	MYPYPATH=services $(PYTHON) -m mypy services/shared/
+	MYPYPATH=services $(PYTHON) -m mypy services/listener/
 	MYPYPATH=services/debug $(PYTHON) -m mypy services/debug/
 	$(PYTHON) -m mypy schema_gen.py
 	$(PYTHON) -m mypy gen_python_types.py
 	$(PYTHON) -m mypy types/python/ibkr_relay_types/
 
 lint: ## Run ruff linter (use FIX=1 to auto-fix)
-	$(PYTHON) -m ruff check services/poller/ services/notifier/ services/dedup/ services/shared/ services/debug/ cli/ schema_gen.py gen_python_types.py types/python/ibkr_relay_types/ $(if $(FIX),--fix)
+	$(PYTHON) -m ruff check services/poller/ services/notifier/ services/dedup/ services/shared/ services/listener/ services/debug/ cli/ schema_gen.py gen_python_types.py types/python/ibkr_relay_types/ $(if $(FIX),--fix)
 	@if grep -rn '__all__' services/ types/ cli/ --include='*.py'; then echo "ERROR: __all__ is banned — use explicit re-exports"; exit 1; fi
 
 local-up: ## Start full stack locally (no TLS, direct port access)
@@ -147,7 +148,7 @@ e2e-down: ## Stop and remove E2E test stack
 
 e2e-run: ## Run E2E tests (stack must be up)
 	@$(E2E_COMPOSE) restart poller ibkr-debug > /dev/null 2>&1 && sleep 3
-	$(PYTHON) -m pytest services/poller/tests/e2e/ -v
+	$(PYTHON) -m pytest services/poller/tests/e2e/ services/listener/tests/e2e/ -v
 
 e2e: ## Run E2E tests (starts/stops stack automatically)
 	@test -f $(E2E_ENV) || { echo "ERROR: $(E2E_ENV) not found — run: cp .env.test.example .env.test (placeholder values are fine)"; exit 1; }

@@ -29,18 +29,20 @@ set_watermark(conn, max_timestamp)  ← always runs (data-loss vector 2)
 
 **Callers (6 code paths, 4 vulnerable):**
 
-| # | Project | Service | Code path | Vectors | Severity |
-|---|---------|---------|-----------|---------|----------|
-| 1 | `ibkr_relay` | poller | `poll_once()` — L230–238 | dedup mark + watermark | **CRITICAL** |
-| 2 | `ibkr_relay` | listener | `_dispatch_immediate()` → `_dispatch()` — immediate mode (`debounce_ms=0`) | dedup mark | **HIGH** |
-| 3 | `ibkr_relay` | listener | `_flush()` → `_dispatch()` — debounce mode (`debounce_ms>0`) | dedup mark | **HIGH** |
-| 4 | `kraken_relay` | poller | `poll_once()` — L163–177 | dedup mark + watermark | **CRITICAL** |
-| 5 | `kraken_relay` | listener | `_process_fills()` — synchronous in `to_thread` | **SAFE** — exception stops execution before mark | — |
-| 6 | Both | poller | replay mode | **SAFE** — no mark, no watermark (by design) | — |
+| #   | Project        | Service  | Code path                                                                                            | Vectors                                          | Severity     |
+| --- | -------------- | -------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------ |
+| 1   | `ibkr_relay`   | poller   | `poll_once()` in `poller/__init__.py` — `notify()` → `mark_processed_batch()` → `set_last_poll_ts()` | dedup mark + watermark                           | **CRITICAL** |
+| 2   | `ibkr_relay`   | listener | `_send_and_mark()` called from `_handle_event()` — immediate mode (`debounce_ms=0`)                  | dedup mark                                       | **HIGH**     |
+| 3   | `ibkr_relay`   | listener | `_send_and_mark()` called from `_DebounceBuffer.flush()` — debounce mode (`debounce_ms>0`)           | dedup mark                                       | **HIGH**     |
+| 4   | `kraken_relay` | poller   | `poll_once()` in `poller/__init__.py` — `notify()` → `mark_processed_batch()` → `_set_watermark()`   | dedup mark + watermark                           | **CRITICAL** |
+| 5   | `kraken_relay` | listener | `_process_fills()` — synchronous in `to_thread`                                                      | **SAFE** — exception stops execution before mark | —            |
+| 6   | Both           | poller   | replay mode                                                                                          | **SAFE** — no mark, no watermark (by design)     | —            |
 
 Notes:
-- ibkr listener `_on_exec_details` dispatches without `exec_ids` → no mark → not vulnerable.
-- kraken listener is currently safe because `notify()` and `mark_processed_batch()` are sequential in the same synchronous function — an exception from `notify()` prevents mark. However, this relies on the current `notify()` implementation *not* swallowing exceptions at the top level, which is fragile.
+
+- ibkr listener `_send_no_mark()` dispatches `execDetailsEvent` fills without dedup or marking → not vulnerable.
+- kraken listener is currently safe because `notify()` and `mark_processed_batch()` are sequential in the same synchronous function — an exception from `notify()` prevents mark. However, this relies on the current `notify()` implementation _not_ swallowing exceptions at the top level, which is fragile.
+- ibkr listener `_send_and_mark()` creates a thread-local SQLite connection, calls `notify()` → `mark_processed_batch()` sequentially in `asyncio.to_thread()`. Because `notify()` currently swallows per-backend exceptions without raising, `mark_processed_batch()` always executes — marking fills as processed even when all notifiers failed. Since the listener shares the dedup DB with the Flex poller, the poller will dedup-skip those execIds on the next cycle, permanently suppressing delivery.
 
 ## Target Architecture
 
@@ -225,12 +227,12 @@ All callers have `mark_processed_batch()` and watermark updates after `notify()`
 
 **Verify each caller:**
 
-| Caller          | File                               | Current behavior                                                    | Change needed                                                                                                                |
-| --------------- | ---------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| kraken listener | `kraken_ws.py` `_handle_message()` | `notify()` → `mark_processed_batch()` inline                        | None — exception propagates, fill stays unprocessed, retried on next WS message or reconnect. No watermark in listener path. |
-| kraken poller   | `poller/__init__.py` `poll_once()` | `notify()` → `mark_processed_batch()` → `_set_watermark()` inline   | None — exception propagates, `poll_loop` catches it, fill retried next cycle. Watermark stays unchanged.                     |
-| ibkr poller     | `poller/__init__.py` `poll_once()` | `notify()` → `mark_processed_batch()` → `set_last_poll_ts()` inline | None — same as kraken poller. Watermark stays unchanged.                                                                     |
-| ibkr listener   | `listener.py` `_send_and_mark()`   | `notify()` → `mark_processed_batch()` in closure                    | None — exception propagates from `asyncio.to_thread()`, caught by `_on_dispatch_done`. No watermark in listener path.        |
+| Caller          | File                                      | Current behavior                                                                                   | Change needed                                                                                                                                                                                      |
+| --------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| kraken listener | `kraken_ws.py` `_handle_message()`        | `notify()` → `mark_processed_batch()` inline                                                       | None — exception propagates, fill stays unprocessed, retried on next WS message or reconnect. No watermark in listener path.                                                                       |
+| kraken poller   | `poller/__init__.py` `poll_once()`        | `notify()` → `mark_processed_batch()` → `_set_watermark()` inline                                  | None — exception propagates, `poll_loop` catches it, fill retried next cycle. Watermark stays unchanged.                                                                                           |
+| ibkr poller     | `poller/__init__.py` `poll_once()`        | `notify()` → `mark_processed_batch()` → `set_last_poll_ts()` inline                                | None — same as kraken poller. Watermark stays unchanged.                                                                                                                                           |
+| ibkr listener   | `listener/__init__.py` `_send_and_mark()` | `notify()` → `mark_processed_batch()` in `asyncio.to_thread()` (both immediate and debounce paths) | None — exception propagates from `asyncio.to_thread()`, caught by caller (`_handle_event` or `_DebounceBuffer.flush`). `flush()` restores fills to buffer on error. No watermark in listener path. |
 
 **All callers need:** pass `retries` and `retry_delay_ms` to `notify()`. This means threading the config from startup through to the call site (either via function parameters or storing on the class instance).
 
