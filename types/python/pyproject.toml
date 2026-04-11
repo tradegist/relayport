@@ -13,3 +13,6 @@ license = {text = "MIT"}
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["ibkr_relay_types"]
+
+[tool.setuptools.package-data]
+ibkr_relay_types = ["py.typed"]

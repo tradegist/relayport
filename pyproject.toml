@@ -28,7 +28,7 @@ addopts = "--import-mode=importlib"
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["services/poller", "services/notifier", "services/dedup", "services/shared", "services/debug", "cli"]
+src = ["services/poller", "services/notifier", "services/dedup", "services/shared", "services/debug", "cli", "types/python"]
 
 [tool.ruff.lint]
 select = [
@@ -60,5 +60,5 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = [
     "poller_routes", "poller", "notifier", "shared", "dedup", "debug",
-    "poller_models",
+    "poller_models", "ibkr_relay_types",
 ]
