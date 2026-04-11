@@ -1,8 +1,8 @@
 """HTTP routes — health check and per-relay on-demand poll.
 
 Routes:
-    GET  /health                     — unauthenticated status check
-    POST /relays/{relay_name}/poll   — authenticated on-demand poll
+    GET  /health                                — unauthenticated status check
+    POST /relays/{relay_name}/poll/{poll_idx}   — authenticated on-demand poll
 """
 
 import asyncio
@@ -56,8 +56,9 @@ async def handle_health(request: web.Request) -> web.Response:
 
 
 async def handle_poll(request: web.Request) -> web.Response:
-    """POST /relays/{relay_name}/poll — trigger an on-demand poll."""
+    """POST /relays/{relay_name}/poll/{poll_idx} — trigger an on-demand poll."""
     relay_name = request.match_info["relay_name"]
+    poll_idx_raw = request.match_info["poll_idx"]
     relays: dict[str, BrokerRelay] = request.app["relays"]
 
     relay = relays.get(relay_name)
@@ -71,6 +72,21 @@ async def handle_poll(request: web.Request) -> web.Response:
             {"error": f"Relay {relay_name!r} has no pollers"}, status=400,
         )
 
+    try:
+        poll_idx = int(poll_idx_raw) - 1  # 1-based → 0-based
+    except ValueError:
+        return web.json_response(
+            {"error": f"Invalid poll index: {poll_idx_raw!r}"}, status=400,
+        )
+
+    if poll_idx < 0 or poll_idx >= len(relay.poller_configs):
+        return web.json_response(
+            {"error": f"Poller {poll_idx_raw} not configured "
+             f"(relay {relay_name!r} has {len(relay.poller_configs)})"}, status=404,
+        )
+
+    config = relay.poller_configs[poll_idx]
+
     # Parse optional overrides from body
     replay = 0
     try:
@@ -79,8 +95,8 @@ async def handle_poll(request: web.Request) -> web.Response:
     except Exception:
         pass
 
-    # Acquire the per-relay poll lock (fail-fast if already running)
-    poll_lock = relay.poll_locks[0] if relay.poll_locks else None
+    # Acquire the per-poller lock (fail-fast if already running)
+    poll_lock = relay.poll_locks[poll_idx] if relay.poll_locks else None
     if poll_lock is not None:
         try:
             await asyncio.wait_for(poll_lock.acquire(), timeout=0.01)
@@ -89,23 +105,20 @@ async def handle_poll(request: web.Request) -> web.Response:
                 {"error": "Poll already in progress"}, status=409,
             )
     try:
-        all_trades = []
-        for idx, config in enumerate(relay.poller_configs):
-            trades = await asyncio.to_thread(
-                poll_once,
-                relay_name=relay.name,
-                config=config,
-                notifiers=relay.notifiers,
-                poller_index=idx,
-                replay=replay,
-            )
-            all_trades.extend(trades)
+        trades = await asyncio.to_thread(
+            poll_once,
+            relay_name=relay.name,
+            config=config,
+            notifiers=relay.notifiers,
+            poller_index=poll_idx,
+            replay=replay,
+        )
 
         return web.json_response({
-            "trades": [t.model_dump() for t in all_trades],
+            "trades": [t.model_dump() for t in trades],
         })
     except Exception as exc:
-        log.exception("On-demand poll failed for relay %s", relay_name)
+        log.exception("On-demand poll failed for relay %s poller %s", relay_name, poll_idx_raw)
         return web.json_response({"error": str(exc)}, status=500)
     finally:
         if poll_lock is not None:
@@ -139,7 +152,7 @@ def create_app(relays: list[BrokerRelay]) -> web.Application:
     app["relays"] = relay_map
 
     app.router.add_get("/health", handle_health)
-    app.router.add_post(f"{AUTH_PREFIX}/{{relay_name}}/poll", handle_poll)
+    app.router.add_post(f"{AUTH_PREFIX}/{{relay_name}}/poll/{{poll_idx}}", handle_poll)
 
     return app
 

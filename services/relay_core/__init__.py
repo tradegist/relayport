@@ -31,6 +31,20 @@ def get_poll_interval(relay_name: RelayName) -> int:
         ) from None
 
 
+def is_poller_enabled(relay_name: RelayName) -> bool:
+    """Check {RELAY}_POLLER_ENABLED, falling back to POLLER_ENABLED.
+
+    Defaults to True (polling is on unless explicitly disabled).
+    """
+    prefix = relay_name.upper()
+    val = os.environ.get(f"{prefix}_POLLER_ENABLED", "").strip().lower()
+    if not val:
+        val = os.environ.get("POLLER_ENABLED", "").strip().lower()
+    if not val:
+        return True
+    return val not in ("0", "false", "no")
+
+
 def is_listener_enabled(relay_name: RelayName) -> bool:
     """Check {RELAY}_LISTENER_ENABLED, falling back to LISTENER_ENABLED."""
     prefix = relay_name.upper()

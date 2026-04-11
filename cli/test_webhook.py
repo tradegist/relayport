@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 
 from cli.core import die, env, load_env
-from poller_models import BuySell, Trade, WebhookPayloadTrades
+from shared import BuySell, Trade, WebhookPayloadTrades
 
 SAMPLE_TRADES = [
     Trade(

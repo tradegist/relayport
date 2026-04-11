@@ -55,13 +55,13 @@ class TestAuthMiddleware(AioHTTPTestCase):
 
     @patch.dict(os.environ, {"API_TOKEN": _TEST_TOKEN})
     async def test_missing_auth_header(self) -> None:
-        resp = await self.client.request("POST", "/relays/ibkr/poll")
+        resp = await self.client.request("POST", "/relays/ibkr/poll/1")
         self.assertEqual(resp.status, 401)
 
     @patch.dict(os.environ, {"API_TOKEN": _TEST_TOKEN})
     async def test_invalid_token(self) -> None:
         resp = await self.client.request(
-            "POST", "/relays/ibkr/poll",
+            "POST", "/relays/ibkr/poll/1",
             headers={"Authorization": "Bearer wrong"},
         )
         self.assertEqual(resp.status, 401)
@@ -69,7 +69,7 @@ class TestAuthMiddleware(AioHTTPTestCase):
     @patch.dict(os.environ, {"API_TOKEN": _TEST_TOKEN})
     async def test_valid_token(self) -> None:
         resp = await self.client.request(
-            "POST", "/relays/ibkr/poll",
+            "POST", "/relays/ibkr/poll/1",
             headers={"Authorization": f"Bearer {_TEST_TOKEN}"},
         )
         # Should reach the handler (200 or other, not 401)
@@ -78,7 +78,7 @@ class TestAuthMiddleware(AioHTTPTestCase):
     @patch.dict(os.environ, {"API_TOKEN": ""})
     async def test_empty_api_token_rejects(self) -> None:
         resp = await self.client.request(
-            "POST", "/relays/ibkr/poll",
+            "POST", "/relays/ibkr/poll/1",
             headers={"Authorization": "Bearer "},
         )
         self.assertEqual(resp.status, 500)
@@ -117,7 +117,7 @@ class TestPollHandler(AioHTTPTestCase):
     async def test_poll_success_empty(self, mock_poll: MagicMock) -> None:
         mock_poll.return_value = []
         resp = await self.client.request(
-            "POST", "/relays/ibkr/poll",
+            "POST", "/relays/ibkr/poll/1",
             headers={"Authorization": f"Bearer {_TEST_TOKEN}"},
         )
         self.assertEqual(resp.status, 200)
@@ -128,7 +128,7 @@ class TestPollHandler(AioHTTPTestCase):
     @patch.dict(os.environ, {"API_TOKEN": _TEST_TOKEN})
     async def test_poll_unknown_relay(self) -> None:
         resp = await self.client.request(
-            "POST", "/relays/fake/poll",
+            "POST", "/relays/fake/poll/1",
             headers={"Authorization": f"Bearer {_TEST_TOKEN}"},
         )
         self.assertEqual(resp.status, 404)
@@ -140,7 +140,7 @@ class TestPollHandler(AioHTTPTestCase):
     async def test_poll_passes_replay(self, mock_poll: MagicMock) -> None:
         mock_poll.return_value = []
         resp = await self.client.request(
-            "POST", "/relays/ibkr/poll",
+            "POST", "/relays/ibkr/poll/1",
             headers={"Authorization": f"Bearer {_TEST_TOKEN}"},
             data=json.dumps({"replay": 5}),
         )
@@ -153,12 +153,22 @@ class TestPollHandler(AioHTTPTestCase):
     @patch("relay_core.routes.poll_once", side_effect=RuntimeError("boom"))
     async def test_poll_exception_returns_500(self, _mock: MagicMock) -> None:
         resp = await self.client.request(
-            "POST", "/relays/ibkr/poll",
+            "POST", "/relays/ibkr/poll/1",
             headers={"Authorization": f"Bearer {_TEST_TOKEN}"},
         )
         self.assertEqual(resp.status, 500)
         body = await resp.json()
         self.assertIn("boom", body["error"])
+
+    @patch.dict(os.environ, {"API_TOKEN": _TEST_TOKEN})
+    async def test_poll_idx_out_of_bounds(self) -> None:
+        resp = await self.client.request(
+            "POST", "/relays/ibkr/poll/99",
+            headers={"Authorization": f"Bearer {_TEST_TOKEN}"},
+        )
+        self.assertEqual(resp.status, 404)
+        body = await resp.json()
+        self.assertIn("not configured", body["error"].lower())
 
 
 class TestPollNoPollers(AioHTTPTestCase):
@@ -170,7 +180,7 @@ class TestPollNoPollers(AioHTTPTestCase):
     @patch.dict(os.environ, {"API_TOKEN": _TEST_TOKEN})
     async def test_poll_no_pollers(self) -> None:
         resp = await self.client.request(
-            "POST", "/relays/ibkr/poll",
+            "POST", "/relays/ibkr/poll/1",
             headers={"Authorization": f"Bearer {_TEST_TOKEN}"},
         )
         self.assertEqual(resp.status, 400)
@@ -208,7 +218,7 @@ class TestPollLockConflict(AioHTTPTestCase):
 
         try:
             resp = await self.client.request(
-                "POST", "/relays/ibkr/poll",
+                "POST", "/relays/ibkr/poll/1",
                 headers={"Authorization": f"Bearer {_TEST_TOKEN}"},
             )
             self.assertEqual(resp.status, 409)

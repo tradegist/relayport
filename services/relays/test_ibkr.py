@@ -119,11 +119,9 @@ class TestEnvVarGetters(unittest.TestCase):
     def test_flex_token(self) -> None:
         self.assertEqual(_get_flex_token(), "test-token")
 
-    def test_flex_token_missing_raises(self) -> None:
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("IBKR_FLEX_TOKEN", None)
-            with self.assertRaises(SystemExit):
-                _get_flex_token()
+    def test_flex_token_missing_returns_none(self) -> None:
+        with patch.dict(os.environ, {"IBKR_FLEX_TOKEN": ""}):
+            self.assertIsNone(_get_flex_token())
 
     def test_flex_query_id(self) -> None:
         self.assertEqual(_get_flex_query_id(), "123456")
@@ -314,6 +312,36 @@ class TestBuildPollerConfigs(unittest.TestCase):
             configs = _build_poller_configs()
             self.assertEqual(len(configs), 1)
 
+    def test_no_flex_creds_returns_empty(self) -> None:
+        """Listener-only mode: no Flex credentials → empty list."""
+        env = {
+            "IBKR_FLEX_TOKEN": "",
+            "IBKR_FLEX_QUERY_ID": "",
+        }
+        with patch.dict(os.environ, env):
+            configs = _build_poller_configs()
+        self.assertEqual(configs, [])
+
+    def test_poller_disabled_returns_empty(self) -> None:
+        """IBKR_POLLER_ENABLED=false → empty list even with creds."""
+        with patch.dict(os.environ, {"IBKR_POLLER_ENABLED": "false"}):
+            configs = _build_poller_configs()
+        self.assertEqual(configs, [])
+
+    def test_partial_config_raises(self) -> None:
+        """Token without query ID → SystemExit."""
+        env = {"IBKR_FLEX_TOKEN": "tok", "IBKR_FLEX_QUERY_ID": ""}
+        with patch.dict(os.environ, env), self.assertRaises(SystemExit) as cm:
+            _build_poller_configs()
+        self.assertIn("IBKR_FLEX_QUERY_ID", str(cm.exception))
+
+    def test_partial_config_reverse_raises(self) -> None:
+        """Query ID without token → SystemExit."""
+        env = {"IBKR_FLEX_TOKEN": "", "IBKR_FLEX_QUERY_ID": "123"}
+        with patch.dict(os.environ, env), self.assertRaises(SystemExit) as cm:
+            _build_poller_configs()
+        self.assertIn("IBKR_FLEX_TOKEN", str(cm.exception))
+
 
 # ── build_relay integration test ─────────────────────────────────────
 
@@ -334,3 +362,24 @@ class TestBuildRelay(unittest.TestCase):
         with patch.dict(os.environ, {"IBKR_LISTENER_ENABLED": "false"}):
             relay = build_relay(notifiers=[])
         self.assertIsNone(relay.listener_config)
+
+    def test_no_poller_no_listener_raises(self) -> None:
+        """Neither poller nor listener configured → SystemExit."""
+        env = {
+            "IBKR_POLLER_ENABLED": "false",
+            "IBKR_LISTENER_ENABLED": "false",
+        }
+        with patch.dict(os.environ, env), self.assertRaises(SystemExit) as cm:
+            build_relay(notifiers=[])
+        self.assertIn("neither poller nor listener", str(cm.exception))
+
+    def test_listener_only_mode(self) -> None:
+        """Poller disabled + listener enabled → works, no poller configs."""
+        env = {
+            "IBKR_POLLER_ENABLED": "false",
+            "IBKR_LISTENER_ENABLED": "true",
+        }
+        with patch.dict(os.environ, env):
+            relay = build_relay(notifiers=[])
+        self.assertEqual(relay.poller_configs, [])
+        self.assertIsNotNone(relay.listener_config)

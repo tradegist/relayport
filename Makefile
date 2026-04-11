@@ -41,11 +41,8 @@ sync: ## Push .env + restart (S=service B=1 LOCAL_FILES=1 SKIP_E2E=1 ENV=local)
 		$(PYTHON) -m cli sync $(S) $(if $(LOCAL_FILES),--local-files) $(if $(B),--build) $(if $(SKIP_E2E),--skip-e2e); \
 	fi
 
-poll: ## Trigger an immediate Flex poll (V=1 verbose, DEBUG=1 raw XML, REPLAY=N resend, ENV=local)
-	$(CLI_RELAY_ENV) $(PYTHON) -m cli poll $(if $(V),-v) $(if $(DEBUG),--debug) $(if $(REPLAY),--replay $(REPLAY))
-
-poll2: ## Trigger an immediate Flex poll (second poller, ENV=local)
-	$(CLI_RELAY_ENV) $(PYTHON) -m cli poll 2 $(if $(V),-v) $(if $(DEBUG),--debug) $(if $(REPLAY),--replay $(REPLAY))
+poll: ## Trigger an immediate poll (RELAY=ibkr, IDX=1, V=1 verbose, DEBUG=1 raw XML, REPLAY=N resend)
+	$(CLI_RELAY_ENV) $(PYTHON) -m cli poll $(or $(RELAY),ibkr) $(or $(IDX),1) $(if $(V),-v) $(if $(DEBUG),--debug) $(if $(REPLAY),--replay $(REPLAY))
 
 test-webhook: ## Send sample trades to webhook endpoint (make test-webhook [S=2] [ENV=local])
 	$(CLI_RELAY_ENV) $(PYTHON) -m cli test-webhook $(S)

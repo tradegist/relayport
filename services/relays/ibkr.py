@@ -21,6 +21,7 @@ from relay_core import (
     get_debounce_ms,
     get_poll_interval,
     is_listener_enabled,
+    is_poller_enabled,
 )
 from shared import BuySell, Fill, Source, normalize_asset_class
 
@@ -29,20 +30,14 @@ log = logging.getLogger("relays.ibkr")
 
 # ── Env var getters (IBKR-specific) ─────────────────────────────────
 
-def _get_flex_token(suffix: str = "") -> str:
+def _get_flex_token(suffix: str = "") -> str | None:
     key = f"IBKR_FLEX_TOKEN{suffix}"
-    val = os.environ.get(key, "").strip()
-    if not val:
-        raise SystemExit(f"{key} must be set")
-    return val
+    return os.environ.get(key, "").strip() or None
 
 
-def _get_flex_query_id(suffix: str = "") -> str:
+def _get_flex_query_id(suffix: str = "") -> str | None:
     key = f"IBKR_FLEX_QUERY_ID{suffix}"
-    val = os.environ.get(key, "").strip()
-    if not val:
-        raise SystemExit(f"{key} must be set")
-    return val
+    return os.environ.get(key, "").strip() or None
 
 
 def _get_bridge_ws_url() -> str:
@@ -91,20 +86,33 @@ def _build_poller_configs() -> list[PollerConfig]:
     """Build PollerConfig(s) from env vars.
 
     Detects IBKR_FLEX_QUERY_ID_2 etc. for multi-account support.
+    Returns an empty list when polling is disabled or no Flex
+    credentials are configured (listener-only mode).
     """
+    if not is_poller_enabled("ibkr"):
+        return []
+
     configs: list[PollerConfig] = []
     interval = get_poll_interval("ibkr")
 
-    # Primary poller (always present when IBKR is in RELAYS)
-    configs.append(PollerConfig(
-        fetch=_build_fetch(_get_flex_token(), _get_flex_query_id()),
-        parse=parse_fills,
-        interval=interval,
-    ))
+    # Primary poller — optional (both must be set, or both unset)
+    token = _get_flex_token()
+    query_id = _get_flex_query_id()
+    if token and query_id:
+        configs.append(PollerConfig(
+            fetch=_build_fetch(token, query_id),
+            parse=parse_fills,
+            interval=interval,
+        ))
+    elif token or query_id:
+        missing = "IBKR_FLEX_QUERY_ID" if token else "IBKR_FLEX_TOKEN"
+        raise SystemExit(
+            f"IBKR poller partially configured — {missing} must be set"
+        )
 
     # Secondary poller (_2 suffix) — optional
-    token_2 = os.environ.get("IBKR_FLEX_TOKEN_2", "").strip()
-    query_2 = os.environ.get("IBKR_FLEX_QUERY_ID_2", "").strip()
+    token_2 = _get_flex_token("_2")
+    query_2 = _get_flex_query_id("_2")
     if token_2 and query_2:
         configs.append(PollerConfig(
             fetch=_build_fetch(token_2, query_2),
@@ -247,9 +255,24 @@ def _build_listener_config() -> ListenerConfig | None:
 
 def build_relay(notifiers: list[BaseNotifier]) -> BrokerRelay:
     """Build a fully configured IBKR relay instance."""
+    poller_configs = _build_poller_configs()
+    listener_config = _build_listener_config()
+
+    if not poller_configs and listener_config is None:
+        raise SystemExit(
+            "IBKR relay has neither poller nor listener configured. "
+            "Set IBKR_FLEX_TOKEN + IBKR_FLEX_QUERY_ID for polling, "
+            "or IBKR_LISTENER_ENABLED=true for real-time events."
+        )
+
+    if not poller_configs:
+        log.info("IBKR: listener-only mode (no Flex credentials)")
+    if listener_config is None:
+        log.info("IBKR: poller-only mode (listener disabled)")
+
     return BrokerRelay(
         name="ibkr",
         notifiers=notifiers,
-        poller_configs=_build_poller_configs(),
-        listener_config=_build_listener_config(),
+        poller_configs=poller_configs,
+        listener_config=listener_config,
     )

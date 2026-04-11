@@ -5,7 +5,7 @@ import unittest
 from typing import cast
 from unittest.mock import patch
 
-from relay_core import get_debounce_ms, get_poll_interval, is_listener_enabled
+from relay_core import get_debounce_ms, get_poll_interval, is_listener_enabled, is_poller_enabled
 from shared import RelayName
 
 # Fake relay name to test generic prefix logic (not a real relay).
@@ -42,6 +42,41 @@ class TestGetPollInterval(unittest.TestCase):
     def test_uppercases_relay_name(self) -> None:
         with patch.dict(os.environ, {"IBKR_POLL_INTERVAL": "90"}, clear=True):
             self.assertEqual(get_poll_interval("ibkr"), 90)
+
+
+class TestIsPollerEnabled(unittest.TestCase):
+    """Test is_poller_enabled with relay-specific and generic fallback."""
+
+    def test_defaults_to_true(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(is_poller_enabled(_FOO))
+
+    def test_relay_specific_false(self) -> None:
+        with patch.dict(os.environ, {"FOO_POLLER_ENABLED": "false"}, clear=True):
+            self.assertFalse(is_poller_enabled(_FOO))
+
+    def test_relay_specific_true(self) -> None:
+        with patch.dict(os.environ, {"FOO_POLLER_ENABLED": "true"}, clear=True):
+            self.assertTrue(is_poller_enabled(_FOO))
+
+    def test_falls_back_to_generic(self) -> None:
+        with patch.dict(os.environ, {"POLLER_ENABLED": "false"}, clear=True):
+            self.assertFalse(is_poller_enabled(_FOO))
+
+    def test_relay_specific_takes_precedence(self) -> None:
+        with patch.dict(os.environ, {
+            "FOO_POLLER_ENABLED": "true",
+            "POLLER_ENABLED": "false",
+        }, clear=True):
+            self.assertTrue(is_poller_enabled(_FOO))
+
+    def test_zero_is_false(self) -> None:
+        with patch.dict(os.environ, {"FOO_POLLER_ENABLED": "0"}, clear=True):
+            self.assertFalse(is_poller_enabled(_FOO))
+
+    def test_no_is_false(self) -> None:
+        with patch.dict(os.environ, {"FOO_POLLER_ENABLED": "no"}, clear=True):
+            self.assertFalse(is_poller_enabled(_FOO))
 
 
 class TestIsListenerEnabled(unittest.TestCase):
