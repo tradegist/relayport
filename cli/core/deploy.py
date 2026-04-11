@@ -33,9 +33,15 @@ def _deploy_standalone():
 
     _run_checks(skip_e2e=True)
 
-    # Export TF_VAR_* for Terraform
+    # Export TF_VAR_* for Terraform only when a source env var is present.
+    # Leaving TF_VAR_* unset allows Terraform variable defaults/validation to work.
     for tf_name, env_key in cfg.terraform_vars.items():
-        os.environ[f"TF_VAR_{tf_name}"] = env(env_key, "")
+        tf_var_key = f"TF_VAR_{tf_name}"
+        env_value = os.environ.get(env_key)
+        if env_value:
+            os.environ[tf_var_key] = env_value
+        else:
+            os.environ.pop(tf_var_key, None)
 
     terraform("init", "-input=false")
     terraform("apply", "-auto-approve", "-input=false")

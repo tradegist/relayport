@@ -138,8 +138,7 @@ e2e-up: ## Start E2E test stack (poller + ibkr-debug)
 	fi
 
 e2e-down: ## Stop and remove E2E test stack
-	@test -f $(E2E_ENV) || { echo "ERROR: $(E2E_ENV) not found — nothing to tear down"; exit 1; }
-	$(E2E_COMPOSE) down
+	docker compose -p $(PROJECT)-test down
 
 e2e-run: ## Run E2E tests (stack must be up)
 	@$(E2E_COMPOSE) restart poller ibkr-debug > /dev/null 2>&1 && sleep 3
