@@ -3,7 +3,6 @@
 import importlib
 import os
 import unittest
-from collections.abc import Callable
 from unittest.mock import MagicMock, patch
 
 from relay_core import BrokerRelay
@@ -105,8 +104,8 @@ class TestAdapterContract(unittest.TestCase):
                     build_fn,
                     f"relays.{name} does not export build_relay()",
                 )
-                self.assertIsInstance(
-                    build_fn, Callable,  # type: ignore[arg-type]
+                self.assertTrue(
+                    callable(build_fn),
                     f"relays.{name}.build_relay is not callable",
                 )
 

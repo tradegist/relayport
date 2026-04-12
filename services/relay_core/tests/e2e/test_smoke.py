@@ -10,5 +10,5 @@ def test_health_ok(api: httpx.Client) -> None:
 
 
 def test_auth_required(anon_api: httpx.Client) -> None:
-    resp = anon_api.post("/relays/ibkr/poll/0")
+    resp = anon_api.post("/relays/ibkr/poll/1")
     assert resp.status_code == 401

@@ -69,7 +69,7 @@ types: typecheck ## Regenerate TypeScript + Python types from Pydantic models
 	$(PYTHON) gen_python_types.py
 
 test: ## Run unit tests
-	PYTHONPATH=.:services:services/debug $(PYTHON) -m pytest -v
+	PYTHONPATH=.:services:services/relay_core:services/debug $(PYTHON) -m pytest -v
 
 typecheck: ## Run mypy strict type checking
 	MYPYPATH=services/relay_core:services $(PYTHON) -m mypy services/relay_core/relay_models.py cli/test_webhook.py

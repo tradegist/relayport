@@ -263,22 +263,8 @@ class TestPollLockConflict(AioHTTPTestCase):
 
     @patch.dict(os.environ, {"API_TOKEN": _TEST_TOKEN})
     @patch("relay_core.routes.poll_once")
-    async def test_concurrent_poll_returns_409(self, mock_poll: MagicMock) -> None:
-        # Simulate a long-running poll by making poll_once block
-        started = asyncio.Event()
-        release = asyncio.Event()
-
-        async def slow_poll(**_kwargs: object) -> list[object]:
-            started.set()
-            await release.wait()
-            return []
-
-        mock_poll.side_effect = lambda **kw: asyncio.get_event_loop().run_until_complete(
-            slow_poll(**kw)
-        )
-
-        # Actually, in aiohttp test context with asyncio.to_thread, we need a
-        # different approach. Lock the poll_lock manually before the request.
+    async def test_concurrent_poll_returns_409(self, _mock_poll: MagicMock) -> None:
+        # Lock the poll_lock manually to simulate a poll already in progress.
         relays: dict[str, BrokerRelay] = self.app[_RELAYS_KEY]
         relay = relays["ibkr"]
         await relay.poll_locks[0].acquire()
