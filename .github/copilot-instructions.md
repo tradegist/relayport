@@ -297,6 +297,8 @@ The `services/relay_core/` service is the main Docker container. It provides the
 services/relay_core/
   main.py                  # Entrypoint — loads relays, starts pollers + listeners + API
   __init__.py              # BrokerRelay dataclass, re-exports engine types (PollerConfig, ListenerConfig, etc.)
+  context.py               # Relay context singleton: init_relays(), get_relay(), get_relays()
+  env.py                   # Shared env var helpers: get_env(), get_env_int() with prefix/suffix fallback
   registry.py              # Relay registry — loads adapters from RELAYS env var
   poller_engine.py         # Generic poller: init_dedup_db, init_meta_db, poll_once, prune_old
   listener_engine.py       # Generic WS listener: connect, dedup, notify, reconnect with backoff
@@ -316,11 +318,13 @@ services/relay_core/
   requirements.txt
 ```
 
-- **`services/relay_core/main.py`** reads `RELAYS`, loads adapters via the registry, starts the HTTP API, then spawns a poll loop per `PollerConfig` and a WS listener per relay (if configured). When `RELAYS` is empty, the API server starts alone (for health checks).
-- **`services/relay_core/poller_engine.py`** provides `poll_once()` — the generic polling function. It calls the broker adapter's `fetch_fn` and `parse_fn` callbacks, handles dedup, aggregation, notify, and mark. Broker-specific logic (Flex fetch, XML parsing) lives in the relay adapter.
-- **`services/relay_core/listener_engine.py`** provides `start_listener()` — the generic WS listener. Connects to a broker bridge's WebSocket, dispatches events to the adapter's `on_message` callback, handles dedup + notify + mark, and auto-reconnects with exponential backoff.
+- **`services/relay_core/main.py`** reads `RELAYS`, loads adapters via the registry, initialises the relay context (`init_relays()`), starts the HTTP API, then spawns a poll loop per `PollerConfig` and a WS listener per relay (if configured). When `RELAYS` is empty, the API server starts alone (for health checks).
+- **`services/relay_core/context.py`** provides the relay context singleton. `init_relays(relays)` is called once at startup by `amain()`, then `get_relay(name)` and `get_relays()` are available anywhere to access relay config (notifiers, retry config, poller/listener configs) without parameter threading. `_reset()` is exposed for test teardown. Uses `TYPE_CHECKING` guard for `BrokerRelay` import to avoid circular import with `__init__.py`.
+- **`services/relay_core/poller_engine.py`** provides `poll_once(relay_name, poller_index)` — the generic polling function. Resolves `PollerConfig`, notifiers, and retry config from the relay context. Handles dedup, aggregation, notify, and mark. Broker-specific logic (Flex fetch, XML parsing) lives in the relay adapter.
+- **`services/relay_core/listener_engine.py`** provides `start_listener(relay_name)` — the generic WS listener. Resolves `ListenerConfig`, notifiers, and retry config from the relay context. Connects to a broker bridge's WebSocket, dispatches events to the adapter's `on_message` callback, handles dedup + notify + mark, and auto-reconnects with exponential backoff.
 - **`services/relay_core/relay_models.py`** is a re-export shim for shared models plus relay-specific API types (`RunPollResponse`, `HealthResponse`). Listed in `schema_gen.py:SCHEMA_MODELS`.
 - **`services/relay_core/routes/__init__.py`** provides `GET /health` (unauthenticated) and `POST /relays/{relay_name}/poll/{poll_idx}` (authenticated, 1-based index).
+- **`services/relay_core/env.py`** provides `get_env(var, prefix, suffix, default)` and `get_env_int(var, prefix, suffix, default)` — shared helpers for reading env vars with relay-specific prefix fallback. Resolution order: `{prefix}{var}{suffix}` → `{var}{suffix}` → `default`. All relay-core env var readers (`get_poll_interval`, `get_debounce_ms`, `load_retry_config`, notifier env loading) use these helpers. When adding new env var readers, use `get_env` / `get_env_int` from `relay_core.env` instead of writing inline `os.environ.get()` with manual fallback logic.
 
 ## Relay Adapter Structure
 
@@ -359,7 +363,7 @@ services/relay_core/notifier/
 - **Validation belongs in each notifier's `__init__`, not the coordinator.** The coordinator (`__init__.py`) is a registry + dispatcher — it must not contain backend-specific validation logic. Each `BaseNotifier` subclass validates its own env vars in its constructor and raises `SystemExit` on misconfiguration.
 - **`validate_notifier_env()`** is called by `cli/__init__.py` during pre-deploy checks. It instantiates each configured backend (triggering constructor validation) and converts `SystemExit` to a `die()` call for CLI-friendly output.
 - **Adding a new backend** — create `services/relay_core/notifier/<name>.py` with a class extending `BaseNotifier`, add it to `REGISTRY` in `__init__.py`. The constructor must validate all required env vars.
-- **The relay engines call `notify(notifiers, payload)`** — notifiers are loaded once at startup and passed through. The engines have no direct knowledge of webhook delivery mechanics.
+- **The relay engines resolve notifiers from the relay context** — notifiers are loaded once at startup per relay, stored on `BrokerRelay`, and accessed via `get_relay(name).notifiers`. The engines have no direct knowledge of webhook delivery mechanics.
 - **Debug webhook URL resolution** — `WebhookNotifier.__init__` calls `_resolve_webhook_url()`. If `DEBUG_WEBHOOK_PATH` is set, the URL is overridden to `http://debug:9000/debug/webhook/{path}` (container-to-container DNS). Otherwise, it reads `TARGET_WEBHOOK_URL`. No env var mutation occurs — the resolved URL is stored in `self._url`.
 
 ## Debug Webhook Service
