@@ -187,7 +187,7 @@ Use the existing `ibkr` and `kraken` relays as reference implementations. IBKR d
    - Use `{RELAY}_` prefix for all relay-specific vars (e.g. `KRAKEN_API_KEY`).
    - Use `relay_core.env.get_env()` / `get_env_int()` for vars that support prefix fallback.
    - Use direct `os.environ.get()` wrapped in getter functions for broker-specific vars with no generic equivalent.
-   - Add the vars to `.env.relays` and document in the README.
+   - Add the vars to `env_examples/env.relays` (the template file) — this is **mandatory**. Follow the existing relay sections as a model: uncomment required vars, comment out optional ones with their defaults. Document in the README.
 
 5. **Register the module**:
    - `pyproject.toml`: add to `tool.pytest.ini_options.testpaths`, `tool.ruff.src`, `tool.ruff.lint.isort.known-first-party`.

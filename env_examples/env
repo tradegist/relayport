@@ -40,6 +40,10 @@ WEBHOOK_SECRET=your_hmac_secret_key
 # Comma-separated list of relay adapters to activate (e.g. "ibkr").
 RELAYS=ibkr
 
+# Set to false to disable the poller globally (relay-specific override: {RELAY}_POLLER_ENABLED).
+# Default: enabled. Useful when you only want the real-time listener.
+#POLLER_ENABLED=true
+
 # Poll interval in seconds (relay-specific override: IBKR_POLL_INTERVAL).
 POLL_INTERVAL=600
 

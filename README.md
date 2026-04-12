@@ -308,6 +308,7 @@ Configuration is split across three environment files. Templates are in `env_exa
 | `TARGET_WEBHOOK_URL`           | No       | —                  | Webhook endpoint (empty = log-only dry-run)                                                                     |
 | `WEBHOOK_SECRET`               | No       | —                  | HMAC-SHA256 key for signing payloads (required if NOTIFIERS=webhook)                                            |
 | `POLL_INTERVAL`                | No       | `600`              | Flex poll interval (seconds)                                                                                    |
+| `POLLER_ENABLED`               | No       | `true`             | Set to `false` to disable the poller globally (relay override: `{RELAY}_POLLER_ENABLED`)                        |
 | `LISTENER_ENABLED`             | No       | —                  | Set to `true` to enable real-time WS listener (requires ibkr_bridge)                                            |
 | `LISTENER_DEBOUNCE_MS`         | No       | `0`                | Milliseconds to buffer fills before flushing                                                                    |
 | `IBKR_LISTENER_EXEC_EVENTS_ENABLED` | No       | `false`            | Enable `execDetailsEvent` webhooks (2x volume, lower latency)                                                   |
@@ -338,13 +339,19 @@ Configuration is split across three environment files. Templates are in `env_exa
 | `IBKR_TARGET_WEBHOOK_URL` | No       | Override `TARGET_WEBHOOK_URL` for IBKR relay only                 |
 | `IBKR_WEBHOOK_SECRET`     | No       | Override `WEBHOOK_SECRET` for IBKR relay only                     |
 | `IBKR_POLL_INTERVAL`      | No       | Override `POLL_INTERVAL` for IBKR relay only                      |
-| **Kraken**                |          |                                                                   |
-| `KRAKEN_API_KEY`          | Yes\*    | Kraken API key (required when `kraken` is in `RELAYS`)            |
-| `KRAKEN_API_SECRET`       | Yes\*    | Kraken API secret, base64-encoded (required with API key)         |
-| `KRAKEN_NOTIFIERS`        | No       | Override `NOTIFIERS` for Kraken relay only                        |
-| `KRAKEN_TARGET_WEBHOOK_URL` | No     | Override `TARGET_WEBHOOK_URL` for Kraken relay only               |
-| `KRAKEN_WEBHOOK_SECRET`   | No       | Override `WEBHOOK_SECRET` for Kraken relay only                   |
-| `KRAKEN_POLL_INTERVAL`    | No       | Override `POLL_INTERVAL` for Kraken relay only                    |
+| `IBKR_POLLER_ENABLED`     | No       | Override `POLLER_ENABLED` for IBKR relay only                     |
+| **Kraken**                    |          |                                                                   |
+| `KRAKEN_API_KEY`              | Yes\*    | Kraken API key (required when `kraken` is in `RELAYS`)            |
+| `KRAKEN_API_SECRET`           | Yes\*    | Kraken API secret, base64-encoded (required with API key)         |
+| `KRAKEN_LISTENER_ENABLED`     | No       | Enable WS v2 real-time listener (default: `false`)                |
+| `KRAKEN_LISTENER_DEBOUNCE_MS` | No       | Buffer fills N ms before dispatching webhook (default: `0`)       |
+| `KRAKEN_POLL_INTERVAL`        | No       | Override `POLL_INTERVAL` for Kraken relay only                    |
+| `KRAKEN_POLLER_ENABLED`       | No       | Override `POLLER_ENABLED` for Kraken relay only                   |
+| `KRAKEN_NOTIFIERS`            | No       | Override `NOTIFIERS` for Kraken relay only                        |
+| `KRAKEN_TARGET_WEBHOOK_URL`   | No       | Override `TARGET_WEBHOOK_URL` for Kraken relay only               |
+| `KRAKEN_WEBHOOK_SECRET`       | No       | Override `WEBHOOK_SECRET` for Kraken relay only                   |
+| `KRAKEN_NOTIFY_RETRIES`       | No       | Override `NOTIFY_RETRIES` for Kraken relay only                   |
+| `KRAKEN_NOTIFY_RETRY_DELAY_MS`| No       | Override `NOTIFY_RETRY_DELAY_MS` for Kraken relay only            |
 
 Adding a new relay's vars requires no compose changes — just add prefixed vars to `.env.relays`.
 
