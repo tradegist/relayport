@@ -49,7 +49,7 @@ sync: ## Push .env + restart (S=service B=1 LOCAL_FILES=1 SKIP_E2E=1 ENV=local)
 	env="$${RELAY_ENV:-$${DEFAULT_CLI_RELAY_ENV:-prod}}"; \
 	[ -n "$(ENV)" ] && env="$(ENV)"; \
 	if [ "$$env" = "local" ]; then \
-		$(LOCAL_COMPOSE) restart; \
+		$(LOCAL_COMPOSE) up -d; \
 	else \
 		$(PYTHON) -m cli sync $(S) $(if $(LOCAL_FILES),--local-files) $(if $(B),--build) $(if $(SKIP_E2E),--skip-e2e); \
 	fi
