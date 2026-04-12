@@ -1,4 +1,4 @@
-"""Smoke tests — verify the poller stack is up and auth is enforced."""
+"""Smoke tests — verify the relay stack is up and auth is enforced."""
 
 import httpx
 
@@ -9,6 +9,6 @@ def test_health_ok(api: httpx.Client) -> None:
     assert resp.json()["status"] == "ok"
 
 
-def test_run_poll_requires_auth(anon_api: httpx.Client) -> None:
-    resp = anon_api.post("/ibkr/poller/run")
+def test_auth_required(anon_api: httpx.Client) -> None:
+    resp = anon_api.post("/relays/ibkr/poll/0")
     assert resp.status_code == 401

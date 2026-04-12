@@ -18,6 +18,8 @@ import pytest
 
 from relay_core.tests.e2e.conftest import DEBUG_INBOX_PATH
 
+pytestmark = pytest.mark.usefixtures("_bridge_preflight")
+
 _E2E_COMPOSE = (
     "docker compose -f docker-compose.yml -f docker-compose.test.yml "
     "-p broker-relay-test --env-file .env.test"
@@ -38,8 +40,8 @@ def _get_listener_logs() -> str:
 def test_listener_ws_connected() -> None:
     """Verify the listener connects to the bridge WS endpoint."""
     logs = _get_listener_logs()
-    assert "Connected to bridge WS" in logs, (
-        "Listener did not connect to bridge WS. Logs:\n" + logs[-2000:]
+    assert "Connected to WS" in logs, (
+        "Listener did not connect to WS. Logs:\n" + logs[-2000:]
     )
 
 

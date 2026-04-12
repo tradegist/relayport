@@ -70,7 +70,7 @@ typecheck: ## Run mypy strict type checking
 	$(PYTHON) -m mypy types/python/broker_relay_types/
 
 lint: ## Run ruff linter (use FIX=1 to auto-fix)
-	$(PYTHON) -m ruff check services/notifier/ services/dedup/ services/shared/ services/listener/ services/relay_core/ services/relays/ services/debug/ cli/ schema_gen.py gen_python_types.py types/python/broker_relay_types/ $(if $(FIX),--fix)
+	$(PYTHON) -m ruff check services/notifier/ services/dedup/ services/shared/ services/relay_core/ services/relays/ services/debug/ cli/ schema_gen.py gen_python_types.py types/python/broker_relay_types/ $(if $(FIX),--fix)
 	@if grep -rn '__all__' services/ types/ cli/ --include='*.py'; then echo "ERROR: __all__ is banned — use explicit re-exports"; exit 1; fi
 
 local-up: ## Start full stack locally (no TLS, direct port access)
@@ -119,7 +119,7 @@ e2e-down: ## Stop and remove E2E test stack
 
 e2e-run: ## Run E2E tests (stack must be up)
 	@$(E2E_COMPOSE) restart relays debug > /dev/null 2>&1 && sleep 3
-	$(PYTHON) -m pytest services/listener/tests/e2e/ -v
+	$(PYTHON) -m pytest services/relay_core/tests/e2e/ -v
 
 e2e: ## Run E2E tests (starts/stops stack automatically)
 	@test -f $(E2E_ENV) || { echo "ERROR: $(E2E_ENV) not found — run: cp .env.test.example .env.test (placeholder values are fine)"; exit 1; }

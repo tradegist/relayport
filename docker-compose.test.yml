@@ -26,7 +26,6 @@ services:
       - ./services/notifier:/app/notifier
       - ./services/dedup:/app/dedup
       - ./services/shared:/app/shared
-      - ./services/listener:/app/listener
     healthcheck:
       test:
         [

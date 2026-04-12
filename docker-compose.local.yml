@@ -13,7 +13,6 @@ services:
       - ./services/notifier:/app/notifier:ro
       - ./services/dedup:/app/dedup:ro
       - ./services/shared:/app/shared:ro
-      - ./services/listener:/app/listener:ro
 
   debug:
     ports:

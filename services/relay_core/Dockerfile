@@ -10,6 +10,5 @@ COPY services/relays/ ./relays/
 COPY services/notifier/ ./notifier/
 COPY services/dedup/ ./dedup/
 COPY services/shared/ ./shared/
-COPY services/listener/ ./listener/
 
 CMD ["python", "-u", "-m", "relay_core.main"]

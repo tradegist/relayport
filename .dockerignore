@@ -23,10 +23,6 @@ services/dedup/**/__pycache__/
 services/shared/**/test_*.py
 services/shared/**/__pycache__/
 
-!services/listener/**
-services/listener/**/test_*.py
-services/listener/**/__pycache__/
-
 !services/debug/**
 services/debug/Dockerfile
 services/debug/**/test_*.py

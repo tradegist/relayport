@@ -1,11 +1,9 @@
-"""E2E test fixtures — listener tests against a local ibkr_bridge stack.
+"""E2E test fixtures for the broker-relay test stack.
 
-These tests require:
-1. ibkr_bridge running locally (make local-up in ibkr_bridge)
-2. BRIDGE_API_TOKEN set in .env.test (must match bridge's API_TOKEN)
-3. broker-relay E2E stack running (make e2e-up)
+Smoke tests (health, auth) run unconditionally — they only need the relay stack.
+Listener tests require an ibkr_bridge running locally and skip otherwise.
 
-Tests SKIP (not fail) when the bridge is unavailable or unconfigured.
+Stack must be up: make e2e-up
 """
 
 import os
@@ -14,6 +12,9 @@ from pathlib import Path
 
 import httpx
 import pytest
+
+BASE_URL = "http://localhost:15011"
+API_TOKEN = "test-token"
 
 
 def _load_env_test() -> None:
@@ -40,9 +41,60 @@ DEBUG_INBOX_BASE = "http://localhost:15012"
 DEBUG_INBOX_PATH = "/debug/webhook/test-debug-path"
 
 
+# ---------------------------------------------------------------------------
+# Stack preflight — fail fast if the relay stack is unreachable.
+# autouse=True means pytest runs this fixture automatically for every test
+# in this directory, without tests needing to request it explicitly.
+# ---------------------------------------------------------------------------
+
 @pytest.fixture(scope="session", autouse=True)
+def _stack_preflight() -> None:
+    """Abort the entire E2E run if the relay stack is not reachable."""
+    try:
+        resp = httpx.get(f"{BASE_URL}/health", timeout=5.0)
+    except httpx.HTTPError:
+        pytest.exit(
+            f"Relay stack is not reachable at {BASE_URL}. "
+            "Is the E2E stack running? (make e2e-up)",
+            returncode=1,
+        )
+    if resp.status_code != 200:
+        pytest.exit(
+            f"Relay /health returned {resp.status_code}. "
+            "Stack may not be ready yet.",
+            returncode=1,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Smoke test fixtures (always available)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def api() -> Iterator[httpx.Client]:
+    """Shared httpx client with auth header."""
+    with httpx.Client(
+        base_url=BASE_URL,
+        headers={"Authorization": f"Bearer {API_TOKEN}"},
+        timeout=15.0,
+    ) as client:
+        yield client
+
+
+@pytest.fixture(scope="session")
+def anon_api() -> Iterator[httpx.Client]:
+    """Httpx client without auth — for testing 401 responses."""
+    with httpx.Client(base_url=BASE_URL, timeout=15.0) as client:
+        yield client
+
+
+# ---------------------------------------------------------------------------
+# Listener/bridge fixtures (skip when bridge is unavailable)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
 def _bridge_preflight() -> None:
-    """Skip all listener E2E tests if the bridge is not reachable."""
+    """Skip listener tests if the bridge is not reachable."""
     if not LISTENER_ENABLED:
         pytest.skip(
             "LISTENER_ENABLED is not set — "
@@ -72,7 +124,7 @@ def _bridge_preflight() -> None:
 
 
 @pytest.fixture(scope="session")
-def bridge_api() -> Iterator[httpx.Client]:
+def bridge_api(_bridge_preflight: None) -> Iterator[httpx.Client]:
     """httpx client pointed at the local ibkr_bridge API."""
     with httpx.Client(
         base_url=BRIDGE_BASE_URL,
@@ -83,7 +135,7 @@ def bridge_api() -> Iterator[httpx.Client]:
 
 
 @pytest.fixture(scope="session")
-def debug_api() -> Iterator[httpx.Client]:
+def debug_api(_bridge_preflight: None) -> Iterator[httpx.Client]:
     """httpx client pointed at the debug webhook inbox."""
     with httpx.Client(
         base_url=DEBUG_INBOX_BASE,
