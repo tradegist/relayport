@@ -42,7 +42,7 @@ class KrakenClient:
 
     def _request(self, urlpath: str, extra_data: dict[str, Any] | None = None) -> dict[str, Any]:
         """Make an authenticated POST request to a private Kraken endpoint."""
-        nonce = int(time.time() * 1000)
+        nonce = int(time.time() * 1_000_000)
         data: dict[str, Any] = {"nonce": nonce}
         if extra_data:
             data.update(extra_data)
