@@ -6,10 +6,7 @@
  */
 
 export type TypesSchema = RunPollResponse | HealthResponse;
-export type AssetClass = "crypto" | "equity" | "forex" | "future" | "option" | "other";
 export type BuySell = "buy" | "sell";
-export type OrderType = "limit" | "market" | "stop" | "stop_limit" | "trailing_stop";
-export type Source = "commissionReportEvent" | "execDetailsEvent" | "flex";
 
 export interface RunPollResponse {
   trades: Trade[];
@@ -20,9 +17,9 @@ export interface RunPollResponse {
 export interface Trade {
   orderId: string;
   symbol: string;
-  assetClass: AssetClass;
+  assetClass: "equity" | "option" | "crypto" | "future" | "forex" | "other";
   side: BuySell;
-  orderType?: OrderType | null;
+  orderType?: ("market" | "limit" | "stop" | "stop_limit" | "trailing_stop") | null;
   price: number;
   volume: number;
   cost: number;
@@ -30,7 +27,7 @@ export interface Trade {
   fillCount: number;
   execIds: string[];
   timestamp: string;
-  source: Source;
+  source: "flex" | "execDetailsEvent" | "commissionReportEvent";
   raw: {
     [k: string]: unknown;
   };

@@ -1,16 +1,16 @@
-"""ibkr-relay-types — Pydantic models for IBKR Webhook Relay.
+"""broker-relay-types — Pydantic models for Broker Relay.
 
 Two modules:
   - shared: CommonFill models (Fill, Trade, WebhookPayload, etc.)
-  - poller: Poller-specific API types (RunPollResponse, HealthResponse)
+  - relay_api: Relay API types (RunPollResponse, HealthResponse)
 
 Run ``make types`` to regenerate the generated type modules.
 """
 
-from .poller import (
+from .relay_api import (
     HealthResponse as HealthResponse,
 )
-from .poller import (
+from .relay_api import (
     RunPollResponse as RunPollResponse,
 )
 from .shared import (
