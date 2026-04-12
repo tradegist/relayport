@@ -13,6 +13,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
+RelayName = Literal["ibkr"]
+"""Allowed relay identifiers — single source of truth.
+
+Used to validate RELAYS env var, discriminate webhook payloads, and
+namespace dedup/metadata DB keys. Add new brokers here.
+"""
+
 AssetClass = Literal["equity", "option", "crypto", "future", "forex", "other"]
 
 OrderType = Literal["market", "limit", "stop", "stop_limit", "trailing_stop"]
@@ -81,7 +88,7 @@ class WebhookPayloadTrades(BaseModel):
 
     model_config = ConfigDict(extra="forbid", json_schema_extra=_require_discriminators)
 
-    relay: Literal["ibkr"] = "ibkr"
+    relay: RelayName
     type: Literal["trades"] = "trades"
     data: list[Trade]
     errors: list[str]

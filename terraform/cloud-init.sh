@@ -23,7 +23,7 @@ systemctl enable docker
 systemctl start docker
 
 # Create project directory — files arrive via rsync from the CLI
-mkdir -p /opt/ibkr-relay
+mkdir -p /opt/broker-relay
 
 # Directory is ready — the CLI deploy command will:
 # 1. Rsync project files

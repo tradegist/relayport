@@ -1,12 +1,12 @@
 {
-  "name": "@tradegist/ibkr-relay-types",
-  "version": "0.2.0",
-  "description": "TypeScript types for IBKR Webhook Relay — webhook payloads and poller API",
+  "name": "@tradegist/broker-relay-types",
+  "version": "0.3.0",
+  "description": "TypeScript types for Broker Relay — webhook payloads and relay API",
   "types": "index.d.ts",
   "files": [
     "index.d.ts",
     "shared/",
-    "poller/"
+    "relay_api/"
   ],
   "license": "MIT"
 }

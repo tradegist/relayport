@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 
 from cli.core import die, env, load_env
-from poller_models import BuySell, Trade, WebhookPayloadTrades
+from shared import BuySell, Trade, WebhookPayloadTrades
 
 SAMPLE_TRADES = [
     Trade(
@@ -75,7 +75,7 @@ def run(args):
     if not secret:
         die(f"WEBHOOK_SECRET{suffix} is not set in .env")
 
-    payload = WebhookPayloadTrades(data=SAMPLE_TRADES, errors=[])
+    payload = WebhookPayloadTrades(relay="ibkr", data=SAMPLE_TRADES, errors=[])
     body = payload.model_dump_json(indent=2)
 
     signature = hmac.new(

@@ -9,7 +9,7 @@ output "site_url" {
 }
 
 output "ssh_private_key" {
-  description = "SSH private key for accessing the droplet (save to ~/.ssh/ibkr-relay)"
+  description = "SSH private key for accessing the droplet (save to ~/.ssh/broker-relay)"
   value       = tls_private_key.deploy.private_key_openssh
   sensitive   = true
 }

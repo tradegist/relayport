@@ -1,4 +1,12 @@
-# IBKR Webhook Relay — Project Guidelines
+# Broker Relay — Project Guidelines
+
+## Purpose
+
+Broker Relay is a **relay between broker accounts** that provides clear, common interfaces to communicate with different brokers through a single interface layer.
+
+- **Currently supports:** IBKR broker only (more brokers planned via the relay adapter pattern)
+- **Currently provides:** Webhook push notifications (more notification layers planned)
+- **Current direction:** Broker → User (trade fill events). Future: User → Broker (order placement)
 
 ## Code Quality (MANDATORY)
 
@@ -10,7 +18,7 @@
 - **Update README.md when changing public interfaces.** When adding or modifying CLI commands, Makefile targets, API endpoints, or env vars, always update the README to reflect the change.
 - **Run `make lint` after every code change.** Ruff enforces unused imports (F401), import ordering (I001), unused variables, common pitfalls (bugbear), and modern Python idioms. If ruff fails, fix before committing. Use `make lint FIX=1` to auto-fix safe issues (import sorting, etc.).
 - **Register new modules in `pyproject.toml`.** When adding a new Python service, package, or standalone module under `services/` or `types/python/`, immediately add it to `pyproject.toml`: (1) `tool.pytest.ini_options.testpaths` (if it has tests), (2) `tool.ruff.src`, (3) `tool.ruff.lint.isort.known-first-party`, and (4) the mypy invocation in the Makefile. Also add it to the ruff and mypy paths in the Makefile `lint:` and `typecheck:` targets. Missing any of these causes silent miscategorisation (isort), missed tests (pytest), or unchecked code (mypy).
-- **Centralise env var reads into typed getter functions.** Each env var must be read in exactly one place — a getter function in the module that owns it (e.g. `get_flex_token()` in `poller/__init__.py`). The getter applies `.strip()` and any type conversion (`int()`, boolean parsing). All other code — including other modules, `main.py` entrypoints, and route handlers — imports and calls the getter. Never call `os.environ.get()` inline except inside a getter. This eliminates duplicated reads, inconsistent `.strip()`, and scattered default values.
+- **Centralise env var reads into typed getter functions.** Each env var must be read in exactly one place — a getter function in the module that owns it (e.g. `_get_flex_token()` in `relays/ibkr/__init__.py`). The getter applies `.strip()` and any type conversion (`int()`, boolean parsing). All other code — including other modules, `main.py` entrypoints, and route handlers — imports and calls the getter. Never call `os.environ.get()` inline except inside a getter. This eliminates duplicated reads, inconsistent `.strip()`, and scattered default values.
 - **Getters must validate and fail fast.** Every getter that reads an env var must validate the value and raise `SystemExit` with a descriptive message on invalid input — never let a bad value propagate silently. For required string vars (no default), check emptiness: `if not val: raise SystemExit("IBKR_FLEX_TOKEN must be set")`. For `int()` conversions, wrap in `try/except ValueError: raise SystemExit(f"Invalid VAR={raw!r} — must be an integer")`. For boolean flags, parse inside the getter (`flag not in ("0", "false", "no")`) and return `bool`. Callers should never need to validate a getter's return value — if the getter returns, the value is valid.
 - **Prefer pure functions over side-effect functions.** Never write an `apply_*()` / `set_*()` function that silently mutates system state (env vars, globals, module-level caches) as its primary purpose. Instead, compute and return the value — let the caller decide how to use it. For example, instead of `apply_debug_url_override()` that mutates `os.environ`, write a `resolve_url()` that returns the URL and let the consumer store it. If a side-effect function is truly unavoidable (e.g. one-time DB migration), add an inline comment at every call site explaining **what** is mutated and **why**: `# Mutates os.environ["X"] to enable Y`.
 - **Never bulk-set `os.environ` with empty-string fallbacks.** A loop like `os.environ[key] = env(name, "")` silently overrides downstream defaults (e.g. Terraform `variable` defaults, library config) with empty strings — the downstream system sees the variable as _set but empty_ instead of _unset_, which breaks `tonumber()`, validation blocks, and non-string parsing. When bridging env vars to another system (Terraform `TF_VAR_*`, subprocess env, etc.), only export a key when the source value is present and non-empty. Explicitly `os.environ.pop(key, None)` otherwise so stale values from a previous run don't leak through.
@@ -18,11 +26,11 @@
 ## Security Rules (MANDATORY)
 
 - **No hardcoded credentials** — passwords, API tokens, secrets, and keys MUST come from environment variables (`.env` file or `TF_VAR_*`). Never write real values in source files.
-- **No hardcoded IPs** — use `DROPLET_IP` from `.env`. In documentation, use `1.2.3.4` as placeholder.
+- **No hardcoded IPs** — use `DROPLET_IP` from `.env.droplet`. In documentation, use `1.2.3.4` as placeholder.
 - **No hardcoded domains** — use `example.com` variants (`trade.example.com`) in docs and code. Actual domains are loaded at runtime via `SITE_DOMAIN` env var.
 - **No email addresses or personal info** — never write real names, emails, or account IDs in committed files. Use `UXXXXXXX` for IBKR account examples.
 - **No logging of secrets or sensitive operational data** — never `log.info()` or `print()` tokens, passwords, or API keys. Log actions and outcomes, not credential values. When adding any `log.info()` or `log.debug()` call, check whether the logged value contains sensitive fields (e.g. `accountId`, `acctAlias`, account numbers, IPs, domains). Never log full model dumps at `info` level — use `log.debug` with explicit field exclusion: `log.debug("Trade: %s", trade.model_dump_json(exclude={"accountId", "acctAlias"}))`. Prefer logging counts, symbols, and statuses over full objects.
-- **`.env`, `*.tfvars`, and `.env.test` are gitignored** — never commit them. Use `.env.example` / `.env.test.example` with placeholder values as reference.
+- **`.env`, `.env.droplet`, `.env.relays`, `*.tfvars`, and `.env.test` are gitignored** — never commit them. Use `env_examples/` templates with placeholder values as reference.
 - **Terraform state is gitignored** — `terraform.tfstate` contains SSH keys and IPs. Never commit it.
 - **Auth middleware must reject empty `API_TOKEN`.** `hmac.compare_digest("", "")` returns `True`, so an empty `API_TOKEN` env var silently disables authentication. Every auth middleware must check `if not _API_TOKEN:` and return HTTP 500 **before** reaching `compare_digest`. `API_TOKEN` is in `required_env` for deploy/sync — the CLI will block deployment if it is missing or empty.
 
@@ -39,7 +47,7 @@
   4. `make e2e-down` — tear down **only after all tests pass**. Never tear down between iterations.
 - When modifying any Python file (`.py`), always run `make test`, `make typecheck`, and `make lint` and confirm all pass before deploying.
 - **Every Python file must be covered by `make typecheck`.** When adding a new Python service, package, or standalone script, immediately add it to the mypy invocation in the Makefile. No Python file may exist outside mypy's scope.
-- After modifying any model in `services/poller/poller_models.py` or `services/shared/__init__.py`, also run `make types` to regenerate the TypeScript definitions.
+- After modifying any model in `services/relay_core/relay_models.py` or `services/shared/models.py`, also run `make types` to regenerate the TypeScript and Python type definitions.
 - **Always verify type safety by breaking it first.** After any refactor that touches types or model construction, deliberately introduce a type error (e.g. pass a `str` where `float` is expected), run `make typecheck`, and confirm it **fails**. Then revert and confirm it passes. Never assume mypy catches something — prove it.
 - **Avoid `dict[str, Any]` round-trips.** Never use `model_dump()` → `dict` → `Model(**data)` — mypy cannot type-check `**dict[str, Any]`. Use explicit keyword arguments or `model_copy(update=...)` instead.
 - **Prefer strict `Literal` types over bare `str` on Pydantic models.** Financial applications demand precision — a `str` field silently accepts typos and invalid values. When a field has a known set of valid values (e.g. `BuySell`, `OrderType`, `AssetClass`), always use the existing `Literal` type. Only fall back to `str` when the external source (e.g. Flex XML) genuinely returns unbounded values — and document why with an inline comment.
@@ -73,7 +81,7 @@
 
 ## Reliability (MANDATORY)
 
-- **Mark-after-notify, never before.** `mark_processed_batch()` must only run AFTER `notify()` completes successfully. A crash between mark and notify silently drops fills — the fill is recorded as processed but the webhook was never sent. The poller (dedup skips it) will never retry it. This is an unrecoverable data loss.
+- **Mark-after-notify, never before.** `mark_processed_batch()` must only run AFTER `notify()` completes successfully. A crash between mark and notify silently drops fills — the fill is recorded as processed but the webhook was never sent. The dedup logic skips it on the next cycle, so the fill is never retried. This is an unrecoverable data loss.
 - **The correct pattern:** run `notify()` and `mark_processed_batch()` sequentially in the same execution context (same thread or same `asyncio.to_thread` call). If `notify()` raises, the fill remains unprocessed and will be retried on the next cycle.
 - **Never separate mark from notify with an `await` boundary.** In async code, an `await` between mark and notify allows the process to crash between the two operations. Keep them atomic within a single synchronous block (e.g. inside `asyncio.to_thread`).
 - **Replay mode is the exception.** `poll --replay N` intentionally skips dedup — it resends the last N fills without marking them. This is by design for debugging/recovery.
@@ -81,13 +89,13 @@
 
 ## Concurrency Safety (MANDATORY)
 
-- **Assume concurrency by default.** The poller is async (aiohttp). Any handler can be interrupted at an `await`. When writing new code, always consider what happens if two requests arrive at the same time.
+- **Assume concurrency by default.** The relay is async (aiohttp). Any handler can be interrupted at an `await`. When writing new code, always consider what happens if two requests arrive at the same time.
 - **Always be wary of race conditions.** Before merging any code that touches shared state, ask: "Can two callers interleave here? What breaks if they do?"
 - **Never use TOCTOU (Time of Check, Time of Use) patterns with locks.** Do NOT check `lock.locked()` and then `async with lock:` — another coroutine can acquire the lock between the check and the acquisition, defeating the guard. This is a race condition.
 - **Lock acquisition must BE the check.** Use `asyncio.wait_for(lock.acquire(), timeout=0)` with `try/finally: lock.release()` to fail-fast, or accept that `async with lock:` will queue. Never separate "is it locked?" from "acquire it."
 - **This applies to all shared-state guards** — locks, database transactions, file locks, semaphores, balance checks. If the action is "check a condition, then act on it," both steps must be atomic.
 - **Never share a `sqlite3.Connection` across threads.** `sqlite3.Connection` is not thread-safe. When using `asyncio.to_thread()`, either pass the connection into a single synchronous function that does all DB work in one thread, or use an `asyncio.Lock` to ensure only one `to_thread()` call uses the connection at a time. Never allow two concurrent `to_thread()` calls to touch the same connection — this causes intermittent `OperationalError` and data corruption.
-- **Poller `to_thread` pattern: create connections inside the worker thread.** Do NOT create `sqlite3.Connection` on the main (event-loop) thread and pass it into `asyncio.to_thread(poll_once, conn, ...)` — even with `check_same_thread=False`, this is cross-thread use and unsafe. Instead, `poll_once()` accepts `dedup_conn=None, meta_conn=None` and creates thread-local connections internally (via `init_dedup_db()` / `init_meta_db()`), closing them in a `finally` block. The caller (`_poll_loop`, `handle_run_poll`) passes only non-DB arguments. This ensures every `to_thread` call uses connections that were both created and closed on the same worker thread.
+- **Poller engine `to_thread` pattern: create connections inside the worker thread.** Do NOT create `sqlite3.Connection` on the main (event-loop) thread and pass it into `asyncio.to_thread(poll_once, conn, ...)` — even with `check_same_thread=False`, this is cross-thread use and unsafe. Instead, `poll_once()` creates thread-local connections internally (via `init_dedup_db()` / `init_meta_db()`), closing them in a `finally` block. The caller (`_poll_loop`, `handle_poll`) passes only non-DB arguments. This ensures every `to_thread` call uses connections that were both created and closed on the same worker thread.
 - **Financial operations require extra scrutiny.** Any code path that places orders, moves money, or modifies account state must be reviewed for: race conditions, double-execution, partial failure (what if it crashes between two steps?), and idempotency.
 - **Use `asyncio.get_running_loop()`, never `asyncio.get_event_loop()`.** `get_event_loop()` is deprecated since Python 3.10 for contexts without a running loop and emits `DeprecationWarning` in 3.12+. Code that calls `loop.call_later()`, `loop.create_task()`, etc. always runs on the event-loop thread, so `get_running_loop()` is correct, explicit, and raises `RuntimeError` immediately if accidentally called off-loop.
 
@@ -95,44 +103,78 @@
 
 - **`.venv` is the project's virtual environment.** Created by `make setup` using Homebrew Python. All dev dependencies are installed there.
 - **Auto-activation** is configured in `~/.zshrc` via a `chpwd` hook — the venv activates automatically when `cd`'ing into the project directory.
-- **`make setup`** creates the `.venv` (if missing), installs all dependencies (`requirements-dev.txt` + service requirements), and writes a `.pth` file (see below).
-- **`ibkr-relay.pth`** is created inside `.venv/lib/pythonX.Y/site-packages/` by `make setup`. It adds `services/poller/`, `services/debug/`, and `services/` to `sys.path` so that `from poller_models import ...`, `from debug_app import ...`, and `from notifier import ...` work everywhere (CLI, tests, scripts) without `sys.path` hacks or `PYTHONPATH`.
+- **`make setup`** creates the `.venv` (if missing), installs all dependencies (`requirements-dev.txt` + `services/relay_core/requirements.txt`), writes a `.pth` file, and copies `env_examples/*` → `.<name>` (e.g. `env_examples/env` → `.env`) for any missing env files.
+- **`broker-relay.pth`** is created inside `.venv/lib/pythonX.Y/site-packages/` by `make setup`. It adds `services/debug/`, `services/`, and `services/relay_core/` to `sys.path` so that `from relay_core import ...`, `from relay_core.dedup import ...`, `from relay_core.notifier import ...`, `from debug_app import ...`, and `from shared import ...` work everywhere (CLI, tests, scripts) without `sys.path` hacks or `PYTHONPATH`.
 - **`.venv/` is gitignored** — never commit it.
 - **`docker-compose.local.yml` adds bind mounts** that shadow the `COPY`'d files in the image with your local source tree (`:ro`). This means code changes are visible on container restart — no rebuild needed. `make local-up` builds the images once; after that, `make sync` (when `DEFAULT_CLI_RELAY_ENV=local`) just restarts containers.
 - **`make sync` respects `DEFAULT_CLI_RELAY_ENV`.** When set to `local`, `make sync` restarts the local compose stack. When `prod` (default), it runs the full CLI sync to the droplet. Override per-command with `ENV=local` or `ENV=prod`.
-- **`make logs` also respects `DEFAULT_CLI_RELAY_ENV`.** `make logs S=ibkr-debug` streams local container logs when local, droplet logs when prod.
+- **`make logs` also respects `DEFAULT_CLI_RELAY_ENV`.** `make logs S=debug` streams local container logs when local, droplet logs when prod.
 
 ## Dependency Management
 
-- **Runtime deps (`services/poller/requirements.txt`)** use exact pins (`==`). These are deployed to production containers — builds must be reproducible.
+- **Runtime deps (`services/relay_core/requirements.txt`)** use exact pins (`==`). These are deployed to production containers — builds must be reproducible.
 - **Dev deps (`requirements-dev.txt`)** use major-version constraints (`>=X,<X+1`). This allows minor/patch updates while preventing breaking changes.
 - **When adding a new dependency**, always pin it immediately — never leave it unpinned. Use exact pin for runtime, major-version constraint for dev.
 - **All services pinning the same dependency must use the same version.** When multiple `requirements.txt` files pin the same package (e.g. `aiohttp`), keep versions aligned. Check existing pins with `grep -r 'aiohttp==' services/*/requirements.txt` before adding a new one.
 
+## Environment Files
+
+Configuration is split into three env files to separate concerns and enable scalable relay configuration:
+
+- **`.env`** — App-level config: `SITE_DOMAIN`, `API_TOKEN`, `NOTIFIERS`, `RELAYS`, `POLL_INTERVAL`, listener settings, `TIME_ZONE`. Injected into the `relays` container via `env_file:` in `docker-compose.yml`. Pushed to the droplet by `make sync` / `make deploy`.
+- **`.env.relays`** — Relay-prefixed env vars: `IBKR_FLEX_TOKEN`, `IBKR_FLEX_QUERY_ID`, relay-specific overrides (`IBKR_NOTIFIERS`, `IBKR_TARGET_WEBHOOK_URL`). Also injected via `env_file:` (marked `required: false` so the stack starts even without it). Adding a new relay's vars requires no compose changes — just add the prefixed vars.
+- **`.env.droplet`** — CLI-only vars: `DEPLOY_MODE`, `DO_API_TOKEN`, `DROPLET_IP`, `SSH_KEY`, `DROPLET_SIZE`. **Never pushed to the droplet or injected into containers.** Only used by `cli/` commands.
+- **`.env.test`** — E2E test config. Used only in `docker-compose.test.yml` via `env_file: !override`.
+- **Templates** live in `env_examples/` (gitignored names: `env`, `env.droplet`, `env.relays`, `env.test`). `make setup` copies them to `.<name>` if missing.
+
 ## Docker
 
-- **Never use `env_file:` in service definitions.** Always declare each env var explicitly in the `environment:` block with `${VAR}` interpolation. This is critical because `env_file:` is internally a list — override files append rather than replace, causing the production `.env` to leak into test containers. Explicit `environment:` vars with `--env-file` interpolation keeps environments fully isolated and allows clean overrides.
-- **`POLLER_ENABLED=false`** disables the poller container entirely. Implemented via `deploy.replicas: ${POLLER_REPLICAS:-1}` in `docker-compose.yml`. The mapping from `POLLER_ENABLED` to `POLLER_REPLICAS` happens in `cli/__init__.py` (`_compose_env()`) and the Makefile (`POLLER` flag). The derived `POLLER_REPLICAS` is injected as a shell env var in the SSH command (not in `.env`), so it takes precedence over the compose file default.
-- **`DEBUG_WEBHOOK_PATH`** enables the `ibkr-debug` container. When set (non-empty) in `.env`, `_compose_env()` sets `DEBUG_REPLICAS=1`; otherwise the compose default `${DEBUG_REPLICAS:-0}` keeps the container stopped. The debug service has aggressive log rotation (`max-size: 10k`, `max-file: 1`) since its sole purpose is transient payload inspection. Set `DEBUG_LOG_LEVEL=DEBUG` in `.env` to include full payload+headers in `docker logs`.
-- **`.dockerignore` uses an allowlist** (`*` to exclude everything, then `!services/poller/**` to include the whole module). Tests, `__pycache__`, and the Dockerfile itself are re-excluded. This means adding new source files to `services/poller/` requires **no** `.dockerignore` or Dockerfile changes.
-- **When adding a new standalone module** (e.g. `services/notifier/`), you must add a `!services/<module>/**` entry to `.dockerignore` — the allowlist excludes everything by default. Also add exclusions for test files and `__pycache__` under the new module. Without this, `COPY services/<module>/ ./<module>/` in the Dockerfile will fail with a cryptic "not found" error.
-- The poller Dockerfile uses directory COPYs (`COPY services/poller/poller/ ./poller/`, `COPY services/poller/poller_routes/ ./poller_routes/`) so new files are picked up automatically.
-- **`poller-2` must mirror `poller` configuration.** The `poller-2` service is an optional second poller instance (behind the `poller2` profile) for a different IBKR account. Its `environment:` and `volumes:` blocks must stay in sync with `poller` — same env var names (with `_2` suffix for account-specific values), and its own `META_DB_PATH` (e.g. `/data/meta/poller-2.db`) on a dedicated `poller-2-data` volume. When modifying the `poller` service block, always check whether `poller-2` needs the same change.
-- **Never nest bind mounts in compose override files.** If a service mounts `./services/poller:/app` and you also need `services/notifier/` available, do NOT mount `./services/notifier:/app/notifier` (inside the first mount). Docker will auto-create an empty `services/poller/notifier/` directory on the host to back the nested mount point. On `docker compose restart`, this empty host directory shadows the real content, causing `ImportError`. Instead, mount the extra module at a separate path outside `/app` (e.g. `./services/notifier:/opt/notifier`) and add `PYTHONPATH: /opt` to the service's `environment:` block so Python can find it.
+- **`env_file:` is the correct pattern for the `relays` service.** The base `docker-compose.yml` declares `env_file: [.env, path: .env.relays, required: false]` on the `relays` service. This injects all app-level and relay-specific vars without enumerating each one in the `environment:` block. Only guards (`API_TOKEN: ${API_TOKEN:?...}`) and vars with compose-level defaults (`POLL_INTERVAL: ${POLL_INTERVAL:-600}`) appear in `environment:`.
+- **Test isolation uses `env_file: !override`.** `docker-compose.test.yml` overrides the base env_file list with `env_file: !override` followed by `- .env.test`, replacing (not appending to) the production env files. Test-specific values are hardcoded in the `environment:` block. This keeps test and production environments fully isolated.
+- **`DEBUG_WEBHOOK_PATH`** enables the `debug` container. When set (non-empty) in `.env`, the compose default `${DEBUG_REPLICAS:-0}` is overridden to `1` by the CLI's `_compose_env()`. The debug service has aggressive log rotation (`max-size: 10k`, `max-file: 1`) since its sole purpose is transient payload inspection. Set `DEBUG_LOG_LEVEL=DEBUG` in `.env` to include full payload+headers in `docker logs`.
+- **`.dockerignore` uses an allowlist** (`*` to exclude everything, then `!services/<module>/**` for each module). Tests, `__pycache__`, and Dockerfiles are re-excluded. This means adding new source files within an existing module requires **no** `.dockerignore` changes.
+- **When adding a new standalone module** (e.g. `services/foo/`), you must add `!services/foo/**` plus test/pycache exclusions to `.dockerignore` — the allowlist excludes everything by default. Also add the corresponding `COPY` to the Dockerfile. Without this, the build context won't include the new module.
+- The relay_core Dockerfile uses directory COPYs (`COPY services/relay_core/ ./relay_core/`, `COPY services/relays/ ./relays/`) so new files are picked up automatically.
 
 ## Architecture
 
-Four Docker containers in a single Compose stack on a DigitalOcean droplet:
+Three Docker containers in a single Compose stack on a DigitalOcean droplet (debug is optional):
 
-| Service      | Role                                                                                                                                                               |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `caddy`      | Reverse proxy with automatic HTTPS (Let's Encrypt)                                                                                                                 |
-| `poller`     | Polls IBKR Flex for trade confirmations, fires webhooks. Also hosts the **listener** (real-time WS subscriber to ibkr_bridge). Disabled via `POLLER_ENABLED=false` |
-| `poller-2`   | Optional second poller instance for a different IBKR account. Behind `poller2` profile                                                                             |
-| `ibkr-debug` | Debug webhook inbox — captures webhook payloads for inspection. Disabled by default (`DEBUG_REPLICAS=0`), enabled when `DEBUG_WEBHOOK_PATH` is set                 |
+| Service  | Role                                                                                                                                                                        |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `caddy`  | Reverse proxy with automatic HTTPS (Let's Encrypt)                                                                                                                          |
+| `relays` | Multi-relay service: loads broker adapters via the registry, runs pollers + listeners + HTTP API. Disabled when `RELAYS` is empty (API server still runs for health checks) |
+| `debug`  | Debug webhook inbox — captures webhook payloads for inspection. Disabled by default (`DEBUG_REPLICAS=0`), enabled when `DEBUG_WEBHOOK_PATH` is set                          |
 
-All secrets are injected via `.env` → `environment` in `docker-compose.yml`.
-Caddy reads `SITE_DOMAIN` from env vars — the Caddyfile uses `{$SITE_DOMAIN}` syntax.
+### Relay Registry Pattern
+
+The `relays` container uses a **registry pattern** to support multiple broker adapters:
+
+1. `RELAYS` env var lists active relays (e.g. `RELAYS=ibkr`).
+2. `registry.py` validates each name against `RelayName` (a `Literal` type in `shared/models.py`).
+3. For each relay, the registry dynamically imports `relays.<name>` and calls `build_relay()`.
+4. The adapter returns a `BrokerRelay` dataclass with `PollerConfig`s, `ListenerConfig`, and notifiers.
+5. `main.py` starts a poll loop per `PollerConfig` and a WS listener (if configured).
+
+**Adding a new broker:**
+
+1. Add the name to `RelayName` in `services/shared/models.py`.
+2. Create `services/relays/<name>/__init__.py` with a `build_relay(notifiers) -> BrokerRelay` function.
+3. Add the relay's prefixed env vars to `.env.relays`.
+4. Register the module in `pyproject.toml`, Makefile (`lint:`, `typecheck:`), and `.dockerignore`.
+
+### Env file flow
+
+```
+.env         ─┐
+.env.relays  ─┤── env_file: in docker-compose.yml ──▶ relays container
+              │
+.env.droplet ─── CLI only (never pushed to container)
+.env.test    ─── env_file: !override in docker-compose.test.yml ──▶ test containers
+```
+
+All secrets are injected via `env_file:` in `docker-compose.yml`.
+Caddy reads `SITE_DOMAIN` from its `environment:` block — the Caddyfile uses `{$SITE_DOMAIN}` syntax.
 
 ### Caddy Snippet Structure
 
@@ -142,7 +184,7 @@ The Caddyfile uses `import` directives to compose routing from snippet files:
 infra/caddy/
   Caddyfile              # Shell: imports from sites/ and shared dirs
   sites/
-    ibkr.caddy           # SITE_DOMAIN route handlers (handle /ibkr/*)
+    ibkr.caddy           # SITE_DOMAIN route handlers (handle /relays/*)
     debug.caddy          # Debug webhook routes (handle /debug/webhook/*)
 ```
 
@@ -153,62 +195,67 @@ Shared projects deploy snippets to `/opt/caddy-shared/sites/` on the droplet (no
 
 During shared deploy, snippet files are **templated** — all `{$VAR}` placeholders are replaced with literal env var values from the shared project's `.env`. This avoids requiring the host Caddy container to have the shared project's env vars.
 
-- **`sites/*.caddy`** contain `handle` blocks imported inside the `{$SITE_DOMAIN}` site definition. Each project writes one snippet (e.g. `ibkr.caddy`, `kraken.caddy`). Routes must be prefixed with the project name (`/ibkr/*`, `/kraken/*`) to avoid collisions. The `debug.caddy` snippet routes `/debug/webhook/*` to the `ibkr-debug` container.
+- **`sites/*.caddy`** contain `handle` blocks imported inside the `{$SITE_DOMAIN}` site definition. Each project writes one snippet. Routes must be prefixed to avoid collisions. The `debug.caddy` snippet routes `/debug/webhook/*` to the `debug` container.
 - This structure allows multiple projects to share a single Caddy instance on the same droplet.
 
 ## Deployment Modes
 
-The deployment mode is controlled by `DEPLOY_MODE` in `.env` (required, validated before any deploy or sync).
+The deployment mode is controlled by `DEPLOY_MODE` in `.env.droplet` (required, validated before any deploy or sync).
 
 ### Standalone Mode (`DEPLOY_MODE=standalone`)
 
-- Set `DO_API_TOKEN` in `.env`. `make deploy` runs Terraform to create a new droplet, firewall, and reserved IP, then the CLI rsyncs project files, pushes `.env`, and runs `docker compose up -d --build`.
+- Set `DO_API_TOKEN` in `.env.droplet`. `make deploy` runs Terraform to create a new droplet, firewall, and reserved IP, then the CLI rsyncs project files, pushes `.env` + `.env.relays`, and runs `docker compose up -d --build`.
 - Terraform only creates infrastructure — cloud-init installs Docker and creates the project directory. The CLI handles all file transfer and service startup.
-- After deploy, add `DROPLET_IP` from terraform output to `.env` for `make sync`.
+- After deploy, add `DROPLET_IP` from terraform output to `.env.droplet` for `make sync`.
 - `DO_API_TOKEN` can be removed after first deploy for security — the mode is determined by `DEPLOY_MODE`, not by token presence.
 
 ### Shared Mode (`DEPLOY_MODE=shared`)
 
-- Set `DROPLET_IP` and `SSH_KEY` in `.env` (no `DO_API_TOKEN` needed).
-- `make deploy` rsyncs files, pushes `.env`, and starts services using `docker-compose.shared.yml` overlay.
+- Set `DROPLET_IP` and `SSH_KEY` in `.env.droplet` (no `DO_API_TOKEN` needed).
+- `make deploy` rsyncs files, pushes `.env` + `.env.relays`, and starts services using `docker-compose.shared.yml` overlay.
 - The shared overlay disables Caddy (the host project runs it) and connects all containers to the shared Docker network (`SHARED_NETWORK` env var, typically `relay-net`).
 - **`SHARED_NETWORK` controls cross-project networking.** The base `docker-compose.yml` uses `name: ${SHARED_NETWORK:-}` for the default network. When unset, Docker Compose creates a project-scoped network (isolated). When set to the same value across projects (e.g. `relay-net`), all projects share a single network and can reach each other's containers by service name. The shared overlay (`docker-compose.shared.yml`) sets the network to `external: true`, which merges on top of the base definition.
-- Caddy snippet files (`infra/caddy/sites/ibkr.caddy`) must be deployed to the host project's Caddy to enable routing.
+- Caddy snippet files must be deployed to the host project's Caddy to enable routing.
 - `make sync` uses the shared compose overlay automatically.
 
 ## Droplet Sizing
 
-- **`DROPLET_SIZE`** sets the DigitalOcean droplet slug directly (e.g. `s-1vcpu-512mb`). This is a poller-only deployment — no JVM heap sizing needed.
+- **`DROPLET_SIZE`** sets the DigitalOcean droplet slug directly (e.g. `s-1vcpu-512mb`). This is a lightweight relay deployment — no JVM heap sizing needed.
 - `cli/__init__.py` `_droplet_size()` reads `DROPLET_SIZE`.
 - `cli/core/resume.py` uses `cfg.droplet_size()` which delegates to the same `_droplet_size()` function.
 
 ## Auth Pattern
 
-- API endpoints under `/ibkr/*` require `Authorization: Bearer <API_TOKEN>` (HMAC-safe comparison via `hmac.compare_digest`).
-- **All authenticated routes must use the `AUTH_PREFIX` constant** (from `poller_routes.middlewares`) when registering with the router. The auth middleware uses the same constant to decide which requests require a token — hardcoding the path in either place causes them to drift out of sync.
+- API endpoints under `/relays/*` require `Authorization: Bearer <API_TOKEN>` (HMAC-safe comparison via `hmac.compare_digest`).
+- **All authenticated routes must use the `AUTH_PREFIX` constant** (from `relay_core.routes.middlewares`) when registering with the router. The auth middleware uses the same constant to decide which requests require a token — hardcoding the path in either place causes them to drift out of sync.
 - Webhook payloads are signed with HMAC-SHA256 (`X-Signature-256` header) via the notifier package.
 
 ## E2E Testing
 
-- **E2E tests run against a local Docker stack** defined by `docker-compose.test.yml` (poller + ibkr-debug, no Caddy).
-- **Credentials live in `.env.test`** (gitignored). Template: `.env.test.example`.
+- **E2E tests run against a local Docker stack** defined by `docker-compose.test.yml` (relays + debug, no Caddy).
+- **Credentials live in `.env.test`** (gitignored). Template: `env_examples/env.test`.
 - **`make e2e`** starts the stack, runs pytest, then tears down. Always cleans up, even on test failure.
 - **`make e2e-up` / `make e2e-down`** for manual stack management during debugging.
-- **`make e2e-run`** restarts `poller` and `ibkr-debug` containers (to pick up code changes from volume mounts), then runs the E2E tests. Safe to call repeatedly during development — no need to rebuild or restart manually.
-- **Test poller runs on `localhost:15011`** with hardcoded token `test-token`.
+- **`make e2e-run`** restarts `relays` and `debug` containers (to pick up code changes from volume mounts), then runs the E2E tests. Safe to call repeatedly during development — no need to rebuild or restart manually.
+- **Test relays service runs on `localhost:15011`** with hardcoded token `test-token`.
+
+### E2E Conftest Pattern
+
+The E2E conftest (`services/relay_core/tests/e2e/conftest.py`) uses a **two-tier preflight** pattern:
+
+- **`_stack_preflight`** — `scope="session"`, `autouse=True`. Hits `/health` on the relays service. Calls `pytest.exit()` if the stack is unreachable (hard failure — no tests run).
+- **`_bridge_preflight`** — `scope="session"`, on-demand (requested by listener tests via `bridge_api`). Checks `LISTENER_ENABLED`, bridge credentials, and bridge reachability. Calls `pytest.skip()` if any prerequisite is missing (soft skip — other tests still run).
 
 ### Listener E2E Tests
 
-- **Listener E2E tests are opt-in** — they require a running ibkr_bridge local stack (`make local-up` in ibkr_bridge) and `LISTENER_ENABLED=true` in `.env.test`.
+- **Listener E2E tests are opt-in** — they require a running ibkr_bridge local stack and `LISTENER_ENABLED=true` in `.env.test`.
 - **Preflight skip logic**: tests skip (not fail) when `LISTENER_ENABLED` is not set, bridge credentials are missing, or the bridge is unreachable.
-- **E2E conftest loads `.env.test` directly** using a stdlib `_load_env_test()` helper (key=value parser, no `python-dotenv` dependency). This avoids `set -a && . ./.env.test` in the Makefile — matching the ibkr_bridge pattern.
-- **`test_listener_ws_connected`** — checks poller container logs for "Connected to bridge WS".
-- **`test_listener_receives_commission_fill`** — places a MKT order via bridge API, polls the debug webhook inbox for fills (10s timeout), and `pytest.skip()`s if no fill arrives (market closed).
-- **Required `.env.test` vars**: `BRIDGE_WS_URL=ws://host.docker.internal:15101/ibkr/ws/events`, `BRIDGE_API_BASE_URL=http://localhost:15101`, `BRIDGE_API_TOKEN=<matching bridge's API_TOKEN>`.
+- **E2E conftest loads `.env.test` directly** using a stdlib `_load_env_test()` helper (key=value parser, no `python-dotenv` dependency).
+- **Required `.env.test` vars**: `IBKR_BRIDGE_WS_URL`, `IBKR_BRIDGE_API_BASE_URL`, `IBKR_BRIDGE_API_TOKEN`.
 
 ## Test File Convention
 
-- **Unit tests are colocated** next to the source file they test: `flex_parser.py` → `test_flex_parser.py`, `poller/__init__.py` → `test_poller.py`.
+- **Unit tests are colocated** next to the source file they test: `flex_parser.py` → `test_flex_parser.py`, `registry.py` → `test_registry.py`.
 - **E2E tests live in `tests/e2e/`** within each service, since they test multiple components together rather than a single source file.
 - **`make test`** runs all unit tests. **`make e2e-run`** runs all E2E tests (requires Docker stack). **`make lint`** runs ruff. All must pass before deploying.
 - **Always scope `unittest.mock.patch`.** Never call `patch.start()` at module level without a corresponding `patch.stop()` — the patched value leaks into every test module that runs afterward. Use one of these patterns instead:
@@ -240,45 +287,69 @@ The deployment mode is controlled by `DEPLOY_MODE` in `.env` (required, validate
 
 - **Avoid reading env vars at module level in production code.** Module-level `os.environ` reads (e.g. `DEBUG_PATH = os.environ.get(...)`) bake values at import time, forcing tests to set env vars before imports — a fragile anti-pattern. Defer env reads to a factory function (e.g. `create_app()`) or constructor so tests can set env vars normally in `setUpModule()` and get fresh reads on each call.
 - **No cross-test dependencies.** Every test must be self-contained — it must not rely on state created by a previous test. Pytest does not guarantee execution order, and tests may run selectively or in parallel. If a test needs preconditions, create them within the test itself or via an explicit fixture.
-- **E2E conftest fixtures must use `yield` with a context manager.** Never `return httpx.Client(...)` — the client is never closed and leaks sockets. Use `with httpx.Client(...) as client: yield client` instead. Scope to `session` (one client per test run). Every E2E `conftest.py` must also include a `_preflight_check` fixture (`scope="session"`, `autouse=True`) that hits `/health` and calls `pytest.exit()` if the stack is unreachable.
+- **E2E conftest fixtures must use `yield` with a context manager.** Never `return httpx.Client(...)` — the client is never closed and leaks sockets. Use `with httpx.Client(...) as client: yield client` instead. Scope to `session` (one client per test run).
 
-## Poller Structure
+## Relay Core Structure
 
-The `services/poller/` service follows the same package pattern:
+The `services/relay_core/` service is the main Docker container. It provides the generic polling engine, listener engine, HTTP API, and relay registry.
 
 ```
-services/poller/
-  main.py                  # Entrypoint (polling loop + HTTP API startup)
-  poller_models.py         # Re-export shim (shared models + poller-specific API types)
-  poller/                  # Core polling logic (package)
-    __init__.py            # SQLite dedup, Flex fetch, poll_once()
-    flex_parser.py         # XML parser (Activity Flex + Trade Confirmation)
-    test_flex_parser.py    # Tests for flex_parser
-    test_poller.py         # Tests for poller core logic
-  poller_routes/            # HTTP API
-    __init__.py            # Orchestrator: create_routes(), start_api_server()
-    health.py              # GET /health handler
-    middlewares.py         # Auth middleware (Bearer token)
-    run.py                 # POST /ibkr/poller/run handler
-    test_middlewares.py    # Tests for auth middleware
-  tests/e2e/               # E2E tests (poller smoke + toggle)
-    conftest.py            # httpx fixtures (api + anon_api)
-    test_smoke.py          # Health + auth smoke tests
-    test_poller_enabled.py # Tests POLLER_ENABLED toggle
+services/relay_core/
+  main.py                  # Entrypoint — loads relays, starts pollers + listeners + API
+  __init__.py              # BrokerRelay dataclass, re-exports engine types (PollerConfig, ListenerConfig, etc.)
+  context.py               # Relay context singleton: init_relays(), get_relay(), get_relays()
+  env.py                   # Shared env var helpers: get_env(), get_env_int() with prefix/suffix fallback
+  registry.py              # Relay registry — loads adapters from RELAYS env var
+  poller_engine.py         # Generic poller: init_dedup_db, init_meta_db, poll_once, prune_old
+  listener_engine.py       # Generic WS listener: connect, dedup, notify, reconnect with backoff
+  relay_models.py          # Re-export shim for shared models + relay-specific API types (RunPollResponse, HealthResponse)
+  dedup/                   # SQLite dedup library
+    __init__.py            # init_db(), is_processed(), mark_processed(), prune()
+  notifier/                # Pluggable notification backends
+    __init__.py            # Registry, load_notifiers(), validate_notifier_env(), notify()
+    base.py                # BaseNotifier ABC
+    webhook.py             # WebhookNotifier: HMAC-SHA256 signed HTTP POST
+  routes/                  # HTTP API
+    __init__.py            # Orchestrator: create_app(), start_api_server(), handle_health, handle_poll
+    middlewares.py         # Auth middleware (Bearer token, AUTH_PREFIX=/relays)
+  tests/e2e/               # E2E tests (smoke + listener)
+    conftest.py            # httpx fixtures + two-tier preflight
   Dockerfile
   requirements.txt
 ```
 
-- **`services/poller/poller/`** contains core logic: SQLite dedup, Flex Web Service two-step fetch, and `poll_once()`. Notification delivery is delegated to the notifier package (see below).
-- **`services/poller/poller_routes/`** contains the HTTP API for on-demand polls (`POST /ibkr/poller/run`).
-- **`services/poller/poller_models.py`** is a re-export shim for shared models plus poller-specific API types (`RunPollResponse`, `HealthResponse`). The shared models (`Fill`, `Trade`, `WebhookPayloadTrades`, `WebhookPayload`) live in `services/shared/__init__.py`.
+- **`services/relay_core/main.py`** reads `RELAYS`, loads adapters via the registry, initialises the relay context (`init_relays()`), starts the HTTP API, then spawns a poll loop per `PollerConfig` and a WS listener per relay (if configured). When `RELAYS` is empty, the API server starts alone (for health checks).
+- **`services/relay_core/context.py`** provides the relay context singleton. `init_relays(relays)` is called once at startup by `amain()`, then `get_relay(name)` and `get_relays()` are available anywhere to access relay config (notifiers, retry config, poller/listener configs) without parameter threading. `_reset()` is exposed for test teardown. Uses `TYPE_CHECKING` guard for `BrokerRelay` import to avoid circular import with `__init__.py`.
+- **`services/relay_core/poller_engine.py`** provides `poll_once(relay_name, poller_index)` — the generic polling function. Resolves `PollerConfig`, notifiers, and retry config from the relay context. Handles dedup, aggregation, notify, and mark. Broker-specific logic (Flex fetch, XML parsing) lives in the relay adapter.
+- **`services/relay_core/listener_engine.py`** provides `start_listener(relay_name)` — the generic WS listener. Resolves `ListenerConfig`, notifiers, and retry config from the relay context. Connects to a broker bridge's WebSocket, dispatches events to the adapter's `on_message` callback, handles dedup + notify + mark, and auto-reconnects with exponential backoff.
+- **`services/relay_core/relay_models.py`** is a re-export shim for shared models plus relay-specific API types (`RunPollResponse`, `HealthResponse`). Listed in `schema_gen.py:SCHEMA_MODELS`.
+- **`services/relay_core/routes/__init__.py`** provides `GET /health` (unauthenticated) and `POST /relays/{relay_name}/poll/{poll_idx}` (authenticated, 1-based index).
+- **`services/relay_core/env.py`** provides `get_env(var, prefix, suffix, default)` and `get_env_int(var, prefix, suffix, default)` — shared helpers for reading env vars with relay-specific prefix fallback. Resolution order: `{prefix}{var}{suffix}` → `{var}{suffix}` → `default`. All relay-core env var readers (`get_poll_interval`, `get_debounce_ms`, `load_retry_config`, notifier env loading) use these helpers. When adding new env var readers, use `get_env` / `get_env_int` from `relay_core.env` instead of writing inline `os.environ.get()` with manual fallback logic.
 
-## Notifier Structure
+## Relay Adapter Structure
 
-The `services/notifier/` package is a **standalone library** (no container, no Dockerfile). It provides a pluggable notification backend system used by the poller.
+Each broker adapter lives under `services/relays/<name>/`. The adapter is a single-file (or small package) integration that wires broker-specific logic into the generic `relay_core` engines.
 
 ```
-services/notifier/
+services/relays/ibkr/
+  __init__.py              # build_relay() → BrokerRelay, env getters, map_fill(), IBKR-specific logic
+  bridge_models.py         # Mirrored WsEnvelope + related types from ibkr_bridge
+  flex_fetch.py            # Flex Web Service two-step fetch (request token → download report)
+  flex_parser.py           # Flex XML parser (Activity + Trade Confirmation)
+  test_flex_parser.py      # Tests for flex_parser
+  test_ibkr.py             # Tests for IBKR adapter logic
+```
+
+- **`build_relay(notifiers)`** constructs a `BrokerRelay` with IBKR-specific `PollerConfig`s (Flex fetch + parse callbacks) and an optional `ListenerConfig` (bridge WS URL + `on_message` callback).
+- **Multi-account support** via `_2` suffixed env vars (e.g. `IBKR_FLEX_QUERY_ID_2`). Each suffix produces an additional `PollerConfig` within the same relay — no separate container needed. Triggered via `make poll RELAY=ibkr IDX=2` or `POST /relays/ibkr/poll/2`.
+- **Relay-specific overrides** — env vars like `IBKR_NOTIFIERS`, `IBKR_TARGET_WEBHOOK_URL` override the generic equivalents for the IBKR relay only, allowing different webhook destinations per broker.
+
+## Notifier Package
+
+The `services/relay_core/notifier/` package provides a pluggable notification backend system used by all relays.
+
+```
+services/relay_core/notifier/
   __init__.py              # Registry, load_notifiers(), validate_notifier_env(), notify()
   base.py                  # BaseNotifier ABC (name, required_env_vars, send, default env validation)
   webhook.py               # WebhookNotifier: HMAC-SHA256 signed HTTP POST
@@ -287,12 +358,13 @@ services/notifier/
 ```
 
 - **`NOTIFIERS` env var** controls which backends are active (comma-separated, e.g. `NOTIFIERS=webhook`). Empty = no notifications (dry-run).
-- **Suffix support** — `load_notifiers(suffix="_2")` reads from `TARGET_WEBHOOK_URL_2`, `WEBHOOK_SECRET_2`, etc. This powers `poller-2`.
-- **Validation belongs in each notifier's `__init__`, not the coordinator.** The coordinator (`__init__.py`) is a registry + dispatcher — it must not contain backend-specific validation logic (e.g. "skip `TARGET_WEBHOOK_URL` when `DEBUG_WEBHOOK_PATH` is set"). Each `BaseNotifier` subclass validates its own env vars in its constructor and raises `SystemExit(1)` on misconfiguration. The base class provides a default validation that checks `required_env_vars()`; subclasses with custom logic (like `WebhookNotifier`'s debug-path skip) override `__init__` entirely.
+- **Prefix support** — relay adapters can pass a prefix (e.g. `IBKR_`) to read from `IBKR_TARGET_WEBHOOK_URL`, `IBKR_WEBHOOK_SECRET`, etc. This enables per-relay webhook destinations.
+- **Suffix support** — `_2` suffixed env vars enable separate webhook destinations for multi-account pollers within a single relay.
+- **Validation belongs in each notifier's `__init__`, not the coordinator.** The coordinator (`__init__.py`) is a registry + dispatcher — it must not contain backend-specific validation logic. Each `BaseNotifier` subclass validates its own env vars in its constructor and raises `SystemExit` on misconfiguration.
 - **`validate_notifier_env()`** is called by `cli/__init__.py` during pre-deploy checks. It instantiates each configured backend (triggering constructor validation) and converts `SystemExit` to a `die()` call for CLI-friendly output.
-- **Adding a new backend** — create `services/notifier/<name>.py` with a class extending `BaseNotifier`, add it to `REGISTRY` in `__init__.py`. The constructor must validate all required env vars.
-- **The poller calls `notify(notifiers, payload)`** — notifiers are loaded once at startup and passed through to `poll_once()`. The poller has no direct knowledge of webhook delivery mechanics.
-- **Debug webhook URL resolution** — `WebhookNotifier.__init__` calls `_resolve_webhook_url(suffix)`, a pure function in `webhook.py`. If `DEBUG_WEBHOOK_PATH` is set, the URL is overridden to `http://ibkr-debug:9000/debug/webhook/{path}` (container-to-container DNS). Otherwise, it reads `TARGET_WEBHOOK_URL{suffix}`. The service name (`ibkr-debug`) and port (`9000`) are hardcoded constants in `webhook.py`. No env var mutation occurs — the resolved URL is stored in `self._url`.
+- **Adding a new backend** — create `services/relay_core/notifier/<name>.py` with a class extending `BaseNotifier`, add it to `REGISTRY` in `__init__.py`. The constructor must validate all required env vars.
+- **The relay engines resolve notifiers from the relay context** — notifiers are loaded once at startup per relay, stored on `BrokerRelay`, and accessed via `get_relay(name).notifiers`. The engines have no direct knowledge of webhook delivery mechanics.
+- **Debug webhook URL resolution** — `WebhookNotifier.__init__` calls `_resolve_webhook_url()`. If `DEBUG_WEBHOOK_PATH` is set, the URL is overridden to `http://debug:9000/debug/webhook/{path}` (container-to-container DNS). Otherwise, it reads `TARGET_WEBHOOK_URL`. No env var mutation occurs — the resolved URL is stored in `self._url`.
 
 ## Debug Webhook Service
 
@@ -303,154 +375,113 @@ services/debug/
   debug_app.py             # aiohttp app: POST/GET/DELETE /debug/webhook/{path} + GET /health
   Dockerfile               # python:3.11-slim, runs debug_app.py
   requirements.txt         # aiohttp only
-  test_debug.py            # Unit tests (10 tests)
+  test_debug.py            # Unit tests
 ```
 
 - **`DEBUG_WEBHOOK_PATH`** env var controls the accepted path segment. Requests to any other path return 404. When unset, the container is not running (`DEBUG_REPLICAS=0`).
 - **In-memory inbox** — `_inbox: list[PayloadEntry]` stores received payloads (payload + headers + timestamp). Capped at `MAX_DEBUG_WEBHOOK_PAYLOADS` (default 100, hard max 150) with FIFO eviction.
 - **Endpoints**: `POST /debug/webhook/{path}` captures a payload, `GET` returns all stored payloads, `DELETE` clears the inbox. `GET /health` returns status.
-- **Logging**: Summary at INFO level, full payload+headers at DEBUG level. Set `DEBUG_LOG_LEVEL=DEBUG` in `.env` and `docker logs -f ibkr-debug` to tail payloads. Aggressive log rotation (`max-size: 10k`, `max-file: 1`) keeps disk usage minimal.
+- **Logging**: Summary at INFO level, full payload+headers at DEBUG level. Set `DEBUG_LOG_LEVEL=DEBUG` in `.env` and `docker logs -f debug` to tail payloads. Aggressive log rotation (`max-size: 10k`, `max-file: 1`) keeps disk usage minimal.
 - **No auth** — the debug path in the URL acts as a shared secret. The service is not exposed to the internet unless Caddy routes to it via `debug.caddy`.
-- **Port 9000** is hardcoded (`HTTP_PORT = 9000`). In production, Caddy reverse-proxies to `ibkr-debug:9000` — no host port mapping needed. Local dev uses `15003:9000` (`docker-compose.local.yml`), E2E uses `15012:9000` (`docker-compose.test.yml`).
-- **Module name**: `debug_app.py` (not `main.py`) to avoid `sys.modules` collisions with `services/poller/main.py` when both are on `sys.path`.
+- **Port 9000** is hardcoded (`HTTP_PORT = 9000`). In production, Caddy reverse-proxies to `debug:9000` — no host port mapping needed. Local dev uses `15003:9000` (`docker-compose.local.yml`), E2E uses `15012:9000` (`docker-compose.test.yml`).
+- **Module name**: `debug_app.py` (not `main.py`) to avoid `sys.modules` collisions when both are on `sys.path`.
 
-## Listener Structure
+## Dedup Package
 
-The `services/listener/` package is a **standalone library** (no container) that subscribes to ibkr_bridge's WebSocket event stream for real-time trade fills.
-
-```
-services/listener/
-  __init__.py              # WS subscriber: connect, map fills, dedup, notify (start_listener, build_listener_config)
-  bridge_models.py         # Mirrored WsEnvelope + related types from ibkr_bridge
-  test_listener.py         # Unit tests (map_fill, env getters, debounce)
-  tests/e2e/
-    conftest.py            # Fixtures + _load_env_test() + preflight skip logic
-    test_listener_fill.py  # E2E: WS connection + fill delivery pipeline
-```
-
-- **Runs inside the poller container** as a background `asyncio.create_task()`. Not a separate Docker service.
-- **Enabled via `LISTENER_ENABLED=true`** — when unset or falsy, the listener is not started.
-- **Env vars** (all optional, required only when enabled):
-  - `BRIDGE_WS_URL` — WebSocket URL (e.g. `ws://bridge:5000/ibkr/ws/events` same-droplet, `wss://trade.example.com/ibkr/ws/events` cross-droplet).
-  - `BRIDGE_API_TOKEN` — Bearer token for WS auth (must match bridge's `API_TOKEN`).
-  - `LISTENER_EXEC_EVENTS_ENABLED` — Enable `execDetailsEvent` webhooks (default `false`). Doubles volume but lower latency.
-  - `LISTENER_EVENT_DEBOUNCE_TIME` — Milliseconds to buffer fills before flushing (default `0`).
-- **Fill mapping**: `WsEnvelope` → `map_fill()` → `Fill`. Maps IB side (`BOT`/`SLD`) → `BuySell.BUY`/`SELL`, normalizes fee with `abs()`, sets `orderType=None`.
-- **Mark-after-notify**: Uses the same `_send_and_mark()` pattern as the poller — thread-local SQLite connection via `asyncio.to_thread()`, notify then mark (never reversed).
-- **`ListenerConfig`** dataclass built from env vars via `build_listener_config()`. Fail-fast `SystemExit` on missing required vars.
-- **Auto-reconnect**: On disconnect or error, waits with exponential backoff (5s initial, 300s max) and reconnects.
-- **Event types**: `connected`/`disconnected` (logged only), `execDetailsEvent` (optional fire-and-forget), `commissionReportEvent` (full dedup pipeline).
-
-## Dedup Structure
-
-The `services/dedup/` package is a **standalone library** (no container, no Dockerfile). It provides SQLite dedup logic used by the poller and listener.
+The `services/relay_core/dedup/` package provides SQLite dedup logic used by the poller and listener engines.
 
 ```
-services/dedup/
+services/relay_core/dedup/
   __init__.py              # init_db(), is_processed(), mark_processed(), get_processed_ids(), mark_processed_batch(), prune()
   test_dedup.py            # Tests for dedup module
 ```
 
 - **`init_db(db_path)`** creates the `processed_fills` table and returns a `sqlite3.Connection`.
-- **`get_processed_ids(conn, exec_ids)`** — batch check (used by poller).
-- **`mark_processed_batch(conn, exec_ids)`** — batch mark (used by poller).
+- **`get_processed_ids(conn, exec_ids)`** — batch check (used by poller engine).
+- **`mark_processed_batch(conn, exec_ids)`** — batch mark (used by poller engine).
 - **`prune(conn, days=30)`** — delete old entries.
-- **Dedup key priority** — `ibExecId → transactionId → tradeID`, resolved in `services/poller/poller/flex_parser.py` at parse time by setting `Fill.execId`. `services/shared/utilities.py::_dedup_id()` simply returns the already-resolved `fill.execId`.
-- The poller has a separate metadata DB at `META_DB_PATH` (default `/data/meta.db`) on a `poller-data` volume for the timestamp watermark. The poller's `init_dedup_db()` wraps `dedup.init_db()`; `init_meta_db()` manages the metadata table independently.
+- **Dedup key priority** — `ibExecId → transactionId → tradeID`, resolved in `services/relays/ibkr/flex_parser.py` at parse time by setting `Fill.execId`. `services/shared/utilities.py::_dedup_id()` simply returns the already-resolved `fill.execId`.
+- The poller engine has a separate metadata DB at `META_DB_PATH` (default `/data/meta/<relay>.db`) on a `relay-meta` volume for the timestamp watermark.
 
 ## Models (Two Locations)
 
 This project has **two model locations** — a shared source of truth and one service-specific file:
 
-| File                               | Domain                | Contains                                                                                                  |
-| ---------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------- |
-| `services/shared/models.py`        | CommonFill (outbound) | `Fill`, `Trade`, `WebhookPayloadTrades`, `WebhookPayload`, `BuySell`, `AssetClass`, `OrderType`, `Source` |
-| `services/poller/poller_models.py` | Poller API (outbound) | Re-exports shared models + `RunPollResponse`, `HealthResponse`                                            |
+| File                                  | Domain                | Contains                                                                                                               |
+| ------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `services/shared/models.py`           | CommonFill (outbound) | `Fill`, `Trade`, `WebhookPayloadTrades`, `WebhookPayload`, `BuySell`, `AssetClass`, `OrderType`, `Source`, `RelayName` |
+| `services/relay_core/relay_models.py` | Relay API (outbound)  | Re-exports shared models + `RunPollResponse`, `HealthResponse`                                                         |
 
 - **`services/shared/models.py`** is the single source of truth for all webhook payload models. The `__init__.py` barrel re-exports everything so `from shared import Fill` keeps working.
 - **`services/shared/utilities.py`** contains internal helpers (`aggregate_fills`, `normalize_order_type`, `normalize_asset_class`, `_dedup_id`). These are not exported to consumer packages.
 - **Model shims only re-export models and types** (Pydantic models, enums, type aliases). Utility functions (`aggregate_fills`, `normalize_order_type`, `_dedup_id`) must be imported directly from the owning module: `from shared import aggregate_fills`. Never re-export functions through model shims.
-- `poller_models.py` re-exports shared models and defines poller-specific API types. Its exported models (`RunPollResponse`, `HealthResponse`) are listed in `schema_gen.py:SCHEMA_MODELS`.
+- `relay_models.py` re-exports shared models and defines relay-specific API types. Its exported models (`RunPollResponse`, `HealthResponse`) are listed in `schema_gen.py:SCHEMA_MODELS`.
 - `shared/models.py` exports the CommonFill contract (`WebhookPayloadTrades`, `Trade`, `Fill`). These are listed in `schema_gen.py:SCHEMA_MODELS`. The barrel `__init__.py` re-exports them so `from shared import X` keeps working.
 - All external-contract models use `ConfigDict(extra="forbid")` for strict validation.
 
 ## TypeScript Types
 
-### Namespace Convention (cross-relay standard)
+### Namespace Convention
 
 All relay projects export TypeScript types using a two-tier namespace pattern:
 
-- **`types/typescript/shared/`** → exported as the **relay's primary namespace** (named after the exchange: `Ibkr`, `Kraken`, etc.). Contains the CommonFill models (`Fill`, `Trade`, `WebhookPayloadTrades`, `WebhookPayload`, `BuySell`) generated via `schema_gen.py` from `services/shared/models.py`. Every relay has this.
-- **`types/typescript/<module>/`** → exported as **`<RelayName><ModuleName>`** (e.g. `IbkrPoller`). Contains service-specific types generated via `schema_gen.py`. Only created when a service has unique types not in shared.
+- **`types/typescript/shared/`** → exported as `BrokerRelay`. Contains the CommonFill models (`Fill`, `Trade`, `WebhookPayloadTrades`, `WebhookPayload`, `BuySell`) generated via `schema_gen.py` from `services/shared/models.py`.
+- **`types/typescript/relay_api/`** → exported as `RelayApi`. Contains relay-specific API types (`RunPollResponse`, `HealthResponse`) generated via `schema_gen.py` from `services/relay_core/relay_models.py`.
 
 The barrel `types/typescript/index.d.ts` ties them together:
 
 ```ts
-import * as Ibkr from "./shared";
-import * as IbkrPoller from "./poller";
-export { Ibkr, IbkrPoller };
+import * as BrokerRelay from "./shared";
+import * as RelayApi from "./relay_api";
+export { BrokerRelay, RelayApi };
 ```
 
-A relay with no service-specific types (e.g. kraken_relay) has only the shared namespace:
+### Types Package
 
-```ts
-export * as Kraken from "./shared";
-```
-
-### IBKR Relay Types
-
-- Types are published as `@tradegist/ibkr-relay-types` (npm package in `types/typescript/`, not yet published).
-- **Two namespaces**: `Ibkr` (shared webhook payload types) and `IbkrPoller` (poller-specific API types).
-- **`make types`** regenerates both from Pydantic models:
-  - `services/shared/models.py` → `types/typescript/shared/types.d.ts` (CommonFill models: WebhookPayloadTrades, Trade, Fill, BuySell)
-  - `services/poller/poller_models.py` → `types/typescript/poller/types.d.ts` (poller-specific: RunPollResponse, HealthResponse)
-  - `services/shared/models.py` → `types/python/ibkr_relay_types/shared.py` (Python, via `gen_python_types.py`)
-  - `services/poller/poller_models.py` → `types/python/ibkr_relay_types/poller.py` (Python, via `gen_python_types.py`)
+- Types are published as `@tradegist/broker-relay-types` (npm package in `types/typescript/`, not yet published).
+- **Two namespaces**: `BrokerRelay` (shared webhook payload types) and `RelayApi` (relay API types).
+- **`make types`** regenerates both from Pydantic models (depends on `typecheck`):
+  - `services/shared/models.py` → `types/typescript/shared/types.d.ts`
+  - `services/relay_core/relay_models.py` → `types/typescript/relay_api/types.d.ts`
+  - Also generates Python type packages via `gen_python_types.py`.
 - **Structure:**
   ```
-  types/
-    typescript/
-      index.d.ts                 # Barrel: exports Ibkr, IbkrPoller namespaces
-      package.json               # @tradegist/ibkr-relay-types
-      shared/
-        index.d.ts               # Re-exports: BuySell, Fill, Trade, WebhookPayloadTrades, WebhookPayload
-        types.d.ts               # Generated from services/shared/models.py (via schema_gen.py)
-        types.schema.json         # Intermediate JSON Schema
-      poller/
-        index.d.ts               # Re-exports: RunPollResponse, HealthResponse
-        types.d.ts               # Generated from services/poller/poller_models.py (via schema_gen.py)
-        types.schema.json         # Intermediate JSON Schema
-    python/
-      pyproject.toml             # ibkr-relay-types, deps: pydantic
-      ibkr_relay_types/
-        __init__.py              # Re-exports all public types
-        shared.py                # CommonFill models (generated from services/shared/models.py)
-        poller.py                # Poller API types (generated from poller_models.py)
+  types/typescript/
+    index.d.ts                 # Barrel: exports BrokerRelay, RelayApi namespaces
+    package.json               # @tradegist/broker-relay-types
+    shared/
+      index.d.ts               # Re-exports: BuySell, Fill, Trade, WebhookPayloadTrades, WebhookPayload
+      types.d.ts               # Generated from services/shared/models.py
+      types.schema.json         # Intermediate JSON Schema
+    relay_api/
+      index.d.ts               # Re-exports: RunPollResponse, HealthResponse
+      types.d.ts               # Generated from services/relay_core/relay_models.py
+      types.schema.json         # Intermediate JSON Schema
   ```
-- **Usage:** `import { Ibkr, IbkrPoller } from "@tradegist/ibkr-relay-types"`
+- **Usage:** `import { BrokerRelay, RelayApi } from "@tradegist/broker-relay-types"`
 - `schema_gen.py` owns the `SCHEMA_MODELS` dict (keyed by module name, e.g. `"shared"` → `[WebhookPayloadTrades, Trade, Fill]`). **To export a new model to TypeScript, add it to the relevant entry in `schema_gen.py:SCHEMA_MODELS` and update the corresponding `types/typescript/*/index.d.ts` re-exports.** The Python types package is auto-generated by `gen_python_types.py`.
 
 ## Python Types Package
 
-- Types are available as `ibkr-relay-types` (PyPI package in `types/python/`, not yet published).
-- **Standalone Pydantic models** — no dependency on the poller service.
-- Exports the **same public types** as the TypeScript package: CommonFill models and poller API types.
+- Types are available as `broker-relay-types` (PyPI package in `types/python/`, not yet published).
+- **Standalone Pydantic models** — no dependency on the relay service.
+- Exports the **same public types** as the TypeScript package: CommonFill models and relay API types.
 - **Structure:**
   ```
   types/python/
-    pyproject.toml              # ibkr-relay-types, deps: pydantic
-    ibkr_relay_types/
+    pyproject.toml              # broker-relay-types, deps: pydantic
+    broker_relay_types/
       __init__.py               # Re-exports all public types
-      shared.py                 # CommonFill models (generated from services/shared/models.py public section)
-      poller.py                 # Poller API types (generated from poller_models.py)
+      shared.py                 # CommonFill models (generated from services/shared/models.py)
+      poller.py                 # Relay API types (generated from relay_models.py)
   ```
-- **Usage:** `from ibkr_relay_types import Fill, Trade, WebhookPayload, BuySell`
-- **Auto-generated** — `shared.py` extracts from `shared/models.py` (stripping docstring). `poller.py` copies `poller_models.py` with imports rewritten from `shared` to `.shared`. Run `make types` to regenerate. Do not edit these files manually.
-- **Covered by `make lint` and `make typecheck`** — `types/python/ibkr_relay_types/` is included in both targets. Generated code must pass ruff and mypy like any other Python module.
+- **Usage:** `from broker_relay_types import Fill, Trade, WebhookPayload, BuySell`
+- **Auto-generated** — `shared.py` extracts from `shared/models.py`. `poller.py` copies `relay_models.py` with imports rewritten. Run `make types` to regenerate. Do not edit the generated files manually.
+- **Covered by `make lint` and `make typecheck`** — `types/python/broker_relay_types/` is included in both targets. Generated code must pass ruff and mypy like any other Python module.
 
 ## Code Style
 
-- Python: `logging` module, f-strings, `aiohttp` for async HTTP in poller, `httpx` for sync HTTP client in poller.
+- Python: `logging` module, f-strings, `aiohttp` for async HTTP in relay service, `httpx` for sync HTTP client in poller engine.
 - CLI scripts: Python (`cli/` package), invoked via `python3 -m cli <command>` or `make`. Uses only stdlib (`subprocess`, `urllib.request`, `json`, `os`). No third-party dependencies. Uses lazy dispatch (`importlib.import_module`) — each command only imports its own module.
 - Terraform: all secrets marked `sensitive = true` in `variables.tf`.
 
@@ -459,13 +490,13 @@ export * as Kraken from "./shared";
 All commands available via `make` or `python3 -m cli <command>`:
 
 ```bash
-make deploy    # Standalone: Terraform | Shared: rsync + compose (reads .env)
-make sync      # Push .env to droplet + restart services
+make deploy    # Standalone: Terraform | Shared: rsync + compose (reads .env.droplet)
+make sync      # Push .env + .env.relays to droplet + restart services
 make sync LOCAL_FILES=1  # rsync files + rebuild + restart (full code deploy)
 make destroy   # Terraform destroy
 make pause     # Snapshot + delete droplet (save costs)
 make resume    # Restore from snapshot
-make poll      # Trigger immediate Flex poll
+make poll      # Trigger immediate poll (RELAY=ibkr, IDX=1)
 make e2e       # Run E2E tests (starts/stops stack)
 make lint      # Run ruff linter (FIX=1 to auto-fix)
 ```
@@ -475,20 +506,22 @@ Direct CLI (no Make required, works on Windows):
 ```bash
 python3 -m cli deploy
 python3 -m cli sync --local-files
-python3 -m cli poll 2
+python3 -m cli poll ibkr 1
 ```
 
 ## Deployment Model (MANDATORY)
 
-- **`make sync LOCAL_FILES=1` uses rsync** to transfer files from the local working tree to `/opt/ibkr-relay/` on the droplet. It does NOT use git on the droplet — no git clone, no deploy keys, no GitHub access needed from the server.
+- **`make sync LOCAL_FILES=1` uses rsync** to transfer files from the local working tree to `/opt/broker-relay/` on the droplet. It does NOT use git on the droplet — no git clone, no deploy keys, no GitHub access needed from the server.
 - **Guards:** Must be on `main` branch with a clean working tree (no uncommitted changes). This ensures rsync deploys a known committed state.
 - **`--delete` flag:** rsync removes files on the droplet that no longer exist locally. This correctly handles renames and deletions but is dangerous for server-generated files.
-- **Invariant: the project directory (`/opt/ibkr-relay/`) contains only source files.** No service, script, or container may write files into the project directory. All runtime-generated data (databases, caches, logs, certificates) MUST use Docker named volumes (e.g. `poller-data:/data`, `caddy-data:/data`). Docker volumes live under `/var/lib/docker/volumes/`, completely outside the project directory, and are safe from rsync `--delete`.
-- **When adding new runtime data** (a new database, cache file, upload directory, etc.): create a Docker named volume in `docker-compose.yml` and mount it into the container. Never write to a path inside `/opt/ibkr-relay/`.
+- **Invariant: the project directory (`/opt/broker-relay/`) contains only source files.** No service, script, or container may write files into the project directory. All runtime-generated data (databases, caches, logs, certificates) MUST use Docker named volumes (e.g. `dedup-data:/data/dedup`, `relay-meta:/data/meta`, `caddy-data:/data`). Docker volumes live under `/var/lib/docker/volumes/`, completely outside the project directory, and are safe from rsync `--delete`.
+- **When adding new runtime data** (a new database, cache file, upload directory, etc.): create a Docker named volume in `docker-compose.yml` and mount it into the container. Never write to a path inside `/opt/broker-relay/`.
 - **`.deployed-sha`** is the only server-side file inside the project directory. It is written by `cli/sync.py` after each `--local-files` sync and is excluded from rsync `--delete`. It records the deployed commit SHA for traceability.
 - **rsync exclusions** (files never overwritten or deleted on the droplet):
   - `.git/` — not present on droplet (no git repo)
   - `.env` — pushed separately via scp (contains secrets)
+  - `.env.relays` — pushed separately via scp (contains relay secrets)
+  - `.env.droplet` — never pushed to droplet (CLI-only)
   - `.env.test` — local-only test config
   - `.deployed-sha` — server-side deployment marker
   - Everything in `.gitignore` — via `--filter ':- .gitignore'`
@@ -496,42 +529,72 @@ python3 -m cli poll 2
 ## File Structure
 
 ```
-.env.example            # Template — copy to .env and fill in real values
-docker-compose.yml      # All services (caddy, poller, poller-2, ibkr-debug)
-docker-compose.shared.yml # Shared-mode overlay (disables Caddy, uses SHARED_NETWORK)
-docker-compose.local.yml  # Local dev override (direct port access, no TLS)
-docker-compose.test.yml   # Test stack override
-cli/                    # Python CLI (operator scripts)
-  __init__.py           # Shared helpers (env loading, SSH, DO API, validation)
-  __main__.py           # Entry point (lazy dispatch via importlib)
+env_examples/              # Env var templates (make setup copies to .<name>)
+  env                      # App config (.env)
+  env.droplet              # CLI-only deployment config (.env.droplet)
+  env.relays               # Relay-prefixed vars (.env.relays)
+  env.test                 # E2E test config (.env.test)
+docker-compose.yml         # All services (caddy, relays, debug)
+docker-compose.shared.yml  # Shared-mode overlay (disables Caddy, uses SHARED_NETWORK)
+docker-compose.local.yml   # Local dev override (direct port access, no TLS)
+docker-compose.test.yml    # Test stack override (env_file: !override with .env.test)
+cli/                       # Python CLI (operator scripts, stdlib only)
+  __init__.py              # Shared helpers (env loading, SSH, DO API, validation)
+  __main__.py              # Entry point (lazy dispatch via importlib)
   core/
-    deploy.py           # Standalone (Terraform) or shared (rsync + compose)
-    destroy.py          # Terraform destroy
-    pause.py            # Snapshot + delete droplet
-    resume.py           # Restore from snapshot
-    sync.py             # Push .env + restart services
-  poll.py               # Trigger immediate Flex poll
-  test_webhook.py       # Send test webhook payload
-services/               # Business-logic services (user-facing features)
-  poller/               # Flex poller service (see Poller Structure above)
-    poller_models.py    # Pydantic models: Fill, Trade, WebhookPayloadTrades, WebhookPayload, BuySell, Source
-  listener/             # Real-time WS subscriber to ibkr_bridge (library, runs inside poller)
-  debug/                # Debug webhook inbox service (see Debug Webhook Service above)
-  notifier/             # Pluggable notification backends (library, no container)
-  dedup/                # SQLite dedup library (library, no container)
-  shared/               # Shared models and utilities (library, no container)
-    __init__.py         # Barrel: re-exports models + utilities
-    models.py           # Pydantic models and type aliases (public contract)
-    utilities.py        # Internal helpers (aggregate_fills, normalize_*, _dedup_id)
-infra/                  # Infrastructure backbone (no business logic)
-  caddy/Caddyfile       # Reverse proxy config (uses env vars for domains)
-  caddy/sites/          # Route snippets imported inside {$SITE_DOMAIN}
-    ibkr.caddy          # /ibkr/* routes (poller)
-    debug.caddy         # /debug/webhook/* → ibkr-debug:9000
-types/                  # Type packages (TypeScript + Python)
-  typescript/            # @tradegist/ibkr-relay-types npm package (Ibkr + IbkrPoller namespaces)
-  python/                # ibkr-relay-types PyPI package
-schema_gen.py           # JSON Schema generator (Pydantic → TS types)
-gen_python_types.py     # Python types generator (shared/models.py + poller_models.py → types/python/)
-terraform/              # Infrastructure as code (DigitalOcean)
+    __init__.py            # CoreConfig, load_env() — loads .env.droplet + .env + .env.relays
+    deploy.py              # Standalone (Terraform) or shared (rsync + compose)
+    destroy.py             # Terraform destroy
+    pause.py               # Snapshot + delete droplet
+    resume.py              # Restore from snapshot
+    sync.py                # Push .env + .env.relays + restart services
+  poll.py                  # Trigger immediate poll (relay + index)
+  test_webhook.py          # Send test webhook payload
+services/                  # Business-logic services
+  relay_core/              # Main container: registry + engines + HTTP API
+    __init__.py            # BrokerRelay dataclass, re-exports engine types
+    main.py                # Entrypoint (loads relays, starts pollers + listeners + API)
+    registry.py            # Relay registry (RELAYS env var → adapter loading)
+    poller_engine.py       # Generic poller (dedup, fetch, parse, notify, mark)
+    listener_engine.py     # Generic WS listener (connect, dedup, notify, reconnect)
+    relay_models.py        # Re-export shim (shared models + RunPollResponse, HealthResponse)
+    dedup/                 # SQLite dedup library
+      __init__.py          # init_db(), is_processed(), mark_processed(), prune()
+    notifier/              # Pluggable notification backends
+      __init__.py          # Registry, load_notifiers(), validate_notifier_env(), notify()
+      base.py              # BaseNotifier ABC
+      webhook.py           # WebhookNotifier: HMAC-SHA256 signed HTTP POST
+    routes/                # HTTP API
+      __init__.py          # create_app(), start_api_server(), handle_health, handle_poll
+      middlewares.py       # Auth middleware (Bearer token, AUTH_PREFIX=/relays)
+    tests/e2e/             # E2E tests
+      conftest.py          # httpx fixtures + two-tier preflight
+      test_smoke.py        # Health + auth smoke tests
+    Dockerfile
+    requirements.txt
+  relays/                  # Broker adapters (one package per broker)
+    ibkr/                  # IBKR adapter
+      __init__.py          # build_relay(), env getters, map_fill()
+      bridge_models.py     # Mirrored WsEnvelope types from ibkr_bridge
+      flex_fetch.py        # Flex Web Service two-step fetch
+      flex_parser.py       # Flex XML parser (Activity + Trade Confirmation)
+  shared/                  # Shared models and utilities (library, no container)
+    __init__.py            # Barrel: re-exports models + utilities
+    models.py              # Pydantic models (Fill, Trade, WebhookPayload, BuySell, RelayName)
+    utilities.py           # Internal helpers (aggregate_fills, normalize_*, _dedup_id)
+  debug/                   # Debug webhook inbox service
+    debug_app.py           # aiohttp app: POST/GET/DELETE /debug/webhook/{path}
+    Dockerfile
+    requirements.txt
+infra/                     # Infrastructure backbone (no business logic)
+  caddy/Caddyfile          # Reverse proxy config (uses env vars for domains)
+  caddy/sites/             # Route snippets imported inside {$SITE_DOMAIN}
+    ibkr.caddy             # /relays/* routes → relays:8000
+    debug.caddy            # /debug/webhook/* → debug:9000
+types/                     # Type packages (TypeScript + Python)
+  typescript/              # @tradegist/broker-relay-types (BrokerRelay + RelayApi namespaces)
+  python/                  # broker-relay-types PyPI package
+schema_gen.py              # JSON Schema generator (Pydantic → TS types)
+gen_python_types.py        # Python types generator (shared/models.py + relay_models.py → types/python/)
+terraform/                 # Infrastructure as code (DigitalOcean)
 ```

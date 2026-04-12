@@ -122,7 +122,7 @@ SCHEMA_MODELS: dict[str, list[str]] = {
         "Trade",
         "Fill",
     ],
-    "poller_models": [
+    "relay_models": [
         "RunPollResponse",
         "HealthResponse",
     ],

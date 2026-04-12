@@ -91,7 +91,6 @@
       "properties": {
         "relay": {
           "const": "ibkr",
-          "default": "ibkr",
           "type": "string"
         },
         "type": {
@@ -113,9 +112,9 @@
         }
       },
       "required": [
+        "relay",
         "data",
         "errors",
-        "relay",
         "type"
       ],
       "title": "WebhookPayloadTrades",
@@ -209,6 +208,12 @@
         "stop",
         "stop_limit",
         "trailing_stop"
+      ],
+      "type": "string"
+    },
+    "RelayName": {
+      "enum": [
+        "ibkr"
       ],
       "type": "string"
     },

@@ -56,6 +56,8 @@ def _sync_local_files(droplet_ip, *, strict_host_check=True):
         "--filter", ":- .gitignore",
         "--exclude", ".git/",
         "--exclude", ".env",
+        "--exclude", ".env.droplet",
+        "--exclude", ".env.relays",
         "--exclude", ".env.test",
         "--exclude", ".deployed-sha",
         f"{cfg.project_dir}/",
@@ -93,8 +95,11 @@ def run(args):
     if is_shared():
         compose_files = "-f docker-compose.yml -f docker-compose.shared.yml "
 
-    print("Pushing .env to droplet...")
+    print("Pushing env files to droplet...")
     scp_file(cfg.project_dir / ".env", f"{cfg.remote_dir}/.env", droplet_ip)
+    relays_env = cfg.project_dir / ".env.relays"
+    if relays_env.exists():
+        scp_file(relays_env, f"{cfg.remote_dir}/.env.relays", droplet_ip)
 
     compose_env = cfg.compose_env()
 

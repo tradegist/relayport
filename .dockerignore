@@ -1,28 +1,19 @@
-# Exclude everything, then allow only what the poller Dockerfile needs.
+# Exclude everything, then allow only what the Dockerfiles need.
 
 *
 
-!services/poller/**
-services/poller/tests/
-services/poller/Dockerfile
-services/poller/**/test_*.py
-services/poller/**/__pycache__/
+!services/relay_core/**
+services/relay_core/Dockerfile
+services/relay_core/**/test_*.py
+services/relay_core/**/__pycache__/
 
-!services/notifier/**
-services/notifier/**/test_*.py
-services/notifier/**/__pycache__/
-
-!services/dedup/**
-services/dedup/**/test_*.py
-services/dedup/**/__pycache__/
+!services/relays/**
+services/relays/**/test_*.py
+services/relays/**/__pycache__/
 
 !services/shared/**
 services/shared/**/test_*.py
 services/shared/**/__pycache__/
-
-!services/listener/**
-services/listener/**/test_*.py
-services/listener/**/__pycache__/
 
 !services/debug/**
 services/debug/Dockerfile

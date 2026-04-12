@@ -20,7 +20,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt -r services/poller/requirements.txt
+        run: make deps PYTHON=python3 PIP=pip
 
       - name: Run linter
         run: make lint PYTHON=python3

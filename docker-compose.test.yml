@@ -3,28 +3,25 @@
 # See Makefile E2E_COMPOSE for the full invocation.
 
 services:
-  poller:
+  relays:
     restart: "no"
+    env_file: !override
+      - .env.test
     environment:
+      RELAYS: ibkr
       IBKR_FLEX_TOKEN: test-flex-token
       IBKR_FLEX_QUERY_ID: "000000"
       API_TOKEN: test-token
-      POLLER_API_PORT: "8000"
+      API_PORT: "8000"
       DEBUG_WEBHOOK_PATH: test-debug-path
       NOTIFIERS: webhook
       WEBHOOK_SECRET: test-webhook-secret
-      LISTENER_ENABLED: "${LISTENER_ENABLED:-false}"
-      BRIDGE_WS_URL: "${BRIDGE_WS_URL:-}"
-      BRIDGE_API_TOKEN: "${BRIDGE_API_TOKEN:-}"
-      PYTHONPATH: /opt
     ports:
       - "15011:8000"
     volumes:
-      - ./services/poller:/app
-      - ./services/notifier:/opt/notifier
-      - ./services/dedup:/opt/dedup
-      - ./services/shared:/opt/shared
-      - ./services/listener:/opt/listener
+      - ./services/relay_core:/app/relay_core
+      - ./services/relays:/app/relays
+      - ./services/shared:/app/shared
     healthcheck:
       test:
         [
@@ -38,7 +35,7 @@ services:
       retries: 20
       start_period: 5s
 
-  ibkr-debug:
+  debug:
     restart: "no"
     deploy:
       replicas: 1
@@ -67,4 +64,4 @@ services:
 
 networks:
   default:
-    name: ibkr-relay-test
+    name: broker-relay-test

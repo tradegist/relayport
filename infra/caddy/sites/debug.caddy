@@ -1,3 +1,3 @@
 handle /debug/webhook/* {
-    reverse_proxy ibkr-debug:9000
+    reverse_proxy debug:9000
 }

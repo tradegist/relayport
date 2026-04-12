@@ -1,8 +1,3 @@
-handle /ibkr/poller/2/* {
-    uri replace /ibkr/poller/2 /ibkr/poller
-    reverse_proxy poller-2:8000
-}
-
-handle /ibkr/poller/* {
-    reverse_proxy poller:8000
+handle /relays/* {
+    reverse_proxy relays:8000
 }

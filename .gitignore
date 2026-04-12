@@ -1,4 +1,6 @@
 .env
+.env.droplet
+.env.relays
 .env.test
 .pause-state
 .venv/
@@ -9,3 +11,4 @@ terraform/terraform.tfstate.backup
 terraform/*.tfplan
 *.tfvars
 **/__pycache__/
+.DS_Store

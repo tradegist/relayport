@@ -1,0 +1,146 @@
+{
+  "$defs": {
+    "BuySell": {
+      "enum": [
+        "buy",
+        "sell"
+      ],
+      "title": "BuySell",
+      "type": "string"
+    },
+    "Trade": {
+      "additionalProperties": false,
+      "description": "Aggregated trade (one or more fills for the same order).",
+      "properties": {
+        "orderId": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "assetClass": {
+          "enum": [
+            "equity",
+            "option",
+            "crypto",
+            "future",
+            "forex",
+            "other"
+          ],
+          "type": "string"
+        },
+        "side": {
+          "$ref": "#/$defs/BuySell"
+        },
+        "orderType": {
+          "anyOf": [
+            {
+              "enum": [
+                "market",
+                "limit",
+                "stop",
+                "stop_limit",
+                "trailing_stop"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "price": {
+          "type": "number"
+        },
+        "volume": {
+          "type": "number"
+        },
+        "cost": {
+          "type": "number"
+        },
+        "fee": {
+          "type": "number"
+        },
+        "fillCount": {
+          "type": "integer"
+        },
+        "execIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "timestamp": {
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "flex",
+            "execDetailsEvent",
+            "commissionReportEvent"
+          ],
+          "type": "string"
+        },
+        "raw": {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "required": [
+        "orderId",
+        "symbol",
+        "assetClass",
+        "side",
+        "price",
+        "volume",
+        "cost",
+        "fee",
+        "fillCount",
+        "execIds",
+        "timestamp",
+        "source",
+        "raw"
+      ],
+      "title": "Trade",
+      "type": "object"
+    },
+    "RunPollResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "trades": {
+          "items": {
+            "$ref": "#/$defs/Trade"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "trades"
+      ],
+      "title": "RunPollResponse",
+      "type": "object"
+    },
+    "HealthResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "HealthResponse",
+      "type": "object"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/RunPollResponse"
+    },
+    {
+      "$ref": "#/$defs/HealthResponse"
+    }
+  ]
+}

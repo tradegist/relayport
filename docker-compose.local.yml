@@ -3,33 +3,15 @@
 # Usage: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
 
 services:
-  poller:
+  relays:
     ports:
       - "15001:8000"
     volumes:
-      - ./services/poller/main.py:/app/main.py:ro
-      - ./services/poller/poller_models.py:/app/poller_models.py:ro
-      - ./services/poller/poller:/app/poller:ro
-      - ./services/poller/poller_routes:/app/poller_routes:ro
-      - ./services/notifier:/app/notifier:ro
-      - ./services/dedup:/app/dedup:ro
+      - ./services/relay_core:/app/relay_core:ro
+      - ./services/relays:/app/relays:ro
       - ./services/shared:/app/shared:ro
-      - ./services/listener:/app/listener:ro
 
-  poller-2:
-    ports:
-      - "15002:8000"
-    volumes:
-      - ./services/poller/main.py:/app/main.py:ro
-      - ./services/poller/poller_models.py:/app/poller_models.py:ro
-      - ./services/poller/poller:/app/poller:ro
-      - ./services/poller/poller_routes:/app/poller_routes:ro
-      - ./services/notifier:/app/notifier:ro
-      - ./services/dedup:/app/dedup:ro
-      - ./services/shared:/app/shared:ro
-      - ./services/listener:/app/listener:ro
-
-  ibkr-debug:
+  debug:
     ports:
       - "15003:9000"
     volumes:
@@ -40,4 +22,4 @@ services:
 
 networks:
   default:
-    name: ibkr-relay-local
+    name: relay-local

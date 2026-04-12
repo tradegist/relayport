@@ -41,7 +41,7 @@ resource "tls_private_key" "deploy" {
 }
 
 resource "digitalocean_ssh_key" "deploy" {
-  name       = "ibkr-relay-deploy"
+  name       = "broker-relay-deploy"
   public_key = tls_private_key.deploy.public_key_openssh
 }
 
@@ -50,7 +50,7 @@ resource "digitalocean_ssh_key" "deploy" {
 # ---------------------------------------------------------------------------
 resource "digitalocean_droplet" "relay" {
   image    = "ubuntu-24-04-x64"
-  name     = "ibkr-relay"
+  name     = "broker-relay"
   region   = var.droplet_region
   size     = var.droplet_size
   ssh_keys = [digitalocean_ssh_key.deploy.fingerprint]
@@ -84,7 +84,7 @@ resource "digitalocean_reserved_ip" "relay" {
 # Firewall — restrict SSH + noVNC to deployer IP only
 # ---------------------------------------------------------------------------
 resource "digitalocean_firewall" "relay" {
-  name        = "ibkr-relay-fw"
+  name        = "broker-relay-fw"
   droplet_ids = [digitalocean_droplet.relay.id]
 
   # SSH

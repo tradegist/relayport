@@ -15,7 +15,7 @@ _PROJECT_MODULES: dict[str, str] = {
 
 def main():
     parser = argparse.ArgumentParser(
-        description="IBKR Webhook Relay CLI",
+        description="Broker Relay CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command")
@@ -24,13 +24,12 @@ def main():
     register_parsers(sub)
 
     # ── Project-specific commands ──
-    p = sub.add_parser("poll", help="Trigger an immediate Flex poll")
-    p.add_argument("poller", nargs="?", default="1", choices=["1", "2"],
-                   help="Which poller (default: 1)")
+    p = sub.add_parser("poll", help="Trigger an immediate poll")
+    p.add_argument("relay", help="Relay name (e.g. ibkr)")
+    p.add_argument("poll_idx", nargs="?", default="1", type=str,
+                   help="Poller index (default: 1)")
     p.add_argument("-v", "--verbose", action="store_true",
-                   help="Run poll via SSH to see full poller logs")
-    p.add_argument("--debug", action="store_true",
-                   help="Dump raw Flex XML (implies -v)")
+                   help="Stream container logs alongside the poll")
     p.add_argument("--replay", type=int, metavar="N",
                    help="Resend N trades even if already processed (for testing)")
 

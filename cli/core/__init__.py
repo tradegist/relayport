@@ -142,18 +142,41 @@ def die(msg: str) -> "None":
     sys.exit(1)
 
 
-def load_env(path: str | Path | None = None) -> None:
-    cfg = _config
-    default = cfg.project_dir / ".env" if cfg else Path(".env")
-    env_path = Path(path) if path else default
-    if not env_path.exists():
-        die(".env file not found. Copy .env.example to .env and fill in your values.")
-    for line in env_path.read_text().splitlines():
+def _load_env_file(path: Path) -> None:
+    """Load a single .env file into os.environ."""
+    for line in path.read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         key, _, value = line.partition("=")
         os.environ[key.strip()] = value
+
+
+def load_env(path: str | Path | None = None) -> None:
+    """Load project env files into os.environ.
+
+    When *path* is given, loads that single file.
+    Otherwise loads .env.droplet (optional), .env (required),
+    and .env.relays (optional) from the project root.
+    """
+    if path:
+        p = Path(path)
+        if not p.exists():
+            die(f"Env file not found: {p}")
+        _load_env_file(p)
+        return
+
+    cfg = _config
+    project_dir = cfg.project_dir if cfg else Path(".")
+
+    env_path = project_dir / ".env"
+    if not env_path.exists():
+        die(".env not found. Run 'make setup' or copy env_examples/env to .env")
+
+    for name in (".env.droplet", ".env", ".env.relays"):
+        f = project_dir / name
+        if f.exists():
+            _load_env_file(f)
 
 
 @overload

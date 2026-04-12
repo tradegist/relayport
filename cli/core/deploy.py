@@ -58,9 +58,12 @@ def _deploy_standalone():
     # Rsync project files to the droplet (skip host key check — new droplet)
     _sync_local_files(droplet_ip, strict_host_check=False)
 
-    # Push .env with secrets
-    print("Pushing .env to droplet...")
+    # Push env files to droplet
+    print("Pushing env files to droplet...")
     scp_file(cfg.project_dir / ".env", f"{cfg.remote_dir}/.env", droplet_ip)
+    relays_env = cfg.project_dir / ".env.relays"
+    if relays_env.exists():
+        scp_file(relays_env, f"{cfg.remote_dir}/.env.relays", droplet_ip)
 
     # Start the stack
     profiles = cfg.compose_profiles()
@@ -166,8 +169,11 @@ def _deploy_shared():
     _run_checks(skip_e2e=True)
     _sync_local_files(droplet_ip)
 
-    print("Pushing .env to droplet...")
+    print("Pushing env files to droplet...")
     scp_file(cfg.project_dir / ".env", f"{cfg.remote_dir}/.env", droplet_ip)
+    relays_env = cfg.project_dir / ".env.relays"
+    if relays_env.exists():
+        scp_file(relays_env, f"{cfg.remote_dir}/.env.relays", droplet_ip)
 
     compose_env = cfg.compose_env()
     print("Starting services (shared mode)...")

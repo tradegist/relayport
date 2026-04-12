@@ -21,19 +21,22 @@ disallow_untyped_defs = false
 disallow_untyped_calls = false
 
 [tool.pytest.ini_options]
-testpaths = ["services/poller", "services/notifier", "services/dedup", "services/shared", "services/debug", "services/listener"]
+testpaths = ["services/shared", "services/debug", "services/relay_core", "services/relays"]
 norecursedirs = ["tests/e2e"]
 addopts = "--import-mode=importlib"
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["services/poller", "services/notifier", "services/dedup", "services/shared", "services/debug", "services/listener", "cli", "types/python"]
+src = ["services/shared", "services/debug", "services/relay_core", "services/relays", "cli", "types/python"]
 
 [tool.ruff.lint]
+preview = true
+explicit-preview-rules = true
 select = [
     "F",      # Pyflakes (unused imports, undefined names, etc.)
     "E",      # pycodestyle errors
+    "E261",   # too few spaces before inline comment (preview rule)
     "W",      # pycodestyle warnings
     "I",      # isort (import ordering)
     "UP",     # pyupgrade (modernize syntax for target Python)
@@ -59,6 +62,6 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = [
-    "poller_routes", "poller", "notifier", "shared", "dedup", "debug", "listener",
-    "poller_models", "ibkr_relay_types",
+    "shared", "debug",
+    "relay_core", "relay_models", "relays", "broker_relay_types",
 ]
