@@ -18,6 +18,8 @@ from relays.ibkr import (
     _on_message_factory,
     build_relay,
 )
+from shared import BuySell
+
 from .bridge_models import (
     WsCommissionReport,
     WsContract,
@@ -26,7 +28,6 @@ from .bridge_models import (
     WsExecution,
     WsFill,
 )
-from shared import BuySell
 
 # ── Env var setup ────────────────────────────────────────────────────
 
