@@ -71,11 +71,14 @@ async def _run_listener(relay: BrokerRelay) -> None:
 async def amain() -> None:
     """Load all relays, start API server, pollers, and listeners."""
     relays = load_relays()
+    if not relays:
+        log.info("No relays configured (RELAYS is empty) — running API server only")
 
-    # One-time startup prune
-    dedup_conn = init_dedup_db()
-    prune_old(dedup_conn)
-    dedup_conn.close()
+    if relays:
+        # One-time startup prune
+        dedup_conn = init_dedup_db()
+        prune_old(dedup_conn)
+        dedup_conn.close()
 
     await start_api_server(relays)
 

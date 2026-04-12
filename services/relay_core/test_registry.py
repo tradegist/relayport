@@ -59,16 +59,14 @@ class TestGetRelayNames(unittest.TestCase):
         with patch.dict(os.environ, {"RELAYS": "IBKR"}):
             self.assertEqual(get_relay_names(), ["ibkr"])
 
-    def test_empty_raises(self) -> None:
-        with patch.dict(os.environ, {"RELAYS": ""}), \
-             self.assertRaises(SystemExit):
-            get_relay_names()
+    def test_empty_returns_empty(self) -> None:
+        with patch.dict(os.environ, {"RELAYS": ""}):
+            self.assertEqual(get_relay_names(), [])
 
-    def test_unset_raises(self) -> None:
+    def test_unset_returns_empty(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("RELAYS", None)
-            with self.assertRaises(SystemExit):
-                get_relay_names()
+            self.assertEqual(get_relay_names(), [])
 
     def test_unknown_relay_raises(self) -> None:
         with patch.dict(os.environ, {"RELAYS": "unknown"}), \
@@ -80,10 +78,9 @@ class TestGetRelayNames(unittest.TestCase):
         with patch.dict(os.environ, {"RELAYS": "ibkr,,"}):
             self.assertEqual(get_relay_names(), ["ibkr"])
 
-    def test_only_commas_raises(self) -> None:
-        with patch.dict(os.environ, {"RELAYS": ",,,"}), \
-             self.assertRaises(SystemExit):
-            get_relay_names()
+    def test_only_commas_returns_empty(self) -> None:
+        with patch.dict(os.environ, {"RELAYS": ",,,"}):
+            self.assertEqual(get_relay_names(), [])
 
 
 class TestValidRelayNames(unittest.TestCase):

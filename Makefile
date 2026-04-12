@@ -3,8 +3,8 @@
 PROJECT = broker-relay
 PYTHON ?= .venv/bin/python3
 E2E_ENV = .env.test
-E2E_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
-E2E_COMPOSE_DOWN = docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
+E2E_COMPOSE = SITE_DOMAIN=unused API_TOKEN=test-token docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
+E2E_COMPOSE_DOWN = SITE_DOMAIN=unused API_TOKEN=test-token docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
 LOCAL_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.local.yml
 CLI_RELAY_ENV = $(if $(ENV),RELAY_ENV=$(ENV))
 
@@ -46,7 +46,7 @@ poll: ## Trigger an immediate poll (RELAY=ibkr, IDX=1, V=1 verbose, DEBUG=1 raw 
 test-webhook: ## Send sample trades to webhook endpoint (make test-webhook [S=2] [ENV=local])
 	$(CLI_RELAY_ENV) $(PYTHON) -m cli test-webhook $(S)
 
-types: ## Regenerate TypeScript + Python types from Pydantic models
+types: typecheck ## Regenerate TypeScript + Python types from Pydantic models
 	PYTHONPATH=services $(PYTHON) schema_gen.py shared > types/typescript/shared/types.schema.json
 	npx --yes json-schema-to-typescript types/typescript/shared/types.schema.json > types/typescript/shared/types.d.ts
 	PYTHONPATH=services/relay_core:services $(PYTHON) schema_gen.py relay_models > types/typescript/relay_api/types.schema.json

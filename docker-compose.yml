@@ -23,7 +23,7 @@ services:
       dockerfile: services/relay_core/Dockerfile
     restart: always
     environment:
-      RELAYS: ${RELAYS:?Set RELAYS in .env (e.g. ibkr)}
+      RELAYS: ${RELAYS:-}
       API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}
       # Generic (relay-agnostic) env vars — adapters use {RELAY}_VAR overrides
       NOTIFIERS: ${NOTIFIERS:-}

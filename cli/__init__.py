@@ -96,7 +96,6 @@ _CONFIG = CoreConfig(
     },
     required_env=[
         "DO_API_TOKEN",
-        "RELAYS",
         "API_TOKEN",
     ],
     service_map={

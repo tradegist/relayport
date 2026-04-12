@@ -26,14 +26,14 @@ def get_relay_names() -> list[RelayName]:
     """Parse and validate the RELAYS env var.
 
     Returns:
-        List of validated relay names.
+        List of validated relay names (empty if RELAYS is unset/blank).
 
     Raises:
-        SystemExit: If RELAYS is empty or contains an unknown relay name.
+        SystemExit: If RELAYS contains an unknown relay name.
     """
     raw = os.environ.get("RELAYS", "").strip()
     if not raw:
-        raise SystemExit("RELAYS env var must be set (e.g. RELAYS=ibkr)")
+        return []
 
     names: list[RelayName] = []
     for name in raw.split(","):
@@ -47,9 +47,6 @@ def get_relay_names() -> list[RelayName]:
             )
         # Safe to cast — validated against _VALID_RELAY_NAMES.
         names.append(name)  # type: ignore[arg-type]
-
-    if not names:
-        raise SystemExit("RELAYS env var must contain at least one relay name")
 
     return names
 
