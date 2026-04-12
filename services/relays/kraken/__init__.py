@@ -90,46 +90,46 @@ def _build_fetch(client: KrakenClient) -> Any:
 
     def fetch() -> str | None:
         try:
-            all_trades: dict[str, KrakenRestTrade] = {}  
-            offset = 0  
-            total_count: int | None = None  
+            all_trades: dict[str, KrakenRestTrade] = {}
+            offset = 0
+            total_count: int | None = None
 
-            while True:  
-                result = client.get_trades_history(ofs=offset)  
-                trades_raw = result.get("trades", {})  
-                if not isinstance(trades_raw, dict):  
-                    raise ValueError(  
-                        f"Invalid Kraken trades history response at ofs={offset}: "  
-                        f"'trades' must be a dict, got {type(trades_raw).__name__}"  
-                    )  
+            while True:
+                result = client.get_trades_history(ofs=offset)
+                trades_raw = result.get("trades", {})
+                if not isinstance(trades_raw, dict):
+                    raise ValueError(
+                        f"Invalid Kraken trades history response at ofs={offset}: "
+                        f"'trades' must be a dict, got {type(trades_raw).__name__}"
+                    )
 
-                count_raw = result.get("count", 0)  
-                try:  
-                    page_total_count = int(count_raw)  
-                except (TypeError, ValueError) as exc:  
-                    raise ValueError(  
-                        f"Invalid Kraken trades history response at ofs={offset}: "  
-                        f"'count' must be an integer, got {count_raw!r}"  
-                    ) from exc  
+                count_raw = result.get("count", 0)
+                try:
+                    page_total_count = int(count_raw)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"Invalid Kraken trades history response at ofs={offset}: "
+                        f"'count' must be an integer, got {count_raw!r}"
+                    ) from exc
 
-                if total_count is None:  
-                    total_count = page_total_count  
+                if total_count is None:
+                    total_count = page_total_count
 
-                page_trades = cast(dict[str, KrakenRestTrade], trades_raw)  
-                if not page_trades:  
-                    break  
+                page_trades = cast(dict[str, KrakenRestTrade], trades_raw)
+                if not page_trades:
+                    break
 
-                all_trades.update(page_trades)  
-                offset += len(page_trades)  
+                all_trades.update(page_trades)
+                offset += len(page_trades)
 
-                if offset >= page_total_count:  
-                    break  
+                if offset >= page_total_count:
+                    break
 
-            return json.dumps(  
-                {  
-                    "trades": all_trades,  
-                    "count": total_count if total_count is not None else len(all_trades),  
-                }  
+            return json.dumps(
+                {
+                    "trades": all_trades,
+                    "count": total_count if total_count is not None else len(all_trades),
+                }
             )
         except Exception:
             log.exception("Failed to fetch trades from Kraken")
@@ -259,7 +259,7 @@ def _build_connect(client: KrakenClient) -> Any:
                 ) from exc
             raise
 
-        ws = await session.ws_connect(_WS_URL)
+        ws = await session.ws_connect(_WS_URL, heartbeat=30.0)
 
         # Subscribe to executions channel
         sub_msg = {
