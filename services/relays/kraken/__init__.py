@@ -114,7 +114,10 @@ def _build_parse() -> Any:
     """Return a parse callable for the generic poller engine."""
 
     def parse(raw: str) -> tuple[list[Fill], list[str]]:
-        result: dict[str, Any] = json.loads(raw)
+        try:
+            result: dict[str, Any] = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            return [], [f"Failed to parse Kraken REST response JSON: {exc}"]
         raw_trades: dict[str, KrakenRestTrade] = result.get("trades", {})
 
         fills: list[Fill] = []
