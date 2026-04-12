@@ -75,7 +75,12 @@ class KrakenClient:
         if errors:
             raise RuntimeError(f"Kraken API error on {urlpath}: {errors}")
 
-        result: dict[str, Any] = body.get("result", {})
+        result = body.get("result", {})
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                f"Kraken API returned unexpected result type on {urlpath} "
+                f"(status {resp.status_code}; expected object, got {type(result).__name__})"
+            )
         return result
 
     def get_trades_history(

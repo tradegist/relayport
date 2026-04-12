@@ -80,16 +80,18 @@ def _extract_fee(item: KrakenWsExecution) -> float:
     if not isinstance(fees, list) or not fees:
         return 0.0
 
-    assets = {entry["asset"] for entry in fees if isinstance(entry, dict) and "asset" in entry}
+    if any(
+        not isinstance(entry, dict) or "asset" not in entry or "qty" not in entry
+        for entry in fees
+    ):
+        return 0.0
+
+    assets = {entry["asset"] for entry in fees}
     if len(assets) != 1:
         # Mixed currencies — cannot produce a meaningful scalar; return 0.0.
         return 0.0
 
-    return sum(
-        abs(float(entry.get("qty", 0.0)))
-        for entry in fees
-        if isinstance(entry, dict)
-    )
+    return sum(abs(float(entry["qty"])) for entry in fees)
 
 
 def _parse_fill(item: KrakenWsExecution) -> Fill:
