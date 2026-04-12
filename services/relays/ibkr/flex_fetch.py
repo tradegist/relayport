@@ -1,12 +1,39 @@
 """IBKR Flex Web Service — two-step report fetcher."""
 
 import logging
+import re
 import time
 import xml.etree.ElementTree as ET
 
 import httpx
 
 log = logging.getLogger("relays.ibkr.flex_fetch")
+
+_TOKEN_RE = re.compile(r"([?&])t=[^&\s]+")
+
+
+def _redact_token(text: str) -> str:
+    """Replace the ``t=`` query-param value so tokens stay out of logs."""
+    return _TOKEN_RE.sub(r"\1t=REDACTED", text)
+
+
+class _RedactTokenFilter(logging.Filter):
+    """Strip Flex tokens from any log record that passes through."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = _redact_token(record.msg)
+        if record.args:
+            record.args = tuple(
+                _redact_token(str(a)) if isinstance(a, str) else a
+                for a in (record.args if isinstance(record.args, tuple) else (record.args,))
+            )
+        return True
+
+
+# Redact tokens from httpx/httpcore debug logs (they include full URLs).
+logging.getLogger("httpx").addFilter(_RedactTokenFilter())
+logging.getLogger("httpcore").addFilter(_RedactTokenFilter())
 
 FLEX_BASE = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"
 USER_AGENT = "ibkr-relay/1.0"
@@ -69,5 +96,5 @@ def fetch_flex_report(flex_token: str, flex_query_id: str) -> str | None:
         log.error("Report generation timed out after retries")
         return None
     except (httpx.HTTPError, ET.ParseError) as exc:
-        log.error("Flex report fetch failed: %s", exc)
+        log.error("Flex report fetch failed: %s", _redact_token(str(exc)))
         return None

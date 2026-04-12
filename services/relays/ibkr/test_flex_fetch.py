@@ -1,11 +1,12 @@
 """Tests for flex_fetch — error handling and None-return contract."""
 
+import logging
 import unittest
 from unittest.mock import MagicMock, patch
 
 import httpx
 
-from .flex_fetch import fetch_flex_report
+from .flex_fetch import _RedactTokenFilter, fetch_flex_report
 
 # ── XML helpers ─────────────────────────────────────────────────────
 
@@ -61,6 +62,38 @@ def _mock_response(text: str, status_code: int = 200) -> MagicMock:
 
 
 # ── Tests ───────────────────────────────────────────────────────────
+
+
+class TestRedactTokenFilter(unittest.TestCase):
+    """Token filter strips ``t=`` values from log records."""
+
+    def setUp(self) -> None:
+        self.filt = _RedactTokenFilter()
+
+    def _make_record(self, msg: str, args: tuple[object, ...] = ()) -> logging.LogRecord:
+        record = logging.LogRecord(
+            name="test", level=logging.DEBUG, pathname="", lineno=0,
+            msg=msg, args=args, exc_info=None,
+        )
+        return record
+
+    def test_redacts_token_in_msg(self) -> None:
+        record = self._make_record(
+            "GET https://example.com/GetStatement?t=SECRET&q=REF&v=3"
+        )
+        self.filt.filter(record)
+        self.assertNotIn("SECRET", record.msg)
+        self.assertIn("t=REDACTED", record.msg)
+
+    def test_redacts_token_in_args(self) -> None:
+        record = self._make_record("request url: %s", ("https://x.com?t=SECRET",))
+        self.filt.filter(record)
+        self.assertNotIn("SECRET", str(record.args))
+
+    def test_passes_through_unrelated_messages(self) -> None:
+        record = self._make_record("no token here")
+        self.filt.filter(record)
+        self.assertEqual(record.msg, "no token here")
 
 
 @patch("relays.ibkr.flex_fetch.time.sleep", return_value=None)
