@@ -272,6 +272,12 @@ class TestBuildPollerConfigs(unittest.TestCase):
             _build_poller_configs()
         self.assertIn("KRAKEN_API_KEY", str(cm.exception))
 
+    def test_invalid_base64_secret_raises_at_config_time(self) -> None:
+        env = {"KRAKEN_API_KEY": "key", "KRAKEN_API_SECRET": "not-valid-base64!!!"}
+        with patch.dict(os.environ, env), self.assertRaises(SystemExit) as cm:
+            _build_poller_configs()
+        self.assertIn("base64", str(cm.exception))
+
     def test_poller_disabled_returns_empty(self) -> None:
         with patch.dict(os.environ, {"KRAKEN_POLLER_ENABLED": "false"}):
             configs = _build_poller_configs()
@@ -298,6 +304,12 @@ class TestBuildListenerConfig(unittest.TestCase):
         with patch.dict(os.environ, env), self.assertRaises(SystemExit) as cm:
             _build_listener_config()
         self.assertIn("KRAKEN_API_KEY", str(cm.exception))
+
+    def test_invalid_base64_secret_raises_at_config_time(self) -> None:
+        env = {"KRAKEN_API_KEY": "key", "KRAKEN_API_SECRET": "not-valid-base64!!!"}
+        with patch.dict(os.environ, env), self.assertRaises(SystemExit) as cm:
+            _build_listener_config()
+        self.assertIn("base64", str(cm.exception))
 
 
 # ── on_message tests ──────────────────────────────────────────────────────────
@@ -327,8 +339,9 @@ class TestOnMessage(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(results), 1)
         self.assertIsInstance(results[0], OnMessageResult)
         self.assertTrue(results[0].mark)
-        assert results[0].fill is not None
-        self.assertEqual(results[0].fill.execId, "EXEC-1")
+        self.assertIsNotNone(results[0].fill)
+        fill = results[0].fill
+        self.assertEqual(fill.execId, "EXEC-1")
 
     async def test_non_trade_exec_type_returns_empty(self) -> None:
         msg = {

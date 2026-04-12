@@ -24,11 +24,11 @@ from relay_core import (
     is_listener_enabled,
     is_poller_enabled,
 )
-from shared import BuySell, Fill, OrderType
+from shared import BuySell, Fill
 
 from .kraken_types import KrakenRestTrade, KrakenWsMessage
 from .rest_client import KrakenClient
-from .ws_parser import parse_executions
+from .ws_parser import normalize_order_type, parse_executions
 
 log = logging.getLogger("relays.kraken")
 
@@ -44,18 +44,6 @@ def _get_api_key() -> str | None:
 
 def _get_api_secret() -> str | None:
     return os.environ.get("KRAKEN_API_SECRET", "").strip() or None
-
-
-# ── Kraken order type mapping ──────────────────────────────────────
-
-_ORDER_TYPE_MAP: dict[str, OrderType] = {
-    "market": "market",
-    "limit": "limit",
-    "stop-loss": "stop",
-    "stop-loss-limit": "stop_limit",
-    "trailing-stop": "trailing_stop",
-    "trailing-stop-limit": "trailing_stop",
-}
 
 
 # ── REST poller adapter ──────────────────────────────────────────
@@ -74,7 +62,7 @@ def _parse_rest_trade(txid: str, data: KrakenRestTrade) -> Fill:
     trade_time = float(data.get("time", 0))
     ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(trade_time))
 
-    order_type = _ORDER_TYPE_MAP.get(str(data.get("ordertype", "")))
+    order_type = normalize_order_type(str(data.get("ordertype", "")))
 
     return Fill(
         execId=txid,
@@ -156,7 +144,10 @@ def _build_poller_configs() -> list[PollerConfig]:
             f"Kraken poller partially configured — {missing} must be set"
         )
 
-    client = KrakenClient(api_key, api_secret)
+    try:
+        client = KrakenClient(api_key, api_secret)
+    except RuntimeError as exc:
+        raise SystemExit(f"Kraken poller config error: {exc}") from exc
     interval = get_poll_interval("kraken")
 
     return [PollerConfig(
@@ -240,7 +231,10 @@ def _build_listener_config() -> ListenerConfig | None:
             "KRAKEN_API_SECRET must be set"
         )
 
-    client = KrakenClient(api_key, api_secret)
+    try:
+        client = KrakenClient(api_key, api_secret)
+    except RuntimeError as exc:
+        raise SystemExit(f"Kraken listener config error: {exc}") from exc
 
     return ListenerConfig(
         connect=_build_connect(client),
