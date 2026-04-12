@@ -7,7 +7,7 @@ env var getters, Flex fetch, XML parsing, WS envelope mapping.
 
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 import aiohttp
@@ -208,7 +208,7 @@ def _event_filter(data: dict[str, Any]) -> bool:
 
 def _on_message_factory(
     exec_events_enabled: bool,
-) -> Any:
+) -> Callable[[dict[str, Any]], Awaitable[list[OnMessageResult]]]:
     """Build an on_message callback with exec_events_enabled baked in."""
     async def handler(
         data: dict[str, Any],
@@ -281,7 +281,7 @@ def _build_connect(
         # for every incoming WS message, including status events
         # ("connected"/"disconnected") that event_filter discards before
         # on_message is invoked.
-        ws.receive = _tracking_receive  # type: ignore[assignment]
+        ws.receive = _tracking_receive  # type: ignore[assignment] # aiohttp stubs mark receive as non-assignable; runtime monkey-patch is intentional
         return ws
 
     return connect

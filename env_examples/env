@@ -49,7 +49,7 @@ POLL_INTERVAL=600
 
 # ── Listener (real-time trade events) ────────────────────────────────
 
-# Set to any non-empty value to enable the listener.
+# Boolean flag: set to true/1/yes to enable; false/0/no (or unset) disables the listener.
 #LISTENER_ENABLED=false
 
 # Milliseconds to debounce incoming real-time fills before firing webhooks.

@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 import aiohttp
@@ -25,6 +26,7 @@ from relay_core import (
     is_listener_enabled,
     is_poller_enabled,
 )
+from relay_core.parsing import require_float, require_str
 from shared import BuySell, Fill
 
 from .kraken_types import KrakenRestTrade, KrakenWsMessage
@@ -52,37 +54,43 @@ def _get_api_secret() -> str | None:
 
 def _parse_rest_trade(txid: str, data: KrakenRestTrade) -> Fill:
     """Convert a single REST API trade entry to a Fill model."""
-    side_str = data.get("type", "")
+    if not txid:
+        raise ValueError("Missing required REST trade field 'txid'")
+
+    ctx = f"REST trade {txid}"
+
+    side_str = require_str(data, "type", ctx)
     if side_str == "buy":
         side = BuySell.BUY
     elif side_str == "sell":
         side = BuySell.SELL
     else:
-        raise ValueError(f"Invalid trade side: {side_str!r}")
+        raise ValueError(f"{ctx}: invalid trade side {side_str!r}")
 
-    trade_time = float(data.get("time", 0))
-    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(trade_time))
+    ts = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(require_float(data, "time", ctx))
+    )
 
-    order_type = normalize_order_type(str(data.get("ordertype", "")))
+    order_type = normalize_order_type(require_str(data, "ordertype", ctx))
 
     return Fill(
         execId=txid,
-        orderId=str(data.get("ordertxid", "")),
-        symbol=str(data.get("pair", "")),
+        orderId=require_str(data, "ordertxid", ctx),
+        symbol=require_str(data, "pair", ctx),
         assetClass="crypto",
         side=side,
         orderType=order_type,
-        price=float(data.get("price", 0)),
-        volume=float(data.get("vol", 0)),
-        cost=float(data.get("cost", 0)),
-        fee=abs(float(data.get("fee", 0))),
+        price=require_float(data, "price", ctx),
+        volume=require_float(data, "vol", ctx),
+        cost=require_float(data, "cost", ctx),
+        fee=abs(require_float(data, "fee", ctx)),
         timestamp=ts,
         source="rest_poll",
         raw={"txid": txid, **data},
     )
 
 
-def _build_fetch(client: KrakenClient) -> Any:
+def _build_fetch(client: KrakenClient) -> Callable[[], str | None]:
     """Return a fetch callable for the generic poller engine.
 
     Returns a JSON string of the raw trades dict, or None on failure.
@@ -138,7 +146,7 @@ def _build_fetch(client: KrakenClient) -> Any:
     return fetch
 
 
-def _build_parse() -> Any:
+def _build_parse() -> Callable[[str], tuple[list[Fill], list[str]]]:
     """Return a parse callable for the generic poller engine."""
 
     def parse(raw: str) -> tuple[list[Fill], list[str]]:
@@ -242,7 +250,7 @@ async def _on_message(data: dict[str, Any]) -> list[OnMessageResult]:
     return [OnMessageResult(fill=fill, mark=True) for fill in fills]
 
 
-def _build_connect(client: KrakenClient) -> Any:
+def _build_connect(client: KrakenClient) -> Callable[[aiohttp.ClientSession], Awaitable[aiohttp.ClientWebSocketResponse]]:
     """Build a connect callback that obtains a WS token, connects, and subscribes."""
 
     async def connect(

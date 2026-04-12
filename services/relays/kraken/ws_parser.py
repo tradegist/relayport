@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from relay_core.parsing import require_float, require_str
 from shared import BuySell, Fill, OrderType
 
 from .kraken_types import KrakenWsExecution, KrakenWsMessage
@@ -93,30 +94,31 @@ def _extract_fee(item: KrakenWsExecution) -> float:
 
 def _parse_fill(item: KrakenWsExecution) -> Fill:
     """Convert a single WS execution message to a Fill model."""
+    ctx = f"WS exec {item.get('exec_id', 'unknown')}"
     total_fee = _extract_fee(item)
 
-    side_raw = item.get("side", "")
+    side_raw = require_str(item, "side", ctx)
     if side_raw == "buy":
         side = BuySell.BUY
     elif side_raw == "sell":
         side = BuySell.SELL
     else:
-        raise ValueError(f"Invalid execution side: {side_raw!r}")
+        raise ValueError(f"{ctx}: invalid side {side_raw!r}")
 
-    order_type = normalize_order_type(str(item.get("order_type", "")))
+    order_type = normalize_order_type(require_str(item, "order_type", ctx))
 
     return Fill(
-        execId=str(item["exec_id"]),
-        orderId=str(item["order_id"]),
-        symbol=str(item.get("symbol", "")),
+        execId=require_str(item, "exec_id", ctx),
+        orderId=require_str(item, "order_id", ctx),
+        symbol=require_str(item, "symbol", ctx),
         assetClass="crypto",
         side=side,
         orderType=order_type,
-        price=float(item.get("last_price", 0.0)),
-        volume=float(item.get("last_qty", 0.0)),
-        cost=float(item.get("cost", 0.0)),
+        price=require_float(item, "last_price", ctx),
+        volume=require_float(item, "last_qty", ctx),
+        cost=require_float(item, "cost", ctx),
         fee=total_fee,
-        timestamp=str(item.get("timestamp", "")),
+        timestamp=require_str(item, "timestamp", ctx),
         source="ws_execution",
         raw=dict(item),
     )
