@@ -1,45 +1,33 @@
 # ── Domains & API ────────────────────────────────────────────────────
 
 # DNS A record must point to droplet IP.
-
 SITE_DOMAIN=trade.example.com
 
 # Bearer token for /relays/\* endpoints (generate with: openssl rand -hex 32)
-
 API_TOKEN=your_api_token
 
 # Docker network name for cross-project communication on the same droplet.
-
 # Set to the same value across all projects that need to reach each other's containers.
-
 # Leave unset for isolated standalone deployment.
-
 #SHARED_NETWORK=relay-net
 
 # ── Notifications ────────────────────────────────────────────────────
 
 # Active backends (comma-separated, e.g. "webhook"). Empty = dry-run.
-
 NOTIFIERS=webhook
 
 # Webhook settings (required when NOTIFIERS includes "webhook")
-
 TARGET_WEBHOOK_URL=https://example.com/webhook
 WEBHOOK_SECRET=your_hmac_secret_key
 
 # Optional: add a custom header to webhook requests
-
 #WEBHOOK_HEADER_NAME=X-Custom-Header
 #WEBHOOK_HEADER_VALUE=your_header_value
 
 # Debug webhook inbox — when set, overrides TARGET_WEBHOOK_URL to route
-
 # all webhooks to an in-memory inbox at /debug/webhook/<path>.
-
 # View captured payloads via GET, clear via DELETE.
-
 # The debug container starts automatically when this is set.
-
 #DEBUG_WEBHOOK_PATH=abcdef
 #MAX_DEBUG_WEBHOOK_PAYLOADS=100
 #DEBUG_LOG_LEVEL=INFO
@@ -47,65 +35,27 @@ WEBHOOK_SECRET=your_hmac_secret_key
 # ── Relays ────────────────────────────────────────────────────────────
 
 # Comma-separated list of relay adapters to activate (e.g. "ibkr").
-
 RELAYS=ibkr
 
 # Poll interval in seconds (relay-specific override: IBKR_POLL_INTERVAL).
-
 POLL_INTERVAL=600
 
-# ── Listener (real-time trade events from ibkr_bridge) ───────────────
-
-# Connects to ibkr_bridge's WebSocket endpoint for near-instant trade
-
-# event webhooks, instead of waiting for Flex polling (10min+ delay).
-
-# Requires at least one notifier backend configured via NOTIFIERS.
-
-# WebSocket URL for the bridge endpoint.
-
-# Same droplet (shared network): ws://bridge:5000/ibkr/ws/events
-
-# Cross-droplet: wss://trade.example.com/ibkr/ws/events
-
-#BRIDGE_WS_URL=ws://bridge:5000/ibkr/ws/events
-
-# Bearer token for authenticating to the bridge WS endpoint
-
-# (same value as API_TOKEN on the bridge side).
-
-#BRIDGE_API_TOKEN=your_bridge_api_token
+# ── Listener (real-time trade events) ────────────────────────────────
 
 # Set to any non-empty value to enable the listener.
-
 #LISTENER_ENABLED=true
 
-# Enable execDetailsEvent webhooks (preliminary fill without commission data).
-
-# Default: disabled. When disabled, only commissionReportEvent fires webhooks
-
-# (confirmed fills with commission). Enable if you need sub-second latency
-
-# and can tolerate the extra webhook volume (2x per fill).
-
-#LISTENER_EXEC_EVENTS_ENABLED=false
-
 # Milliseconds to debounce incoming real-time fills before firing webhooks.
-
 # Useful for grouping rapidly executing partial fills into a single webhook
-
 # request (which gets deduped against previous executions). Default: 0 (disabled).
-
 #LISTENER_DEBOUNCE_MS=2000
 
 # ── Notification retry ───────────────────────────────────────────────
 
 # Retry attempts per notifier backend on failure (0 = no retries, max 5)
-
 #NOTIFY_RETRIES=0
 
 # Delay between retries in milliseconds (default: 1000, max: 30000)
-
 #NOTIFY_RETRY_DELAY_MS=1000
 
 # ── General ──────────────────────────────────────────────────────────
@@ -113,7 +63,5 @@ POLL_INTERVAL=600
 TIME_ZONE=America/New_York
 
 # CLI default target environment: "prod" (HTTPS via SITE_DOMAIN) or "local" (localhost:15001)
-
 # Override per-command with: make poll ENV=local
-
 DEFAULT_CLI_RELAY_ENV=prod

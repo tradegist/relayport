@@ -140,13 +140,6 @@ class TestEnvVarGetters(unittest.TestCase):
             _get_bridge_ws_url(), "ws://bridge:5000/ibkr/ws/events",
         )
 
-    def test_bridge_ws_url_falls_back_to_legacy(self) -> None:
-        with patch.dict(
-            os.environ, {"BRIDGE_WS_URL": "ws://legacy:5000"}, clear=False,
-        ):
-            os.environ.pop("IBKR_BRIDGE_WS_URL", None)
-            self.assertEqual(_get_bridge_ws_url(), "ws://legacy:5000")
-
     def test_bridge_api_token(self) -> None:
         self.assertEqual(_get_bridge_api_token(), "bridge-token")
 

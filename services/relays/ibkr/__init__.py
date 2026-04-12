@@ -46,10 +46,7 @@ def _get_bridge_ws_url() -> str:
     key = "IBKR_BRIDGE_WS_URL"
     val = os.environ.get(key, "").strip()
     if not val:
-        # Fall back to legacy name
-        val = os.environ.get("BRIDGE_WS_URL", "").strip()
-    if not val:
-        raise SystemExit(f"{key} (or BRIDGE_WS_URL) must be set")
+        raise SystemExit(f"{key} must be set")
     return val
 
 
@@ -57,16 +54,12 @@ def _get_bridge_api_token() -> str:
     key = "IBKR_BRIDGE_API_TOKEN"
     val = os.environ.get(key, "").strip()
     if not val:
-        val = os.environ.get("BRIDGE_API_TOKEN", "").strip()
-    if not val:
-        raise SystemExit(f"{key} (or BRIDGE_API_TOKEN) must be set")
+        raise SystemExit(f"{key} must be set")
     return val
 
 
 def _is_exec_events_enabled() -> bool:
-    val = os.environ.get("IBKR_LISTENER_EXEC_EVENTS_ENABLED", "").strip().lower()
-    if not val:
-        val = os.environ.get("LISTENER_EXEC_EVENTS_ENABLED", "false").strip().lower()
+    val = os.environ.get("IBKR_LISTENER_EXEC_EVENTS_ENABLED", "false").strip().lower()
     return val not in ("0", "false", "no", "")
 
 

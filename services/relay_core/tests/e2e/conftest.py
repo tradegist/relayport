@@ -32,8 +32,8 @@ def _load_env_test() -> None:
 
 _load_env_test()
 
-BRIDGE_BASE_URL = os.environ.get("BRIDGE_API_BASE_URL", "").strip()
-BRIDGE_API_TOKEN = os.environ.get("BRIDGE_API_TOKEN", "").strip()
+BRIDGE_BASE_URL = os.environ.get("IBKR_BRIDGE_API_BASE_URL", "").strip()
+BRIDGE_API_TOKEN = os.environ.get("IBKR_BRIDGE_API_TOKEN", "").strip()
 LISTENER_ENABLED = os.environ.get("LISTENER_ENABLED", "").strip().lower() not in (
     "0", "false", "no", "",
 )
@@ -103,7 +103,7 @@ def _bridge_preflight() -> None:
 
     if not BRIDGE_API_TOKEN or not BRIDGE_BASE_URL:
         pytest.skip(
-            "BRIDGE_API_TOKEN / BRIDGE_API_BASE_URL not set — "
+            "IBKR_BRIDGE_API_TOKEN / IBKR_BRIDGE_API_BASE_URL not set — "
             "skipping listener E2E tests"
         )
 

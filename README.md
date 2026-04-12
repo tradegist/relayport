@@ -209,8 +209,8 @@ Listener E2E tests are **opt-in** — they require a running [ibkr_bridge](https
 ```env
 LISTENER_ENABLED=true
 IBKR_BRIDGE_WS_URL=ws://host.docker.internal:15101/ibkr/ws/events
-BRIDGE_API_BASE_URL=http://localhost:15101
-BRIDGE_API_TOKEN=<matching bridge's API_TOKEN>
+IBKR_BRIDGE_API_BASE_URL=http://localhost:15101
+IBKR_BRIDGE_API_TOKEN=<matching bridge's API_TOKEN>
 ```
 
 Tests skip (not fail) when `LISTENER_ENABLED` is unset, bridge credentials are missing, or the bridge is unreachable. The fill test requires US market hours — it places a MKT order and `pytest.skip()`s if no fill arrives within 10 seconds.
@@ -309,7 +309,7 @@ Configuration is split across three environment files. Templates are in `env_exa
 | `POLL_INTERVAL`                | No       | `600`              | Flex poll interval (seconds)                                                                                    |
 | `LISTENER_ENABLED`             | No       | —                  | Set to `true` to enable real-time WS listener (requires ibkr_bridge)                                            |
 | `LISTENER_DEBOUNCE_MS`         | No       | `0`                | Milliseconds to buffer fills before flushing                                                                    |
-| `LISTENER_EXEC_EVENTS_ENABLED` | No       | `false`            | Enable `execDetailsEvent` webhooks (2x volume, lower latency)                                                   |
+| `IBKR_LISTENER_EXEC_EVENTS_ENABLED` | No       | `false`            | Enable `execDetailsEvent` webhooks (2x volume, lower latency)                                                   |
 | `DEBUG_WEBHOOK_PATH`           | No       | —                  | Route webhooks to debug inbox instead of `TARGET_WEBHOOK_URL` (see [Debug Webhook Inbox](#debug-webhook-inbox)) |
 | `MAX_DEBUG_WEBHOOK_PAYLOADS`   | No       | `100`              | Max payloads stored in the debug inbox (hard max: 150, FIFO eviction)                                           |
 | `DEBUG_LOG_LEVEL`              | No       | `INFO`             | Set to `DEBUG` to include full payload+headers in `docker logs debug`                                           |
@@ -742,7 +742,7 @@ And set the bridge connection vars in `.env.relays`:
 ```env
 IBKR_BRIDGE_WS_URL=ws://bridge:5000/ibkr/ws/events   # container-to-container (same Docker network)
 # IBKR_BRIDGE_WS_URL=wss://trade.example.com/ibkr/ws/events  # cross-droplet (TLS)
-BRIDGE_API_TOKEN=your_bridge_api_token                  # must match bridge's API_TOKEN
+IBKR_BRIDGE_API_TOKEN=your_bridge_api_token              # must match bridge's API_TOKEN
 ```
 
 Then run `make sync` to push the config and restart the `relays` container.
@@ -754,7 +754,7 @@ The listener processes two event types from the bridge stream:
 | Event                   | Default     | Description                                                                                                                                                                                                  |
 | ----------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `commissionReportEvent` | **enabled** | Fired after commission is confirmed — contains the final fill with fee data. This is the primary fill event.                                                                                                 |
-| `execDetailsEvent`      | disabled    | Fired immediately on execution — no commission data yet. Enable with `LISTENER_EXEC_EVENTS_ENABLED=true` for sub-second latency at the cost of 2× webhook volume (one preliminary + one confirmed per fill). |
+| `execDetailsEvent`      | disabled    | Fired immediately on execution — no commission data yet. Enable with `IBKR_LISTENER_EXEC_EVENTS_ENABLED=true` for sub-second latency at the cost of 2× webhook volume (one preliminary + one confirmed per fill). |
 
 ### Operational notes
 

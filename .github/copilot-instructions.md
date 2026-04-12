@@ -251,7 +251,7 @@ The E2E conftest (`services/relay_core/tests/e2e/conftest.py`) uses a **two-tier
 - **Listener E2E tests are opt-in** — they require a running ibkr_bridge local stack and `LISTENER_ENABLED=true` in `.env.test`.
 - **Preflight skip logic**: tests skip (not fail) when `LISTENER_ENABLED` is not set, bridge credentials are missing, or the bridge is unreachable.
 - **E2E conftest loads `.env.test` directly** using a stdlib `_load_env_test()` helper (key=value parser, no `python-dotenv` dependency).
-- **Required `.env.test` vars**: `IBKR_BRIDGE_WS_URL`, `BRIDGE_API_BASE_URL`, `BRIDGE_API_TOKEN`.
+- **Required `.env.test` vars**: `IBKR_BRIDGE_WS_URL`, `IBKR_BRIDGE_API_BASE_URL`, `IBKR_BRIDGE_API_TOKEN`.
 
 ## Test File Convention
 

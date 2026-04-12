@@ -3,7 +3,7 @@
 Requires:
 - ibkr_bridge running locally with IB Gateway connected (paper account)
 - broker-relay E2E stack running (make e2e-up)
-- BRIDGE_API_TOKEN set in .env.test
+- IBKR_BRIDGE_API_TOKEN set in .env.test
 
 The fill test places a market order for 1 share of AAPL via the bridge
 API, then polls the debug webhook inbox until the listener delivers the
