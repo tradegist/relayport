@@ -79,16 +79,35 @@ class TestRedactTokenFilter(unittest.TestCase):
 
     def test_redacts_token_in_msg(self) -> None:
         record = self._make_record(
-            "GET https://example.com/GetStatement?t=SECRET&q=REF&v=3"
+            "GET https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/GetStatement?t=SECRET&q=REF&v=3"
         )
         self.filt.filter(record)
         self.assertNotIn("SECRET", record.msg)
         self.assertIn("t=REDACTED", record.msg)
 
     def test_redacts_token_in_args(self) -> None:
-        record = self._make_record("request url: %s", ("https://x.com?t=SECRET",))
+        record = self._make_record(
+            "request url: %s",
+            ("https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest?t=SECRET&q=123&v=3",),
+        )
         self.filt.filter(record)
         self.assertNotIn("SECRET", str(record.args))
+
+    def test_redacts_token_in_non_str_args(self) -> None:
+        """httpx passes URL as httpx.URL (not str) — filter must handle it."""
+        url = httpx.URL(
+            "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/GetStatement?t=SECRET&q=REF&v=3"
+        )
+        record = self._make_record("HTTP Request: %s %s", ("GET", url))
+        self.filt.filter(record)
+        formatted = record.msg % record.args
+        self.assertNotIn("SECRET", formatted)
+        self.assertIn("t=REDACTED", formatted)
+
+    def test_ignores_non_ibkr_urls(self) -> None:
+        record = self._make_record("GET https://example.com/api?t=keep_this&v=1")
+        self.filt.filter(record)
+        self.assertIn("t=keep_this", record.msg)
 
     def test_passes_through_unrelated_messages(self) -> None:
         record = self._make_record("no token here")

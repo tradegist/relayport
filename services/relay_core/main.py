@@ -22,6 +22,16 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+
+# Redact sensitive query-param tokens (e.g. Flex ``t=``) from all log output.
+# The filter lives in flex_fetch; we install it on every root handler so it
+# catches records propagated from child loggers like httpx._client.
+from relays.ibkr.flex_fetch import _RedactTokenFilter  # noqa: E402
+
+_redact = _RedactTokenFilter()
+for _h in logging.getLogger().handlers:
+    _h.addFilter(_redact)
+
 log = logging.getLogger("relays")
 
 

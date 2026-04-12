@@ -9,12 +9,14 @@ import httpx
 
 log = logging.getLogger("relays.ibkr.flex_fetch")
 
-_TOKEN_RE = re.compile(r"([?&])t=[^&\s]+")
+_FLEX_TOKEN_RE = re.compile(
+    r"(ndcdyn\.interactivebrokers\.com/[^\s]*[?&])t=[^&\s]+",
+)
 
 
 def _redact_token(text: str) -> str:
-    """Replace the ``t=`` query-param value so tokens stay out of logs."""
-    return _TOKEN_RE.sub(r"\1t=REDACTED", text)
+    """Replace the ``t=`` query-param value in IBKR Flex URLs so tokens stay out of logs."""
+    return _FLEX_TOKEN_RE.sub(r"\1t=REDACTED", text)
 
 
 class _RedactTokenFilter(logging.Filter):
@@ -25,15 +27,20 @@ class _RedactTokenFilter(logging.Filter):
             record.msg = _redact_token(record.msg)
         if record.args:
             record.args = tuple(
-                _redact_token(str(a)) if isinstance(a, str) else a
+                self._redact_arg(a)
                 for a in (record.args if isinstance(record.args, tuple) else (record.args,))
             )
         return True
 
+    @staticmethod
+    def _redact_arg(arg: object) -> object:
+        text = str(arg)
+        redacted = _redact_token(text)
+        if redacted is not text and redacted != text:
+            return redacted
+        return arg
 
-# Redact tokens from httpx/httpcore debug logs (they include full URLs).
-logging.getLogger("httpx").addFilter(_RedactTokenFilter())
-logging.getLogger("httpcore").addFilter(_RedactTokenFilter())
+
 
 FLEX_BASE = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"
 USER_AGENT = "ibkr-relay/1.0"
