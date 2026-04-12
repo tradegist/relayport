@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 _relay_map: dict[str, "BrokerRelay"] | None = None
 
 
-def init_relays(relays: list[BrokerRelay]) -> None:
+def init_relays(relays: list["BrokerRelay"]) -> None:
     """Set the relay map. Must be called exactly once at startup."""
     global _relay_map
     if _relay_map is not None:
@@ -25,7 +25,7 @@ def init_relays(relays: list[BrokerRelay]) -> None:
     _relay_map = {r.name: r for r in relays}
 
 
-def get_relays() -> dict[str, BrokerRelay]:
+def get_relays() -> dict[str, "BrokerRelay"]:
     """Return the full relay map. Raises if called before init."""
     if _relay_map is None:
         raise RuntimeError(
@@ -34,7 +34,7 @@ def get_relays() -> dict[str, BrokerRelay]:
     return _relay_map
 
 
-def get_relay(name: RelayName) -> BrokerRelay:
+def get_relay(name: RelayName) -> "BrokerRelay":
     """Look up a single relay by name. Raises on unknown name."""
     relays = get_relays()
     try:
