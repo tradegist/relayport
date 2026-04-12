@@ -45,13 +45,19 @@ async def handle_poll(request: web.Request) -> web.Response:
         )
 
     try:
-        poll_idx = int(poll_idx_raw) - 1  # 1-based → 0-based
+        poll_idx_1based = int(poll_idx_raw)
     except ValueError:
         return web.json_response(
             {"error": f"Invalid poll index: {poll_idx_raw!r} (must be a positive integer)"}, status=400,
         )
 
-    if poll_idx < 0 or poll_idx >= len(relay.poller_configs):
+    if poll_idx_1based < 1:
+        return web.json_response(
+            {"error": f"Invalid poll index: {poll_idx_raw!r} (must be a positive integer)"}, status=400,
+        )
+
+    poll_idx = poll_idx_1based - 1  # 1-based → 0-based
+    if poll_idx >= len(relay.poller_configs):
         n = len(relay.poller_configs)
         return web.json_response(
             {"error": f"Poller {poll_idx_raw} not configured "

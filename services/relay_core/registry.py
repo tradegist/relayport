@@ -8,7 +8,7 @@ module, and calls ``build_relay()`` to produce ``BrokerRelay`` instances.
 import importlib
 import logging
 import os
-from typing import get_args
+from typing import cast, get_args
 
 from relay_core.notifier import load_notifiers, load_retry_config
 from relay_core.notifier.base import BaseNotifier
@@ -45,8 +45,7 @@ def get_relay_names() -> list[RelayName]:
                 f"Unknown relay {name!r} in RELAYS. "
                 f"Valid: {', '.join(sorted(_VALID_RELAY_NAMES))}"
             )
-        # Safe to cast — validated against _VALID_RELAY_NAMES.
-        names.append(name)  # type: ignore[arg-type]
+        names.append(cast(RelayName, name))
 
     return names
 

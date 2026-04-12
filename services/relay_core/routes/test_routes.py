@@ -170,6 +170,26 @@ class TestPollHandler(AioHTTPTestCase):
         body = await resp.json()
         self.assertIn("not configured", body["error"].lower())
 
+    @patch.dict(os.environ, {"API_TOKEN": _TEST_TOKEN})
+    async def test_poll_idx_zero_returns_400(self) -> None:
+        resp = await self.client.request(
+            "POST", "/relays/ibkr/poll/0",
+            headers={"Authorization": f"Bearer {_TEST_TOKEN}"},
+        )
+        self.assertEqual(resp.status, 400)
+        body = await resp.json()
+        self.assertIn("must be a positive integer", body["error"])
+
+    @patch.dict(os.environ, {"API_TOKEN": _TEST_TOKEN})
+    async def test_poll_idx_negative_returns_400(self) -> None:
+        resp = await self.client.request(
+            "POST", "/relays/ibkr/poll/-1",
+            headers={"Authorization": f"Bearer {_TEST_TOKEN}"},
+        )
+        self.assertEqual(resp.status, 400)
+        body = await resp.json()
+        self.assertIn("must be a positive integer", body["error"])
+
 
 class TestPollReplayValidation(AioHTTPTestCase):
     """Replay body parameter validation (CR regression tests)."""

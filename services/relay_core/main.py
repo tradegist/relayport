@@ -76,13 +76,16 @@ async def amain() -> None:
         prune_old(dedup_conn)
         dedup_conn.close()
 
+    # Initialize per-poller locks before the API server so handle_poll()
+    # always sees them (avoids lockless on-demand polls during startup).
+    for relay in relays:
+        relay.poll_locks = [asyncio.Lock() for _ in relay.poller_configs]
+
     await start_api_server(relays)
 
-    # Create per-poller locks and start poll loops + listeners
+    # Start poll loops + listeners
     for relay in relays:
-        relay.poll_locks = []
         for idx in range(len(relay.poller_configs)):
-            relay.poll_locks.append(asyncio.Lock())
             asyncio.create_task(  # noqa: RUF006
                 _poll_loop(relay, idx),
             )
