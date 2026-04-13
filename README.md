@@ -1,4 +1,4 @@
-# Broker Relay
+# BrokeRRelay
 
 A **relay between broker accounts** that provides clear, common interfaces to communicate with different brokers through a single interface layer — deployed to a DigitalOcean droplet with a single `make deploy`.
 
