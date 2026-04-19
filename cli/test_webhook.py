@@ -6,7 +6,8 @@ import urllib.error
 import urllib.request
 
 from cli.core import die, env, load_env
-from shared import BuySell, Trade, WebhookPayloadTrades
+from relay_core.notifier.models import WebhookPayloadTrades
+from shared import BuySell, Trade
 
 SAMPLE_TRADES = [
     Trade(

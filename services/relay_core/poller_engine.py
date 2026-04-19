@@ -16,7 +16,8 @@ from relay_core.dedup import get_processed_ids, mark_processed_batch, prune
 from relay_core.dedup import init_db as _init_dedup_db
 from relay_core.env import get_env, get_env_int
 from relay_core.notifier import notify
-from shared import Fill, RelayName, Trade, WebhookPayloadTrades, aggregate_fills
+from relay_core.notifier.models import WebhookPayloadTrades
+from shared import Fill, RelayName, Trade, aggregate_fills
 
 log = logging.getLogger(__name__)
 

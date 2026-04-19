@@ -85,40 +85,6 @@
       "title": "Trade",
       "type": "object"
     },
-    "WebhookPayloadTrades": {
-      "additionalProperties": false,
-      "description": "Webhook payload for trade execution events.",
-      "properties": {
-        "relay": {
-          "$ref": "#/$defs/RelayName"
-        },
-        "type": {
-          "const": "trades",
-          "default": "trades",
-          "type": "string"
-        },
-        "data": {
-          "items": {
-            "$ref": "#/$defs/Trade"
-          },
-          "type": "array"
-        },
-        "errors": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "relay",
-        "data",
-        "errors",
-        "type"
-      ],
-      "title": "WebhookPayloadTrades",
-      "type": "object"
-    },
     "Fill": {
       "additionalProperties": false,
       "description": "Individual execution from a broker (CommonFill spec).",
@@ -229,9 +195,6 @@
     }
   },
   "anyOf": [
-    {
-      "$ref": "#/$defs/WebhookPayloadTrades"
-    },
     {
       "$ref": "#/$defs/Trade"
     },

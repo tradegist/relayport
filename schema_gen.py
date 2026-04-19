@@ -118,11 +118,11 @@ def _replace_inline_enums(obj: object, aliases: dict[frozenset[str], str]) -> No
 # nested models are pulled in automatically via $ref.
 SCHEMA_MODELS: dict[str, list[str]] = {
     "shared": [
-        "WebhookPayloadTrades",
         "Trade",
         "Fill",
     ],
-    "relay_models": [
+    "relay_core.relay_models": [
+        "WebhookPayloadTrades",
         "RunPollResponse",
         "HealthResponse",
     ],

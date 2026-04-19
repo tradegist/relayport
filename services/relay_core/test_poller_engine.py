@@ -8,6 +8,7 @@ import pytest
 
 from relay_core.context import get_relay
 from relay_core.dedup import get_processed_ids, mark_processed_batch
+from relay_core.notifier.models import WebhookPayloadTrades
 from relay_core.poller_engine import (
     PollerConfig,
     _meta_key,
@@ -20,7 +21,7 @@ from relay_core.poller_engine import (
     prune_old,
     set_last_poll_ts,
 )
-from shared import BuySell, Fill, Trade, WebhookPayloadTrades
+from shared import BuySell, Fill, Trade
 
 # ── Fixtures ─────────────────────────────────────────────────────────
 

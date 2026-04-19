@@ -100,26 +100,27 @@ ibkr-flex-refresh: ## Refresh IBKR Flex fixture (fetch + auto-detect AF/TC + san
 types: typecheck ## Regenerate TypeScript + Python types from Pydantic models
 	PYTHONPATH=services $(PYTHON) schema_gen.py shared > types/typescript/shared/types.schema.json
 	npx --yes json-schema-to-typescript types/typescript/shared/types.schema.json > types/typescript/shared/types.d.ts
-	PYTHONPATH=services/relay_core:services $(PYTHON) schema_gen.py relay_models > types/typescript/relay_api/types.schema.json
+	PYTHONPATH=services $(PYTHON) schema_gen.py relay_core.relay_models > types/typescript/relay_api/types.schema.json
 	npx --yes json-schema-to-typescript types/typescript/relay_api/types.schema.json > types/typescript/relay_api/types.d.ts
 	@echo "Generated types/typescript/shared/types.d.ts + types/typescript/relay_api/types.d.ts"
 	$(PYTHON) gen_python_types.py
+	$(PYTHON) -m ruff check types/python/b_relay_types/ --fix --quiet
+	$(PYTHON) -m mypy types/python/b_relay_types/
 
 test: ## Run unit tests
 	PYTHONPATH=.:services:services/relay_core:services/debug $(PYTHON) -m pytest -v
 
 typecheck: ## Run mypy strict type checking
-	MYPYPATH=services/relay_core:services $(PYTHON) -m mypy services/relay_core/relay_models.py cli/test_webhook.py
+	MYPYPATH=services/relay_core:services $(PYTHON) -m mypy cli/test_webhook.py
 	MYPYPATH=services $(PYTHON) -m mypy services/shared/
 	MYPYPATH=services $(PYTHON) -m mypy services/relay_core/
 	MYPYPATH=services $(PYTHON) -m mypy services/relays/
 	MYPYPATH=services/debug $(PYTHON) -m mypy services/debug/
 	$(PYTHON) -m mypy schema_gen.py
 	$(PYTHON) -m mypy gen_python_types.py
-	$(PYTHON) -m mypy types/python/broker_relay_types/
 
 lint: ## Run ruff linter (use FIX=1 to auto-fix)
-	$(PYTHON) -m ruff check services/shared/ services/relay_core/ services/relays/ services/debug/ cli/ schema_gen.py gen_python_types.py types/python/broker_relay_types/ $(if $(FIX),--fix)
+	$(PYTHON) -m ruff check services/shared/ services/relay_core/ services/relays/ services/debug/ cli/ schema_gen.py gen_python_types.py types/python/b_relay_types/ $(if $(FIX),--fix)
 	@if grep -rn '__all__' services/ types/ cli/ --include='*.py'; then echo "ERROR: __all__ is banned — use explicit re-exports"; exit 1; fi
 
 local-up: ## Start full stack locally (no TLS, direct port access)

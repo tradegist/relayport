@@ -3,9 +3,9 @@
 !! PUBLIC CONTRACT — every type defined here is exported to consumers
 !! via the generated TypeScript and Python type packages (make types).
 !! Do NOT add general internal helpers, mapping dicts, or utility
-!! functions here — those belong in utilities.py. Private helpers that
-!! are only used to configure schema generation for models in this file
-!! (for example, ``json_schema_extra`` callbacks) are allowed.
+!! functions here — those belong in utilities.py.
+
+Outbound webhook payload contracts live in relay_core/notifier/models.py.
 """
 
 from enum import Enum
@@ -75,28 +75,3 @@ class Trade(BaseModel):
     timestamp: str
     source: Source
     raw: dict[str, Any]
-
-
-def _require_discriminators(schema: dict[str, Any]) -> None:
-    """Keep discriminator fields required in JSON Schema despite defaults."""
-    req: list[str] = schema.get("required", [])
-    for f in ("relay", "type"):
-        if f not in req:
-            req.append(f)
-    schema["required"] = req
-
-
-class WebhookPayloadTrades(BaseModel):
-    """Webhook payload for trade execution events."""
-
-    model_config = ConfigDict(extra="forbid", json_schema_extra=_require_discriminators)
-
-    relay: RelayName
-    type: Literal["trades"] = "trades"
-    data: list[Trade]
-    errors: list[str]
-
-# Backward-compatible top-level alias kept for existing imports and the
-# intended discriminated-union API. Today there is only one webhook payload
-# variant, so the alias points directly to the trades payload model.
-WebhookPayload = WebhookPayloadTrades

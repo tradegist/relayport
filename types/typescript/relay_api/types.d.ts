@@ -5,11 +5,18 @@
  * and run json-schema-to-typescript to regenerate this file.
  */
 
-export type TypesSchema = RunPollResponse | HealthResponse;
+export type TypesSchema = WebhookPayloadTrades | RunPollResponse | HealthResponse;
+export type RelayName = "ibkr" | "kraken";
 export type BuySell = "buy" | "sell";
 
-export interface RunPollResponse {
-  trades: Trade[];
+/**
+ * Webhook payload for trade execution events.
+ */
+export interface WebhookPayloadTrades {
+  relay: RelayName;
+  type: "trades";
+  data: Trade[];
+  errors: string[];
 }
 /**
  * Aggregated trade (one or more fills for the same order).
@@ -31,6 +38,9 @@ export interface Trade {
   raw: {
     [k: string]: unknown;
   };
+}
+export interface RunPollResponse {
+  trades: Trade[];
 }
 export interface HealthResponse {
   status: string;

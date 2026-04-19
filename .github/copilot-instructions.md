@@ -48,7 +48,7 @@ BrokeRelay is a **relay between broker accounts** that provides clear, common in
   4. `make e2e-down` — tear down **only after all tests pass**. Never tear down between iterations.
 - When modifying any Python file (`.py`), always run `make test`, `make typecheck`, and `make lint` and confirm all pass before deploying.
 - **Every Python file must be covered by `make typecheck`.** When adding a new Python service, package, or standalone script, immediately add it to the mypy invocation in the Makefile. No Python file may exist outside mypy's scope.
-- After modifying any model in `services/relay_core/relay_models.py` or `services/shared/models.py`, also run `make types` to regenerate the TypeScript and Python type definitions.
+- After modifying any model in `services/shared/models.py`, `services/relay_core/notifier/models.py`, or `services/relay_core/relay_models.py`, also run `make types` to regenerate the TypeScript and Python type definitions.
 - **Always verify type safety by breaking it first.** After any refactor that touches types or model construction, deliberately introduce a type error (e.g. pass a `str` where `float` is expected), run `make typecheck`, and confirm it **fails**. Then revert and confirm it passes. Never assume mypy catches something — prove it.
 - **Avoid `dict[str, Any]` round-trips.** Never use `model_dump()` → `dict` → `Model(**data)` — mypy cannot type-check `**dict[str, Any]`. Use explicit keyword arguments or `model_copy(update=...)` instead.
 - **Prefer strict `Literal` types over bare `str` on Pydantic models.** Financial applications demand precision — a `str` field silently accepts typos and invalid values. When a field has a known set of valid values (e.g. `BuySell`, `OrderType`, `AssetClass`), always use the existing `Literal` type. Only fall back to `str` when the external source (e.g. Flex XML) genuinely returns unbounded values — and document why with an inline comment.
@@ -340,12 +340,13 @@ services/relay_core/
   registry.py              # Relay registry — loads adapters from RELAYS env var
   poller_engine.py         # Generic poller: init_dedup_db, init_meta_db, poll_once, prune_old
   listener_engine.py       # Generic WS listener: connect, dedup, notify, reconnect with backoff
-  relay_models.py          # Re-export shim for shared models + relay-specific API types (RunPollResponse, HealthResponse)
+  relay_models.py          # Re-export shim: notifier payload contracts + relay API types (RunPollResponse, HealthResponse)
   dedup/                   # SQLite dedup library
     __init__.py            # init_db(), is_processed(), mark_processed(), prune()
   notifier/                # Pluggable notification backends
     __init__.py            # Registry, load_notifiers(), validate_notifier_env(), notify()
     base.py                # BaseNotifier ABC
+    models.py              # Outbound payload contracts (WebhookPayloadTrades, WebhookPayload)
     webhook.py             # WebhookNotifier: HMAC-SHA256 signed HTTP POST
   routes/                  # HTTP API
     __init__.py            # Orchestrator: create_app(), start_api_server(), handle_health, handle_poll
@@ -360,7 +361,7 @@ services/relay_core/
 - **`services/relay_core/context.py`** provides the relay context singleton. `init_relays(relays)` is called once at startup by `amain()`, then `get_relay(name)` and `get_relays()` are available anywhere to access relay config (notifiers, retry config, poller/listener configs) without parameter threading. `_reset()` is exposed for test teardown. Uses `TYPE_CHECKING` guard for `BrokerRelay` import to avoid circular import with `__init__.py`.
 - **`services/relay_core/poller_engine.py`** provides `poll_once(relay_name, poller_index)` — the generic polling function. Resolves `PollerConfig`, notifiers, and retry config from the relay context. Handles dedup, aggregation, notify, and mark. Broker-specific logic (Flex fetch, XML parsing) lives in the relay adapter.
 - **`services/relay_core/listener_engine.py`** provides `start_listener(relay_name)` — the generic WS listener. Resolves `ListenerConfig`, notifiers, and retry config from the relay context. Calls the adapter's `connect` callback to obtain a connected websocket, dispatches events via `event_filter` and `on_message` callbacks, handles dedup + notify + mark, and auto-reconnects with exponential backoff. The `connect` callback owns the entire connection protocol (auth, subscription) — the engine only manages the message loop and reconnection.
-- **`services/relay_core/relay_models.py`** is a re-export shim for shared models plus relay-specific API types (`RunPollResponse`, `HealthResponse`). Listed in `schema_gen.py:SCHEMA_MODELS`.
+- **`services/relay_core/relay_models.py`** is a re-export shim for the notifier payload contracts plus relay-specific API types (`RunPollResponse`, `HealthResponse`). Listed in `schema_gen.py:SCHEMA_MODELS` under key `"relay_core.relay_models"`.
 - **`services/relay_core/routes/__init__.py`** provides `GET /health` (unauthenticated) and `POST /relays/{relay_name}/poll/{poll_idx}` (authenticated, 1-based index).
 - **`services/relay_core/env.py`** provides `get_env(var, prefix, suffix, default)` and `get_env_int(var, prefix, suffix, default)` — shared helpers for reading env vars with relay-specific prefix fallback. Resolution order: `{prefix}{var}{suffix}` → `{var}{suffix}` → `default`. All relay-core env var readers (`get_poll_interval`, `get_debounce_ms`, `load_retry_config`, notifier env loading) use these helpers. When adding new env var readers, use `get_env` / `get_env_int` from `relay_core.env` instead of writing inline `os.environ.get()` with manual fallback logic.
 
@@ -477,20 +478,22 @@ services/relay_core/dedup/
 - **Dedup key priority** — `ibExecId → transactionId → tradeID`, resolved in `services/relays/ibkr/flex_parser.py` at parse time by setting `Fill.execId`. `services/shared/utilities.py::_dedup_id()` simply returns the already-resolved `fill.execId`.
 - The poller engine has a separate metadata DB at `META_DB_PATH` (default `/data/meta/<relay>.db`) on a `relay-meta` volume for the timestamp watermark.
 
-## Models (Two Locations)
+## Models (Three Locations)
 
-This project has **two model locations** — a shared source of truth and one service-specific file:
+This project has **three model locations** — each owns a distinct contract layer:
 
-| File                                  | Domain                | Contains                                                                                                               |
-| ------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `services/shared/models.py`           | CommonFill (outbound) | `Fill`, `Trade`, `WebhookPayloadTrades`, `WebhookPayload`, `BuySell`, `AssetClass`, `OrderType`, `Source`, `RelayName` |
-| `services/relay_core/relay_models.py` | Relay API (outbound)  | Re-exports shared models + `RunPollResponse`, `HealthResponse`                                                         |
+| File                                          | Domain                      | Contains                                                                    |
+| --------------------------------------------- | --------------------------- | --------------------------------------------------------------------------- |
+| `services/shared/models.py`                   | CommonFill primitives       | `Fill`, `Trade`, `BuySell`, `AssetClass`, `OrderType`, `Source`, `RelayName` |
+| `services/relay_core/notifier/models.py`      | Notifier payload (outbound) | `WebhookPayloadTrades`, `WebhookPayload`                                     |
+| `services/relay_core/relay_models.py`         | Relay API (outbound)        | Re-exports notifier payload + `RunPollResponse`, `HealthResponse`            |
 
-- **`services/shared/models.py`** is the single source of truth for all webhook payload models. The `__init__.py` barrel re-exports everything so `from shared import Fill` keeps working.
+- **`services/shared/models.py`** defines the CommonFill primitives. The `__init__.py` barrel re-exports them so `from shared import Fill` keeps working.
+- **`services/relay_core/notifier/models.py`** is the authoritative home for outbound webhook payload contracts. When you want to know "what does the notifier send?", this is where to look. Add new payload variants here as new event types are introduced.
 - **`services/shared/utilities.py`** contains internal helpers (`aggregate_fills`, `normalize_order_type`, `normalize_asset_class`, `_dedup_id`). These are not exported to consumer packages.
 - **Model shims only re-export models and types** (Pydantic models, enums, type aliases). Utility functions (`aggregate_fills`, `normalize_order_type`, `_dedup_id`) must be imported directly from the owning module: `from shared import aggregate_fills`. Never re-export functions through model shims.
-- `relay_models.py` re-exports shared models and defines relay-specific API types. Its exported models (`RunPollResponse`, `HealthResponse`) are listed in `schema_gen.py:SCHEMA_MODELS`.
-- `shared/models.py` exports the CommonFill contract (`WebhookPayloadTrades`, `Trade`, `Fill`). These are listed in `schema_gen.py:SCHEMA_MODELS`. The barrel `__init__.py` re-exports them so `from shared import X` keeps working.
+- `relay_models.py` re-exports the notifier payload contracts and defines relay-specific API types. Its exported models (`WebhookPayloadTrades`, `RunPollResponse`, `HealthResponse`) are listed in `schema_gen.py:SCHEMA_MODELS` under the key `"relay_core.relay_models"`.
+- `shared/models.py` exports the CommonFill primitives (`Trade`, `Fill`). These are listed in `schema_gen.py:SCHEMA_MODELS` under the key `"shared"`.
 - All external-contract models use `ConfigDict(extra="forbid")` for strict validation.
 
 ## TypeScript Types
@@ -499,8 +502,8 @@ This project has **two model locations** — a shared source of truth and one se
 
 All relay projects export TypeScript types using a two-tier namespace pattern:
 
-- **`types/typescript/shared/`** → exported as `BrokerRelay`. Contains the CommonFill models (`Fill`, `Trade`, `WebhookPayloadTrades`, `WebhookPayload`, `BuySell`) generated via `schema_gen.py` from `services/shared/models.py`.
-- **`types/typescript/relay_api/`** → exported as `RelayApi`. Contains relay-specific API types (`RunPollResponse`, `HealthResponse`) generated via `schema_gen.py` from `services/relay_core/relay_models.py`.
+- **`types/typescript/shared/`** → exported as `BrokerRelay`. Contains the CommonFill primitives (`Fill`, `Trade`, `BuySell`) generated via `schema_gen.py` from `services/shared/models.py`.
+- **`types/typescript/relay_api/`** → exported as `RelayApi`. Contains the notifier payload contracts (`WebhookPayloadTrades`, `WebhookPayload`) and relay API types (`RunPollResponse`, `HealthResponse`) generated via `schema_gen.py` from `services/relay_core/relay_models.py`.
 
 The barrel `types/typescript/index.d.ts` ties them together:
 
@@ -513,7 +516,7 @@ export { BrokerRelay, RelayApi };
 ### Types Package
 
 - Types are published as `@tradegist/broker-relay-types` (npm package in `types/typescript/`, not yet published).
-- **Two namespaces**: `BrokerRelay` (shared webhook payload types) and `RelayApi` (relay API types).
+- **Two namespaces**: `BrokerRelay` (CommonFill primitives) and `RelayApi` (notifier payload contracts + relay API types).
 - **`make types`** regenerates both from Pydantic models (depends on `typecheck`):
   - `services/shared/models.py` → `types/typescript/shared/types.d.ts`
   - `services/relay_core/relay_models.py` → `types/typescript/relay_api/types.d.ts`
@@ -524,34 +527,42 @@ export { BrokerRelay, RelayApi };
     index.d.ts                 # Barrel: exports BrokerRelay, RelayApi namespaces
     package.json               # @tradegist/broker-relay-types
     shared/
-      index.d.ts               # Re-exports: BuySell, Fill, Trade, WebhookPayloadTrades, WebhookPayload
+      index.d.ts               # Re-exports: BuySell, Fill, Trade
       types.d.ts               # Generated from services/shared/models.py
       types.schema.json         # Intermediate JSON Schema
     relay_api/
-      index.d.ts               # Re-exports: RunPollResponse, HealthResponse
-      types.d.ts               # Generated from services/relay_core/relay_models.py
+      index.d.ts               # Re-exports: WebhookPayloadTrades, WebhookPayload, RunPollResponse, HealthResponse
+      types.d.ts               # Generated from services/relay_core/relay_models.py (via relay_core.relay_models key)
       types.schema.json         # Intermediate JSON Schema
   ```
 - **Usage:** `import { BrokerRelay, RelayApi } from "@tradegist/broker-relay-types"`
-- `schema_gen.py` owns the `SCHEMA_MODELS` dict (keyed by module name, e.g. `"shared"` → `[WebhookPayloadTrades, Trade, Fill]`). **To export a new model to TypeScript, add it to the relevant entry in `schema_gen.py:SCHEMA_MODELS` and update the corresponding `types/typescript/*/index.d.ts` re-exports.** The Python types package is auto-generated by `gen_python_types.py`.
+- `schema_gen.py` owns the `SCHEMA_MODELS` dict (keyed by importable module path, e.g. `"shared"`, `"relay_core.relay_models"`). **To export a new model to TypeScript, add it to the relevant entry in `schema_gen.py:SCHEMA_MODELS` and update the corresponding `types/typescript/*/index.d.ts` re-exports.** The Python types package is auto-generated by `gen_python_types.py`.
 
 ## Python Types Package
 
-- Types are available as `broker-relay-types` (PyPI package in `types/python/`, not yet published).
+- Types are available as `b-relay-types` (PyPI package in `types/python/`, not yet published).
 - **Standalone Pydantic models** — no dependency on the relay service.
-- Exports the **same public types** as the TypeScript package: CommonFill models and relay API types.
+- Mirrors the `relay_core` source structure so the package layout reflects the code design.
 - **Structure:**
   ```
   types/python/
-    pyproject.toml              # broker-relay-types, deps: pydantic
-    broker_relay_types/
+    pyproject.toml              # b-relay-types, deps: pydantic
+    b_relay_types/
       __init__.py               # Re-exports all public types
-      shared.py                 # CommonFill models (generated from services/shared/models.py)
-      poller.py                 # Relay API types (generated from relay_models.py)
+      shared.py                 # CommonFill primitives (generated from services/shared/models.py)
+      relay_api.py              # Relay API types (generated from services/relay_core/relay_models.py)
+      notifier/
+        __init__.py
+        models.py               # Payload contracts (generated from relay_core/notifier/models.py)
   ```
-- **Usage:** `from broker_relay_types import Fill, Trade, WebhookPayload, BuySell`
-- **Auto-generated** — `shared.py` extracts from `shared/models.py`. `poller.py` copies `relay_models.py` with imports rewritten. Run `make types` to regenerate. Do not edit the generated files manually.
-- **Covered by `make lint` and `make typecheck`** — `types/python/broker_relay_types/` is included in both targets. Generated code must pass ruff and mypy like any other Python module.
+- **Usage:**
+  ```python
+  from b_relay_types import Fill, Trade, BuySell              # CommonFill primitives
+  from b_relay_types import WebhookPayload, WebhookPayloadTrades  # notifier contracts
+  from b_relay_types.notifier.models import WebhookPayloadTrades  # direct path
+  ```
+- **Auto-generated** by `gen_python_types.py` — each source file is copied verbatim with one import-depth rewrite. Run `make types` to regenerate. Do not edit generated files manually.
+- **Covered by `make lint` and `make typecheck`** — `types/python/b_relay_types/` is included in both targets. Generated code must pass ruff and mypy like any other Python module.
 
 ## Code Style
 
@@ -679,8 +690,8 @@ infra/                     # Infrastructure backbone (no business logic)
     debug.caddy            # /debug/webhook/* → debug:9000
 types/                     # Type packages (TypeScript + Python)
   typescript/              # @tradegist/broker-relay-types (BrokerRelay + RelayApi namespaces)
-  python/                  # broker-relay-types PyPI package
+  python/                  # b-relay-types PyPI package
 schema_gen.py              # JSON Schema generator (Pydantic → TS types)
-gen_python_types.py        # Python types generator (shared/models.py + relay_models.py → types/python/)
+gen_python_types.py        # Python types generator (mirrors relay_core structure → types/python/b_relay_types/)
 terraform/                 # Infrastructure as code (DigitalOcean)
 ```

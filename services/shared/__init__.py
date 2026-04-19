@@ -15,8 +15,6 @@ from .models import OrderType as OrderType
 from .models import RelayName as RelayName
 from .models import Source as Source
 from .models import Trade as Trade
-from .models import WebhookPayload as WebhookPayload
-from .models import WebhookPayloadTrades as WebhookPayloadTrades
 
 # ── Internal utilities (re-exported for sibling services) ────────────
 from .utilities import aggregate_fills as aggregate_fills

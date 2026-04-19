@@ -3,16 +3,16 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "broker-relay-types"
-version = "0.3.0"
-description = "Pydantic types for BrokeRelay — webhook payloads and relay API"
+name = "b-relay-types"
+version = "0.4.0"
+description = "Pydantic types for Broker Relay — webhook payloads and relay API"
 requires-python = ">=3.11"
 dependencies = ["pydantic>=2.0,<3"]
 license = {text = "MIT"}
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["broker_relay_types"]
+include = ["b_relay_types*"]
 
 [tool.setuptools.package-data]
-broker_relay_types = ["py.typed"]
+b_relay_types = ["py.typed"]
