@@ -31,6 +31,7 @@ Broker Relay is a **relay between broker accounts** that provides clear, common 
 - **No email addresses or personal info** — never write real names, emails, or account IDs in committed files. Use `UXXXXXXX` for IBKR account examples.
 - **No logging of secrets or sensitive operational data** — never `log.info()` or `print()` tokens, passwords, or API keys. Log actions and outcomes, not credential values. When adding any `log.info()` or `log.debug()` call, check whether the logged value contains sensitive fields (e.g. `accountId`, `acctAlias`, account numbers, IPs, domains). Never log full model dumps at `info` level — use `log.debug` with explicit field exclusion: `log.debug("Trade: %s", trade.model_dump_json(exclude={"accountId", "acctAlias"}))`. Prefer logging counts, symbols, and statuses over full objects.
 - **`.env`, `.env.droplet`, `.env.relays`, `*.tfvars`, and `.env.test` are gitignored** — never commit them. Use `env_examples/` templates with placeholder values as reference.
+- **Raw Flex XML dumps must never be committed.** Live Flex responses contain real account IDs, execution IDs, and order IDs. Always sanitize via `make ibkr-flex-refresh` (or `fixtures/sanitize.py` directly) before committing any Flex XML. The intermediate raw file (`fixtures/raw.xml`) is gitignored. Only the sanitized fixtures (`activity_flex_sample.xml`, `trade_confirm_sample.xml`) are committed.
 - **Terraform state is gitignored** — `terraform.tfstate` contains SSH keys and IPs. Never commit it.
 - **Auth middleware must reject empty `API_TOKEN`.** `hmac.compare_digest("", "")` returns `True`, so an empty `API_TOKEN` env var silently disables authentication. Every auth middleware must check `if not _API_TOKEN:` and return HTTP 500 **before** reaching `compare_digest`. `API_TOKEN` is in `required_env` for deploy/sync — the CLI will block deployment if it is missing or empty.
 
@@ -103,7 +104,7 @@ Broker Relay is a **relay between broker accounts** that provides clear, common 
 
 - **`.venv` is the project's virtual environment.** Created by `make setup` using Homebrew Python. All dev dependencies are installed there.
 - **Auto-activation** is configured in `~/.zshrc` via a `chpwd` hook — the venv activates automatically when `cd`'ing into the project directory.
-- **`make setup`** creates the `.venv` (if missing), installs all dependencies (`requirements-dev.txt` + `services/relay_core/requirements.txt`), writes a `.pth` file, and copies `env_examples/*` → `.<name>` (e.g. `env_examples/env` → `.env`) for any missing env files.
+- **`make setup`** creates the `.venv` (if missing), installs all dependencies (`requirements-dev.txt` + `services/relay_core/requirements.txt`), writes a `.pth` file, and copies `env_examples/*` → `.<name>` (e.g. `env_examples/env` → `.env`) for any missing env files. It also auto-heals a broken `.venv` (e.g. after a Python upgrade moves the interpreter) by detecting a missing `pip` import and rebuilding the venv from scratch before installing.
 - **`broker-relay.pth`** is created inside `.venv/lib/pythonX.Y/site-packages/` by `make setup`. It adds `services/debug/`, `services/`, and `services/relay_core/` to `sys.path` so that `from relay_core import ...`, `from relay_core.dedup import ...`, `from relay_core.notifier import ...`, `from debug_app import ...`, and `from shared import ...` work everywhere (CLI, tests, scripts) without `sys.path` hacks or `PYTHONPATH`.
 - **`.venv/` is gitignored** — never commit it.
 - **`docker-compose.local.yml` adds bind mounts** that shadow the `COPY`'d files in the image with your local source tree (`:ro`). This means code changes are visible on container restart — no rebuild needed. `make local-up` builds the images once; after that, `make sync` (when `DEFAULT_CLI_RELAY_ENV=local`) just restarts containers.
@@ -371,10 +372,15 @@ Each broker adapter lives under `services/relays/<name>/`. The adapter is a smal
 services/relays/ibkr/
   __init__.py              # build_relay() → BrokerRelay, env getters, map_fill(), IBKR-specific logic
   bridge_models.py         # Mirrored WsEnvelope + related types from ibkr_bridge
-  flex_fetch.py            # Flex Web Service two-step fetch (request token → download report)
+  flex_fetch.py            # Flex Web Service two-step fetch (pure library, no CLI code)
+  flex_dump.py             # CLI entrypoint: fetch + write to disk (invoked by make ibkr-flex-dump/refresh)
   flex_parser.py           # Flex XML parser (Activity + Trade Confirmation)
+  fixtures/
+    sanitize.py            # Sanitize a raw Flex dump into a committable fixture
+    activity_flex_sample.xml    # Sanitized Activity Flex fixture (committed, no real IDs)
+    trade_confirm_sample.xml    # Sanitized Trade Confirmation fixture (committed, no real IDs)
   test_flex_parser.py      # Tests for flex_parser
-  test_ibkr.py             # Tests for IBKR adapter logic
+  test_flex_fetch.py       # Tests for flex_fetch (RedactTokenFilter, fetch error paths)
 
 services/relays/kraken/
   __init__.py              # build_relay() → BrokerRelay, env getters, REST poller + WS listener adapters
@@ -389,6 +395,10 @@ services/relays/kraken/
 - **Multi-account support** via `_2` suffixed env vars (e.g. `IBKR_FLEX_QUERY_ID_2`). Each suffix produces an additional `PollerConfig` within the same relay — no separate container needed. Triggered via `make poll RELAY=ibkr IDX=2` or `POST /relays/ibkr/poll/2`.
 - **Relay-specific overrides** — env vars like `IBKR_NOTIFIERS`, `IBKR_TARGET_WEBHOOK_URL` override the generic equivalents for the IBKR relay only, allowing different webhook destinations per broker.
 - **Listener connect callback** — provides a closure that adds bearer token auth headers and tracks `last_seq` for event resumption across reconnects.
+- **`flex_fetch.py` is a pure library** — it exposes `fetch_flex_report()` and `RedactTokenFilter` but contains no CLI code. It is imported by `__init__.py` (relay runtime) and `flex_dump.py` (CLI). Never add `if __name__ == "__main__"` blocks or `argparse` back into `flex_fetch.py` — doing so causes a `sys.modules` conflict because `__init__.py` imports it at package load time.
+- **`flex_dump.py` is the CLI entrypoint** — invoked via `python -m relays.ibkr.flex_dump --token TOKEN --query-id ID [--dump PATH]`. It receives credentials as explicit CLI args (sourced from `.env.relays` by the Makefile) rather than reading env vars directly, keeping env-var ownership in `__init__.py`'s getters.
+- **`RedactTokenFilter` is public** (no underscore) — it is exported from `flex_fetch.py` and used by both `__init__.py` (relay runtime logging) and `flex_dump.py` (CLI logging). Private (`_`-prefixed) names are only for identifiers with no external consumers.
+- **Fixture management** — `fixtures/sanitize.py` replaces real account/order/execution IDs in a raw Flex dump with synthetic values, then caps the output at 3 fill rows. Run `make ibkr-flex-refresh [S=_2]` to fetch a live response, auto-detect the report type (Activity Flex vs Trade Confirmation), sanitize it, and write to the appropriate fixture file. Raw dumps (before sanitization) must never be committed — they contain real account IDs. The two committed fixtures (`activity_flex_sample.xml`, `trade_confirm_sample.xml`) contain only synthetic IDs and are safe to commit.
 
 ### Kraken adapter
 
@@ -561,6 +571,8 @@ make destroy   # Terraform destroy
 make pause     # Snapshot + delete droplet (save costs)
 make resume    # Restore from snapshot
 make poll      # Trigger immediate poll (RELAY=ibkr, IDX=1)
+make ibkr-flex-dump     # Dump live IBKR Flex XML to fixtures/raw.xml (F=path to override, S=_2 for second account)
+make ibkr-flex-refresh  # Fetch live Flex, auto-detect type, sanitize, write fixture (S=_2 for second account)
 make e2e       # Run E2E tests (starts/stops stack)
 make lint      # Run ruff linter (FIX=1 to auto-fix)
 ```
@@ -640,8 +652,13 @@ services/                  # Business-logic services
     ibkr/                  # IBKR adapter
       __init__.py          # build_relay(), env getters, map_fill()
       bridge_models.py     # Mirrored WsEnvelope types from ibkr_bridge
-      flex_fetch.py        # Flex Web Service two-step fetch
+      flex_fetch.py        # Flex Web Service two-step fetch (pure library)
+      flex_dump.py         # CLI entrypoint: fetch + write to disk
       flex_parser.py       # Flex XML parser (Activity + Trade Confirmation)
+      fixtures/
+        sanitize.py        # Sanitize raw Flex dump → committable fixture
+        activity_flex_sample.xml   # Sanitized Activity Flex fixture
+        trade_confirm_sample.xml   # Sanitized Trade Confirmation fixture
     kraken/                # Kraken crypto exchange adapter
       __init__.py          # build_relay(), env getters, REST poller + WS listener
       rest_client.py       # KrakenClient: HMAC-SHA512 auth, trades history, WS token
