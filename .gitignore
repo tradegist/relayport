@@ -13,3 +13,6 @@ terraform/*.tfplan
 **/__pycache__/
 .DS_Store
 _todo.txt
+# Raw IBKR Flex dumps — contain real account/order/exec IDs.
+# Run services/relays/ibkr/fixtures/sanitize.py to produce a committable fixture.
+services/relays/ibkr/fixtures/raw*.xml
