@@ -27,6 +27,8 @@ All operations are available via `make` or the Python CLI directly. Run `make he
   make setup             Create .venv and install all dependencies
   make sync              Push .env + .env.relays + restart (S=service B=1 LOCAL_FILES=1 ENV=local)
   make poll              Trigger an immediate poll (RELAY=ibkr IDX=1 V=1 REPLAY=N)
+  make ibkr-flex-dump    Download and print the current IBKR Flex report
+  make ibkr-flex-refresh Request a fresh IBKR Flex report, then download it
   make test-webhook      Send sample trades to webhook endpoint
   make types             Regenerate TypeScript + Python types from Pydantic models
   make test              Run unit tests (pytest)
@@ -211,7 +213,7 @@ If fetch or sanitize fails, `raw.xml` is left in place for inspection — the `&
 ```bash
 make ibkr-flex-dump F=/tmp/raw.xml       # primary query → file
 make ibkr-flex-dump S=_2 F=/tmp/raw2.xml # secondary query → file
-make ibkr-flex-dump                      # writes to stdout
+make ibkr-flex-dump                      # writes to services/relays/ibkr/fixtures/raw.xml
 ```
 
 Useful for inspecting a response without overwriting the committed fixture.

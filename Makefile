@@ -22,7 +22,7 @@ deps: ## Install Python dependencies
 	$(PIP) install $(REQ_FILES)
 
 setup: ## Create .venv and install all dependencies
-	@if [ -d .venv ] && ! .venv/bin/python -c "import pip" >/dev/null 2>&1; then \
+	@if [ -d .venv ] && ! $(PYTHON) -c "import pip" >/dev/null 2>&1; then \
 		echo "  Existing .venv is broken (shebangs point at a missing interpreter) — rebuilding"; \
 		rm -rf .venv; \
 	fi
