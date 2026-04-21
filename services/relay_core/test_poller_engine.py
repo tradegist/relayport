@@ -1,6 +1,7 @@
 """Unit tests for poller_engine — generic poll cycle with mocked fetch/parse."""
 
 import sqlite3
+from collections.abc import Generator
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -24,6 +25,28 @@ from relay_core.poller_engine import (
 from shared import BuySell, Fill, Trade, to_epoch
 
 # ── Fixtures ─────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _disable_fx(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """Guarantee FX enrichment stays disabled for poller-engine tests.
+
+    ``poll_once`` calls ``enrich_if_enabled``, which reads FX_* env vars
+    and caches a process-wide singleton on first use. Without this
+    fixture a developer with ``FX_RATES_ENABLED=true`` in their shell
+    would either crash these tests at config-time (missing base
+    currency → SystemExit) or have them attempt real network fetches.
+    We force FX off and reset the cached config before each test.
+    """
+    from relay_core.fx import _reset_for_tests
+
+    monkeypatch.setenv("FX_RATES_ENABLED", "false")
+    _reset_for_tests()
+    yield
+    _reset_for_tests()
+
+
+
 
 @pytest.fixture()
 def dedup_db() -> sqlite3.Connection:
