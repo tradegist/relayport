@@ -80,16 +80,38 @@ class TestToEpoch(unittest.TestCase):
     def test_empty_returns_zero(self) -> None:
         assert to_epoch("") == 0
 
-    def test_tz_aware_input_converts_to_utc(self) -> None:
-        # 12:00 +02:00 == 10:00 UTC
-        assert to_epoch("2025-04-03T12:00:00+02:00") == to_epoch("2025-04-03T10:00:00")
-
     def test_monotonic(self) -> None:
         assert to_epoch("2025-04-03T12:00:00") < to_epoch("2025-04-03T12:00:01")
 
     def test_unparseable_raises(self) -> None:
         with self.assertRaises(ValueError):
             to_epoch("not a timestamp")
+
+    # ── Strictness: only the exact canonical form is accepted. ──
+    # Every Fill.timestamp passes through normalize_timestamp() upstream,
+    # so anything else reaching to_epoch() is a contract violation and
+    # should fail loudly rather than be silently accepted.
+
+    def test_tz_aware_z_suffix_rejected(self) -> None:
+        with self.assertRaises(ValueError) as cm:
+            to_epoch("2025-04-03T12:00:00Z")
+        assert "canonical" in str(cm.exception)
+
+    def test_tz_aware_offset_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            to_epoch("2025-04-03T12:00:00+02:00")
+
+    def test_fractional_seconds_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            to_epoch("2025-04-03T12:00:00.123456")
+
+    def test_ibkr_flex_form_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            to_epoch("20250403;120000")
+
+    def test_date_only_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            to_epoch("2025-04-03")
 
 
 class TestParseTimezone(unittest.TestCase):

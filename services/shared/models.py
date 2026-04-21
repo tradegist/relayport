@@ -4,6 +4,11 @@
 !! via the generated TypeScript and Python type packages (make types).
 !! Do NOT add general internal helpers, mapping dicts, or utility
 !! functions here — those belong in utilities.py.
+!!
+!! Exception: private ``json_schema_extra`` hooks (e.g.
+!! :func:`_all_fields_required`) live inline with the models they decorate,
+!! since they're single-purpose schema plumbing, not general helpers. This
+!! mirrors the ``_require_discriminators`` pattern in notifier/models.py.
 
 Outbound webhook payload contracts live in relay_core/notifier/models.py.
 """

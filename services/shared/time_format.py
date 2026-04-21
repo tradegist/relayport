@@ -33,11 +33,8 @@ def normalize_timestamp(raw: str, *, assume_tz: tzinfo | None = None) -> str:
     if not raw:
         raise ValueError("empty timestamp")
 
-    # Python 3.11's fromisoformat rejects "Z"; 3.12+ accepts it. Normalise
-    # up-front so behaviour is version-independent.
-    iso_candidate = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
     try:
-        dt = datetime.fromisoformat(iso_candidate)
+        dt = datetime.fromisoformat(raw)
     except ValueError as exc:
         raise ValueError(f"Not a valid ISO-8601 timestamp: {raw!r}") from exc
 
@@ -48,23 +45,36 @@ def normalize_timestamp(raw: str, *, assume_tz: tzinfo | None = None) -> str:
     return dt_utc.strftime("%Y-%m-%dT%H:%M:%S")
 
 
+_CANONICAL_FORMAT = "%Y-%m-%dT%H:%M:%S"
+
+
 def to_epoch(ts: str) -> int:
     """Return *ts* as Unix epoch seconds (UTC), or ``0`` for empty input.
 
-    *ts* must be in the canonical form produced by
-    :func:`normalize_timestamp` — i.e. naive ISO-8601, interpreted as UTC.
-    An empty string is treated as "no timestamp" and returns ``0`` to
-    preserve the existing "no watermark" semantics used by the poller.
+    *ts* must be in the exact canonical form produced by
+    :func:`normalize_timestamp` — ``YYYY-MM-DDTHH:MM:SS``, naive,
+    interpreted as UTC. An empty string is treated as "no timestamp"
+    and returns ``0`` to preserve the "no watermark" semantics used by
+    the poller.
 
-    Raises ``ValueError`` for any non-empty, non-canonical input — that
-    would indicate a bug upstream (a Fill that bypassed normalisation).
+    Raises ``ValueError`` for any non-empty input that isn't exactly
+    canonical (including tz-aware forms like ``...Z`` or ``...+02:00``,
+    fractional seconds, or broker-specific formats). These shouldn't
+    occur in practice — every Fill's timestamp passes through
+    :func:`normalize_timestamp` upstream — and rejecting them here
+    surfaces contract violations instead of silently tolerating drift.
+    Callers that need permissive ISO-8601 parsing should use
+    :func:`normalize_timestamp` first.
     """
     if not ts:
         return 0
-    dt = datetime.fromisoformat(ts)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return int(dt.timestamp())
+    try:
+        dt = datetime.strptime(ts, _CANONICAL_FORMAT)
+    except ValueError as exc:
+        raise ValueError(
+            f"Not a canonical timestamp (expected YYYY-MM-DDTHH:MM:SS, got {ts!r})"
+        ) from exc
+    return int(dt.replace(tzinfo=UTC).timestamp())
 
 
 def parse_timezone(name: str) -> ZoneInfo:
