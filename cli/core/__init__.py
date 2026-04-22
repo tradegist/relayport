@@ -60,10 +60,10 @@ class CoreConfig:
     """Optional callback returning droplet size slug for resume.
     If None, defaults to 's-1vcpu-1gb'."""
 
-    route_prefix: str = ""
-    """Expected path prefix for Caddy site snippets (e.g. '/ibkr').
+    route_prefixes: list[str] = []
+    """Expected path prefixes for Caddy site snippets (e.g. ['/ibkr']).
     If set, deploy validates that all ``handle`` directives in
-    ``infra/caddy/sites/*.caddy`` start with this prefix."""
+    ``infra/caddy/sites/*.caddy`` start with one of these prefixes."""
 
     pre_sync_hook: Callable[[], None] | None = None
     """Optional callback run before sync (e.g. validate poller-2 env)."""

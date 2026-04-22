@@ -113,7 +113,7 @@ _CONFIG = CoreConfig(
     },
     compose_env_fn=_compose_env,
     size_selector_fn=_droplet_size,
-    route_prefix="/relays",
+    route_prefixes=["/relays", "/debug"],
     pre_sync_hook=_pre_sync_hook,
 )
 

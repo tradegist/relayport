@@ -1,7 +1,7 @@
 import os
 import shutil
 
-from cli.core import config, die, load_env, terraform
+from cli.core import config, die, load_env, require_env, terraform
 
 
 def run(args):
@@ -13,6 +13,7 @@ def run(args):
 
     if not os.environ.get("DO_API_TOKEN"):
         die("DO_API_TOKEN is not set in .env.droplet")
+    require_env("SITE_DOMAIN")
 
     # Export TF_VAR_* only when the source env var is present/non-empty.
     # Leaving TF_VAR_* unset lets Terraform defaults and validation behave correctly.

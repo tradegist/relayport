@@ -132,18 +132,19 @@ def _template_caddy_snippet(src: Path) -> str:
     return pattern.sub(_sub, content)
 
 
-def _validate_site_snippet_routes(content: str, snippet_name: str, prefix: str) -> None:
-    """Ensure all ``handle`` paths in a site snippet start with *prefix*.
+def _validate_site_snippet_routes(content: str, snippet_name: str, prefixes: list[str]) -> None:
+    """Ensure all ``handle`` paths in a site snippet start with one of *prefixes*.
 
     Prevents a misconfigured snippet from shadowing other projects'
     routes on the shared Caddy instance.
     """
     for match in re.finditer(r'^\s*handle\s+(\S+)', content, re.MULTILINE):
         path = match.group(1)
-        if not path.startswith(f"{prefix}/"):
+        if not any(path.startswith(f"{p}/") for p in prefixes):
+            allowed = ", ".join(f"'{p}/*'" for p in prefixes)
             die(f"Snippet {snippet_name}: handle path '{path}' does not start "
-                f"with project prefix '{prefix}/'. All site snippet routes "
-                f"must be namespaced under '{prefix}/*' to avoid collisions.")
+                f"with any project prefix ({allowed}). All site snippet routes "
+                f"must be namespaced under a project prefix to avoid collisions.")
 
 
 def _deploy_caddy_snippets(droplet_ip: str) -> None:
@@ -161,9 +162,9 @@ def _deploy_caddy_snippets(droplet_ip: str) -> None:
             continue
         for snippet in src_dir.glob("*.caddy"):
             templated = _template_caddy_snippet(snippet)
-            if subdir == "sites" and cfg.route_prefix:
+            if subdir == "sites" and cfg.route_prefixes:
                 _validate_site_snippet_routes(
-                    templated, snippet.name, cfg.route_prefix)
+                    templated, snippet.name, cfg.route_prefixes)
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".caddy", delete=False,
             ) as tmp:
