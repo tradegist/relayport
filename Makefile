@@ -107,7 +107,7 @@ types: ## Regenerate TypeScript + Python types from Pydantic models
 	npx --yes json-schema-to-typescript types/typescript/relay_api/types.schema.json > types/typescript/relay_api/types.d.ts
 	@echo "Generated types/typescript/shared/types.d.ts + types/typescript/relay_api/types.d.ts"
 	$(PYTHON) gen_python_types.py
-	$(PYTHON) -m ruff check types/python/b_relay_types/ --fix --quiet
+	$(PYTHON) -m ruff check types/python/relayport_types/ --fix --quiet
 	$(MAKE) typecheck
 
 test: ## Run unit tests
@@ -121,10 +121,10 @@ typecheck: ## Run mypy strict type checking
 	MYPYPATH=services/debug $(PYTHON) -m mypy services/debug/
 	$(PYTHON) -m mypy schema_gen.py
 	$(PYTHON) -m mypy gen_python_types.py
-	$(PYTHON) -m mypy types/python/b_relay_types/
+	$(PYTHON) -m mypy types/python/relayport_types/
 
 lint: ## Run ruff linter (use FIX=1 to auto-fix)
-	$(PYTHON) -m ruff check services/shared/ services/relay_core/ services/relays/ services/debug/ cli/ schema_gen.py gen_python_types.py types/python/b_relay_types/ $(if $(FIX),--fix)
+	$(PYTHON) -m ruff check services/shared/ services/relay_core/ services/relays/ services/debug/ cli/ schema_gen.py gen_python_types.py types/python/relayport_types/ $(if $(FIX),--fix)
 	@if grep -rn '__all__' services/ types/ cli/ --include='*.py'; then echo "ERROR: __all__ is banned — use explicit re-exports"; exit 1; fi
 
 local-up: ## Start full stack locally (no TLS, direct port access)

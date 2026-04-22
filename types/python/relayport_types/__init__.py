@@ -1,4 +1,4 @@
-"""b_relay_types — Pydantic models for Broker Relay.
+"""relayport_types — Pydantic models for Broker Relay.
 
 Mirrors the relay_core source structure:
   - shared             : CommonFill primitives (Fill, Trade, BuySell, …)

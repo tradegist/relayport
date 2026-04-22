@@ -569,14 +569,14 @@ export { BrokerRelay, RelayApi };
 
 ## Python Types Package
 
-- Types are available as `b-relay-types` (PyPI package in `types/python/`, not yet published).
+- Types are available as `relayport-types` (PyPI package in `types/python/`, not yet published).
 - **Standalone Pydantic models** — no dependency on the relay service.
 - Mirrors the `relay_core` source structure so the package layout reflects the code design.
 - **Structure:**
   ```
   types/python/
-    pyproject.toml              # b-relay-types, deps: pydantic
-    b_relay_types/
+    pyproject.toml              # relayport-types, deps: pydantic
+    relayport_types/
       __init__.py               # Re-exports all public types
       shared.py                 # CommonFill primitives (generated from services/shared/models.py)
       relay_api.py              # Relay API types (generated from services/relay_core/relay_models.py)
@@ -586,12 +586,12 @@ export { BrokerRelay, RelayApi };
   ```
 - **Usage:**
   ```python
-  from b_relay_types import Fill, Trade, BuySell              # CommonFill primitives
-  from b_relay_types import WebhookPayload, WebhookPayloadTrades  # notifier contracts
-  from b_relay_types.notifier.models import WebhookPayloadTrades  # direct path
+  from relayport_types import Fill, Trade, BuySell              # CommonFill primitives
+  from relayport_types import WebhookPayload, WebhookPayloadTrades  # notifier contracts
+  from relayport_types.notifier.models import WebhookPayloadTrades  # direct path
   ```
 - **Auto-generated** by `gen_python_types.py` — each source file is copied verbatim with one import-depth rewrite. Run `make types` to regenerate. Do not edit generated files manually.
-- **Covered by `make lint` and `make typecheck`** — `types/python/b_relay_types/` is included in both targets. Generated code must pass ruff and mypy like any other Python module.
+- **Covered by `make lint` and `make typecheck`** — `types/python/relayport_types/` is included in both targets. Generated code must pass ruff and mypy like any other Python module.
 
 ## Code Style
 
@@ -721,6 +721,6 @@ types/                     # Type packages (TypeScript + Python)
   typescript/              # @tradegist/relayport-types (BrokerRelay + RelayApi namespaces)
   python/                  # relayport-types PyPI package
 schema_gen.py              # JSON Schema generator (Pydantic → TS types)
-gen_python_types.py        # Python types generator (mirrors relay_core structure → types/python/b_relay_types/)
+gen_python_types.py        # Python types generator (mirrors relay_core structure → types/python/relayport_types/)
 terraform/                 # Infrastructure as code (DigitalOcean)
 ```

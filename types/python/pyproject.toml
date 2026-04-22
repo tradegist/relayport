@@ -12,7 +12,7 @@ license = {text = "MIT"}
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["b_relay_types*"]
+include = ["relayport_types*"]
 
 [tool.setuptools.package-data]
-b_relay_types = ["py.typed"]
+relayport_types = ["py.typed"]
