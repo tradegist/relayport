@@ -61,16 +61,13 @@ def is_poller_enabled(relay_name: RelayName) -> bool:
         return True
     return val not in ("0", "false", "no")
 
-# ── Shared DB path (all relays, all pollers) ─────────────────────────
-DEDUP_DB_PATH = "/data/dedup/fills.db"
 META_DB_PATH = "/data/meta/relay.db"
-
 
 # ── SQLite helpers ───────────────────────────────────────────────────
 
 def init_dedup_db(db_path: str | None = None) -> sqlite3.Connection:
     """Open the shared dedup database (cross-relay, WAL mode)."""
-    return _init_dedup_db(Path(db_path or DEDUP_DB_PATH))
+    return _init_dedup_db(db_path)
 
 
 def init_meta_db(db_path: str | None = None) -> sqlite3.Connection:

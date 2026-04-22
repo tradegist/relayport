@@ -11,7 +11,6 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -97,9 +96,6 @@ def get_debounce_ms(relay_name: RelayName) -> int:
         raise SystemExit(f"Invalid {var_name}={val} — must be >= 0")
     return val
 
-# ── Shared DB path (same as poller_engine) ───────────────────────────
-DEDUP_DB_PATH = "/data/dedup/fills.db"
-
 # ── Reconnection constants ───────────────────────────────────────────
 INITIAL_RETRY_DELAY = 5
 MAX_RETRY_DELAY = 300
@@ -124,7 +120,7 @@ def _strip_prefix(relay_name: str, prefixed_ids: set[str]) -> set[str]:
 def _send_and_mark(
     relay_name: RelayName,
     fills: list[Fill],
-    db_path: str,
+    db_path: str | None,
 ) -> None:
     """Dedup, aggregate, notify, and mark fills as processed.
 
@@ -136,7 +132,7 @@ def _send_and_mark(
     unprocessed and will be retried on the next event or reconnect.
     """
     relay = get_relay(relay_name)
-    conn = _init_dedup_db(Path(db_path))
+    conn = _init_dedup_db(db_path)
     try:
         prefixed_candidates = _prefix_ids(relay_name, fills)
         already_seen_prefixed = get_processed_ids(conn, prefixed_candidates)
@@ -226,7 +222,7 @@ class DebounceBuffer:
         self,
         relay_name: RelayName,
         debounce_ms: int,
-        db_path: str,
+        db_path: str | None,
     ) -> None:
         self._relay_name = relay_name
         self._debounce_s = debounce_ms / 1000.0
@@ -283,7 +279,7 @@ async def _handle_event(
     relay_name: RelayName,
     data: Any,
     debounce_buf: DebounceBuffer | None,
-    db_path: str,
+    db_path: str | None,
 ) -> None:
     """Process a single parsed WS message using adapter callbacks."""
     relay = get_relay(relay_name)
@@ -356,7 +352,7 @@ async def _handle_event(
 
 async def _listen(
     relay_name: RelayName,
-    db_path: str,
+    db_path: str | None,
 ) -> None:
     """Connect, process events, reconnect with exponential backoff."""
     relay = get_relay(relay_name)
@@ -448,7 +444,7 @@ async def _listen(
 
 async def start_listener(
     relay_name: RelayName,
-    db_path: str = DEDUP_DB_PATH,
+    db_path: str | None = None,
 ) -> None:
     """Start the WebSocket listener (runs indefinitely with auto-reconnect).
 

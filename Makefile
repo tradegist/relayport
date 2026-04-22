@@ -69,6 +69,9 @@ poll: ## Trigger an immediate poll (RELAY=ibkr, IDX=1, V=1 verbose, REPLAY=N res
 	relay=$${relay:-ibkr}; \
 	$(CLI_RELAY_ENV) $(PYTHON) -m cli poll $$relay $(or $(IDX),1) $(if $(V),-v) $(if $(REPLAY),--replay $(REPLAY))
 
+reset-db: ## Drop dedup and meta tables (fresh state) [ENV=local, Y=1 to skip prompt]
+	$(CLI_RELAY_ENV) $(PYTHON) -m cli reset-db $(if $(Y),--yes)
+
 test-webhook: ## Send sample trades to webhook endpoint (make test-webhook [S=2] [ENV=local])
 	$(CLI_RELAY_ENV) $(PYTHON) -m cli test-webhook $(S)
 

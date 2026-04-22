@@ -10,11 +10,14 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+DEDUP_DB_PATH = "/data/dedup/fills.db"
 
-def init_db(db_path: Path) -> sqlite3.Connection:
+
+def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     """Open (or create) the dedup database and return a connection."""
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=5.0)
+    path = Path(db_path) if db_path else Path(DEDUP_DB_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), check_same_thread=False, timeout=5.0)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(
         "CREATE TABLE IF NOT EXISTS processed_fills ("
