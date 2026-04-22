@@ -88,10 +88,10 @@ After changing a variable in `.env` or `.env.relays`, restart only the affected 
 
 #### Local stack
 
-When `DEFAULT_CLI_RELAY_ENV=local` (or `ENV=local`), `make sync` simply restarts all containers. Bind mounts in `docker-compose.local.yml` ensure your code changes are picked up automatically — no rebuild needed:
+When `DEFAULT_CLI_ENV=local` (or `ENV=local`), `make sync` simply restarts all containers. Bind mounts in `docker-compose.local.yml` ensure your code changes are picked up automatically — no rebuild needed:
 
 ```bash
-make sync              # restart containers (when DEFAULT_CLI_RELAY_ENV=local)
+make sync              # restart containers (when DEFAULT_CLI_ENV=local)
 make sync ENV=local    # explicit override
 ```
 
@@ -179,7 +179,7 @@ Endpoints after startup:
 `docker-compose.local.yml` adds read-only bind mounts that shadow the baked-in image files with your local source tree. This means **code changes are visible on container restart — no rebuild needed**:
 
 ```bash
-make sync                    # restart all containers (when DEFAULT_CLI_RELAY_ENV=local)
+make sync                    # restart all containers (when DEFAULT_CLI_ENV=local)
 make sync ENV=local          # explicit: restart local stack
 ```
 

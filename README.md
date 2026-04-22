@@ -590,7 +590,7 @@ make logs                    # droplet (default: relays)
 make logs S=debug            # debug inbox logs
 ```
 
-Targets the droplet by default. Set `DEFAULT_CLI_RELAY_ENV=local` in `.env.droplet` (or pass `ENV=local`) to stream from the local stack instead:
+Targets the droplet by default. Set `DEFAULT_CLI_ENV=local` in `.env.droplet` (or pass `ENV=local`) to stream from the local stack instead:
 
 ```bash
 make logs ENV=local          # local relays

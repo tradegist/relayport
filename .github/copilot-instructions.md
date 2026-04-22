@@ -108,9 +108,9 @@ RelayPort is a **relay between broker accounts** that provides clear, common int
 - **`make setup`** creates the `.venv` (if missing), installs all dependencies (`requirements-dev.txt` + `services/relay_core/requirements.txt`), writes a `.pth` file, and copies `env_examples/*` → `.<name>` (e.g. `env_examples/env` → `.env`) for any missing env files. It also auto-heals a broken `.venv` (e.g. after a Python upgrade moves the interpreter) by detecting a missing `pip` import and rebuilding the venv from scratch before installing.
 - **`relayport.pth`** is created inside `.venv/lib/pythonX.Y/site-packages/` by `make setup`. It adds `services/debug/`, `services/`, and `services/relay_core/` to `sys.path` so that `from relay_core import ...`, `from relay_core.dedup import ...`, `from relay_core.notifier import ...`, `from debug_app import ...`, and `from shared import ...` work everywhere (CLI, tests, scripts) without `sys.path` hacks or `PYTHONPATH`.
 - **`.venv/` is gitignored** — never commit it.
-- **`docker-compose.local.yml` adds bind mounts** that shadow the `COPY`'d files in the image with your local source tree (`:ro`). This means code changes are visible on container restart — no rebuild needed. `make local-up` builds the images once; after that, `make sync` (when `DEFAULT_CLI_RELAY_ENV=local`) just restarts containers.
-- **`make sync` respects `DEFAULT_CLI_RELAY_ENV`.** When set to `local`, `make sync` restarts the local compose stack. When `prod` (default), it runs the full CLI sync to the droplet. Override per-command with `ENV=local` or `ENV=prod`.
-- **`make logs` also respects `DEFAULT_CLI_RELAY_ENV`.** `make logs S=debug` streams local container logs when local, droplet logs when prod.
+- **`docker-compose.local.yml` adds bind mounts** that shadow the `COPY`'d files in the image with your local source tree (`:ro`). This means code changes are visible on container restart — no rebuild needed. `make local-up` builds the images once; after that, `make sync` (when `DEFAULT_CLI_ENV=local`) just restarts containers.
+- **`make sync` respects `DEFAULT_CLI_ENV`.** When set to `local`, `make sync` restarts the local compose stack. When `prod` (default), it runs the full CLI sync to the droplet. Override per-command with `ENV=local` or `ENV=prod`.
+- **`make logs` also respects `DEFAULT_CLI_ENV`.** `make logs S=debug` streams local container logs when local, droplet logs when prod.
 
 ## Dependency Management
 
@@ -125,7 +125,7 @@ Configuration is split into three env files to separate concerns and enable scal
 
 - **`.env`** — App-level config: `SITE_DOMAIN`, `API_TOKEN`, `NOTIFIERS`, `RELAYS`, `POLL_INTERVAL`, listener settings. Injected into the `relays` container via `env_file:` in `docker-compose.yml`. Pushed to the droplet by `make sync` / `make deploy`.
 - **`.env.relays`** — Relay-prefixed env vars: `IBKR_FLEX_TOKEN`, `IBKR_FLEX_QUERY_ID`, relay-specific overrides (`IBKR_NOTIFIERS`, `IBKR_TARGET_WEBHOOK_URL`). Also injected via `env_file:` (marked `required: false` so the stack starts even without it). Adding a new relay's vars requires no compose changes — just add the prefixed vars.
-- **`.env.droplet`** — Developer-machine-only vars that are never pushed to the droplet or injected into containers. The name reflects its origin (droplet infrastructure config) but its scope is broader: any var that belongs on the developer's machine rather than the server lives here. Currently: `DEPLOY_MODE`, `DO_API_TOKEN`, `DROPLET_IP`, `SSH_KEY`, `DROPLET_SIZE`, `DEFAULT_CLI_RELAY_ENV`. Only read by `cli/` commands and the Makefile.
+- **`.env.droplet`** — Developer-machine-only vars that are never pushed to the droplet or injected into containers. The name reflects its origin (droplet infrastructure config) but its scope is broader: any var that belongs on the developer's machine rather than the server lives here. Currently: `DEPLOY_MODE`, `DO_API_TOKEN`, `DROPLET_IP`, `SSH_KEY`, `DROPLET_SIZE`, `DEFAULT_CLI_ENV`. Only read by `cli/` commands and the Makefile.
 - **`.env.test`** — E2E test config. Used only in `docker-compose.test.yml` via `env_file: !override`.
 - **Templates** live in `env_examples/` (gitignored names: `env`, `env.droplet`, `env.relays`, `env.test`). `make setup` copies them to `.<name>` if missing.
 

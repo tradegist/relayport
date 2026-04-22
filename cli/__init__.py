@@ -59,10 +59,10 @@ _RELAY_URLS: dict[str, str] = {
 
 
 def get_relay_env() -> str:
-    """Return 'local' or 'prod' based on RELAY_ENV / DEFAULT_CLI_RELAY_ENV."""
+    """Return 'local' or 'prod' based on RELAY_ENV / DEFAULT_CLI_ENV."""
     return (
         os.environ.get("RELAY_ENV")
-        or os.environ.get("DEFAULT_CLI_RELAY_ENV")
+        or os.environ.get("DEFAULT_CLI_ENV")
         or "prod"
     )
 

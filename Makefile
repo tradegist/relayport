@@ -56,7 +56,7 @@ resume: ## Restore droplet from snapshot
 
 sync: ## Push .env + restart (S=service B=1 LOCAL_FILES=1 SKIP_E2E=1 ENV=local)
 	@. ./.env 2>/dev/null; . ./.env.droplet 2>/dev/null; \
-	env="$${RELAY_ENV:-$${DEFAULT_CLI_RELAY_ENV:-prod}}"; \
+	env="$${RELAY_ENV:-$${DEFAULT_CLI_ENV:-prod}}"; \
 	[ -n "$(ENV)" ] && env="$(ENV)"; \
 	if [ "$$env" = "local" ]; then \
 		$(auto_debug_replicas); \
@@ -182,7 +182,7 @@ e2e: ## Run E2E tests (starts/stops stack automatically)
 
 logs: ## Stream logs (S=service ENV=local, default: poller on droplet)
 	@. ./.env 2>/dev/null; . ./.env.droplet 2>/dev/null; \
-	env="$${RELAY_ENV:-$${DEFAULT_CLI_RELAY_ENV:-prod}}"; \
+	env="$${RELAY_ENV:-$${DEFAULT_CLI_ENV:-prod}}"; \
 	[ -n "$(ENV)" ] && env="$(ENV)"; \
 	if [ "$$env" = "local" ]; then \
 		$(LOCAL_COMPOSE) logs -f $(or $(S),relays); \
