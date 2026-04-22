@@ -44,6 +44,17 @@ def _deploy_standalone():
             os.environ.pop(tf_var_key, None)
 
     terraform("init", "-input=false")
+
+    # If DROPLET_IP is already set, a reserved IP from a previous deployment
+    # exists on the DO account. Re-import it so Terraform reuses it instead of
+    # creating a new one.
+    existing_ip = os.environ.get("DROPLET_IP", "").strip()
+    if existing_ip:
+        state = terraform("state", "list", capture=True).stdout
+        if "digitalocean_reserved_ip.relay" not in state:
+            print(f"Importing existing reserved IP {existing_ip}...")
+            terraform("import", "digitalocean_reserved_ip.relay", existing_ip)
+
     terraform("apply", "-auto-approve", "-input=false")
 
     droplet_ip = terraform("output", "-raw", "droplet_ip", capture=True).stdout.strip()
@@ -82,7 +93,7 @@ def _deploy_standalone():
     print(f"  SSH key:     {key_path}")
     print()
     print("  Next steps:")
-    print(f"  1. Add DROPLET_IP={droplet_ip} to .env")
+    print(f"  1. Add DROPLET_IP={droplet_ip} to .env.droplet")
     if cfg.post_deploy_message:
         print(f"  2. {cfg.post_deploy_message}")
     print()

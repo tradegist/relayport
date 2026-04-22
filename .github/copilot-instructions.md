@@ -238,6 +238,10 @@ During shared deploy, snippet files are **templated** — all `{$VAR}` placehold
 - **`sites/*.caddy`** contain `handle` blocks imported inside the `{$SITE_DOMAIN}` site definition. Each project writes one snippet. Routes must be prefixed to avoid collisions. The `debug.caddy` snippet routes `/debug/webhook/*` to the `debug` container.
 - This structure allows multiple projects to share a single Caddy instance on the same droplet.
 
+## Sibling Project: ibkr_bridge
+
+This project (`relayport`) and `ibkr_bridge` (`/Users/seb/Repositories/ibkr_bridge`) share the same CLI deploy/destroy/sync infrastructure pattern. **Any change to `cli/core/deploy.py`, `cli/core/destroy.py`, or `cli/core/sync.py` in this project must be mirrored in the sibling project, and vice versa.** This includes: Terraform state management, reserved IP handling, rsync exclusions, env file push logic, and compose startup commands. When you modify CLI core logic here, explicitly remind the user to apply the equivalent change to `ibkr_bridge`, and offer to do it in the same session.
+
 ## Deployment Modes
 
 The deployment mode is controlled by `DEPLOY_MODE` in `.env.droplet` (required, validated before any deploy or sync).
