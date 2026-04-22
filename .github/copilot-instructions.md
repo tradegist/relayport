@@ -157,7 +157,7 @@ The `relays` container uses a **registry pattern** to support multiple broker ad
 4. The adapter returns a `BrokerRelay` dataclass with `PollerConfig`s, `ListenerConfig`, and notifiers.
 5. `main.py` starts a poll loop per `PollerConfig` and a WS listener (if configured).
 
-**Adding a new broker relay — step-by-step:**
+**Adding a new relay adapter — step-by-step:**
 
 Use the existing `ibkr` and `kraken` relays as reference implementations. IBKR demonstrates a complex adapter (XML polling + bridge WS with two event types), while Kraken demonstrates a simpler adapter (JSON REST polling + native WS with token-based auth).
 

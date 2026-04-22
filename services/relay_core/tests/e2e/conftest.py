@@ -1,4 +1,4 @@
-"""E2E test fixtures for the broker-relay test stack.
+"""E2E test fixtures for the relayport test stack.
 
 Smoke tests (health, auth) run unconditionally — they only need the relay stack.
 Listener tests require an ibkr_bridge running locally and skip otherwise.
