@@ -200,7 +200,6 @@ Configuration is split across three environment files. Templates are in `env_exa
 | `FX_RATES_BASE_CURRENCY`            | No\*     | —                  | ISO-4217 base currency (required when `FX_RATES_ENABLED=true`)                                                  |
 | `FX_RATE_API_KEY`                   | No       | —                  | [exchangerate-api.com](https://www.exchangerate-api.com) key — enables historical rates                         |
 | `FX_CACHE_RETENTION_DAYS`           | No       | `730`              | Days to retain cached historical rates in the meta DB                                                           |
-| `TIME_ZONE`                         | No       | `America/New_York` | Timezone (tz database format)                                                                                   |
 
 ### `.env.droplet` — CLI-only (never pushed to containers)
 
@@ -591,7 +590,7 @@ make logs                    # droplet (default: relays)
 make logs S=debug            # debug inbox logs
 ```
 
-Targets the droplet by default. Set `DEFAULT_CLI_RELAY_ENV=local` in `.env` (or pass `ENV=local`) to stream from the local stack instead:
+Targets the droplet by default. Set `DEFAULT_CLI_RELAY_ENV=local` in `.env.droplet` (or pass `ENV=local`) to stream from the local stack instead:
 
 ```bash
 make logs ENV=local          # local relays

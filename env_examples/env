@@ -68,10 +68,10 @@ POLL_INTERVAL=600
 #FX_RATES_BASE_CURRENCY=EUR
 
 # API key from https://www.exchangerate-api.com. Optional:
-#   - With a key: historical daily rates are available for any trade date.
-#   - Without a key: only today's rate (from the free open.er-api.com
-#     endpoint) is used. Trades older than today will ship without fxRate
-#     and the reason will appear in the webhook payload `errors` array.
+# - With a key: historical daily rates are available for any trade date.
+# - Without a key: only today's rate (from the free open.er-api.com
+# endpoint) is used. Trades older than today will ship without fxRate
+# and the reason will appear in the webhook payload `errors` array.
 #FX_RATE_API_KEY=
 
 # Days to retain cached historical rates in the meta DB (default: 730 = 2y).
@@ -83,12 +83,5 @@ POLL_INTERVAL=600
 #NOTIFY_RETRIES=0
 
 # Delay between retries in milliseconds (default: 1000, max: 30000)
+
 #NOTIFY_RETRY_DELAY_MS=1000
-
-# ── General ──────────────────────────────────────────────────────────
-
-TIME_ZONE=America/New_York
-
-# CLI default target environment: "prod" (HTTPS via SITE_DOMAIN) or "local" (localhost:15001)
-# Override per-command with: make poll ENV=local
-DEFAULT_CLI_RELAY_ENV=prod
