@@ -2,7 +2,7 @@
 
 Requires:
 - ibkr_bridge running locally with IB Gateway connected (paper account)
-- broker-relay E2E stack running (make e2e-up)
+- relayport E2E stack running (make e2e-up)
 - IBKR_BRIDGE_API_TOKEN set in .env.test
 
 The fill test places a market order for 1 share of AAPL via the bridge
@@ -23,7 +23,7 @@ pytestmark = pytest.mark.usefixtures("_bridge_preflight")
 _E2E_COMPOSE = (
     "SITE_DOMAIN=unused API_TOKEN=test-token "
     "docker compose -f docker-compose.yml -f docker-compose.test.yml "
-    "-p broker-relay-test --env-file .env.test"
+    "-p relayport-test --env-file .env.test"
 )
 
 

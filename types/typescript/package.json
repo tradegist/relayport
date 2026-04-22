@@ -1,7 +1,7 @@
 {
-  "name": "@tradegist/broker-relay-types",
+  "name": "@tradegist/relayport-types",
   "version": "0.3.0",
-  "description": "TypeScript types for BrokeRelay — webhook payloads and relay API",
+  "description": "TypeScript types for RelayPort — webhook payloads and relay API",
   "types": "index.d.ts",
   "files": [
     "index.d.ts",

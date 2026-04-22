@@ -64,4 +64,4 @@ services:
 
 networks:
   default:
-    name: broker-relay-test
+    name: relayport-test

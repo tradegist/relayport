@@ -1,4 +1,4 @@
-name: broker-relay
+name: relayport
 
 services:
   caddy:

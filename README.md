@@ -1,4 +1,4 @@
-# BrokeRelay
+# RelayPort
 
 A **relay between broker accounts** that provides clear, common interfaces to communicate with different brokers through a single interface layer — deployed to a DigitalOcean droplet with a single `make deploy`.
 
@@ -9,7 +9,7 @@ A **relay between broker accounts** that provides clear, common interfaces to co
 
 Broker APIs are fragmented — each has its own data formats, auth patterns, and delivery mechanisms. Every integration rebuilds the same plumbing: polling, parsing, dedup, webhook delivery.
 
-BrokeRelay abstracts this with a **relay adapter pattern**: one generic engine handles polling, dedup, aggregation, and webhook delivery; broker-specific adapters handle the API quirks. Adding a broker is writing one adapter.
+RelayPort abstracts this with a **relay adapter pattern**: one generic engine handles polling, dedup, aggregation, and webhook delivery; broker-specific adapters handle the API quirks. Adding a broker is writing one adapter.
 
 Currently supports **IBKR** (Interactive Brokers) via the Flex Web Service and **Kraken** (crypto exchange) via REST + WebSocket v2. Deploys to a DigitalOcean droplet from **$4/month**, with:
 
@@ -209,7 +209,7 @@ Configuration is split across three environment files. Templates are in `env_exa
 | `DEPLOY_MODE`  | Yes      | —                     | `standalone` (own droplet via Terraform) or `shared` (existing droplet)      |
 | `DO_API_TOKEN` | Yes\*    | —                     | DigitalOcean API token (standalone only — can be removed after first deploy) |
 | `DROPLET_IP`   | Yes\*    | —                     | Droplet IP (from Terraform output in standalone; provided by host in shared) |
-| `SSH_KEY`      | No       | `~/.ssh/broker-relay` | SSH key path — **shared mode only**. Standalone auto-generates.              |
+| `SSH_KEY`      | No       | `~/.ssh/relayport` | SSH key path — **shared mode only**. Standalone auto-generates.              |
 | `DROPLET_SIZE` | No       | `s-1vcpu-512mb`       | Override droplet size slug                                                   |
 
 ### `.env.relays` — Relay-prefixed vars
@@ -619,8 +619,8 @@ make logs S=debug ENV=local  # local debug inbox
 - [x] HTTPS via Caddy + Let's Encrypt
 - [x] Makefile CLI (`make deploy`, `make poll`, etc.)
 - [x] Unified Flex XML parsing (Activity + Trade Confirmation)
-- [x] TypeScript type definitions (`@tradegist/broker-relay-types`, not yet published)
-- [x] Python type definitions (`broker-relay-types`, not yet published)
+- [x] TypeScript type definitions (`@tradegist/relayport-types`, not yet published)
+- [x] Python type definitions (`relayport-types`, not yet published)
 - [x] Multi-account support within each relay (`_2` suffix)
 - [x] Debug webhook inbox (`DEBUG_WEBHOOK_PATH`)
 - [x] Real-time listener (ibkr_bridge WebSocket)

@@ -1,8 +1,8 @@
-# BrokeRelay — Project Guidelines
+# RelayPort — Project Guidelines
 
 ## Purpose
 
-BrokeRelay is a **relay between broker accounts** that provides clear, common interfaces to communicate with different brokers through a single interface layer.
+RelayPort is a **relay between broker accounts** that provides clear, common interfaces to communicate with different brokers through a single interface layer.
 
 - **Currently supports:** IBKR (Interactive Brokers) and Kraken (crypto exchange), with more brokers planned via the relay adapter pattern
 - **Currently provides:** Webhook push notifications (more notification layers planned)
@@ -105,7 +105,7 @@ BrokeRelay is a **relay between broker accounts** that provides clear, common in
 - **`.venv` is the project's virtual environment.** Created by `make setup` using Homebrew Python. All dev dependencies are installed there.
 - **Auto-activation** is configured in `~/.zshrc` via a `chpwd` hook — the venv activates automatically when `cd`'ing into the project directory.
 - **`make setup`** creates the `.venv` (if missing), installs all dependencies (`requirements-dev.txt` + `services/relay_core/requirements.txt`), writes a `.pth` file, and copies `env_examples/*` → `.<name>` (e.g. `env_examples/env` → `.env`) for any missing env files. It also auto-heals a broken `.venv` (e.g. after a Python upgrade moves the interpreter) by detecting a missing `pip` import and rebuilding the venv from scratch before installing.
-- **`broker-relay.pth`** is created inside `.venv/lib/pythonX.Y/site-packages/` by `make setup`. It adds `services/debug/`, `services/`, and `services/relay_core/` to `sys.path` so that `from relay_core import ...`, `from relay_core.dedup import ...`, `from relay_core.notifier import ...`, `from debug_app import ...`, and `from shared import ...` work everywhere (CLI, tests, scripts) without `sys.path` hacks or `PYTHONPATH`.
+- **`relayport.pth`** is created inside `.venv/lib/pythonX.Y/site-packages/` by `make setup`. It adds `services/debug/`, `services/`, and `services/relay_core/` to `sys.path` so that `from relay_core import ...`, `from relay_core.dedup import ...`, `from relay_core.notifier import ...`, `from debug_app import ...`, and `from shared import ...` work everywhere (CLI, tests, scripts) without `sys.path` hacks or `PYTHONPATH`.
 - **`.venv/` is gitignored** — never commit it.
 - **`docker-compose.local.yml` adds bind mounts** that shadow the `COPY`'d files in the image with your local source tree (`:ro`). This means code changes are visible on container restart — no rebuild needed. `make local-up` builds the images once; after that, `make sync` (when `DEFAULT_CLI_RELAY_ENV=local`) just restarts containers.
 - **`make sync` respects `DEFAULT_CLI_RELAY_ENV`.** When set to `local`, `make sync` restarts the local compose stack. When `prod` (default), it runs the full CLI sync to the droplet. Override per-command with `ENV=local` or `ENV=prod`.
@@ -157,7 +157,7 @@ The `relays` container uses a **registry pattern** to support multiple broker ad
 4. The adapter returns a `BrokerRelay` dataclass with `PollerConfig`s, `ListenerConfig`, and notifiers.
 5. `main.py` starts a poll loop per `PollerConfig` and a WS listener (if configured).
 
-**Adding a new broker relay — step-by-step:**
+**Adding a new relay adapter — step-by-step:**
 
 Use the existing `ibkr` and `kraken` relays as reference implementations. IBKR demonstrates a complex adapter (XML polling + bridge WS with two event types), while Kraken demonstrates a simpler adapter (JSON REST polling + native WS with token-based auth).
 
@@ -544,7 +544,7 @@ export { BrokerRelay, RelayApi };
 
 ### Types Package
 
-- Types are published as `@tradegist/broker-relay-types` (npm package in `types/typescript/`, not yet published).
+- Types are published as `@tradegist/relayport-types` (npm package in `types/typescript/`, not yet published).
 - **Two namespaces**: `BrokerRelay` (CommonFill primitives) and `RelayApi` (notifier payload contracts + relay API types).
 - **`make types`** regenerates both from Pydantic models (depends on `typecheck`):
   - `services/shared/models.py` → `types/typescript/shared/types.d.ts`
@@ -554,7 +554,7 @@ export { BrokerRelay, RelayApi };
   ```
   types/typescript/
     index.d.ts                 # Barrel: exports BrokerRelay, RelayApi namespaces
-    package.json               # @tradegist/broker-relay-types
+    package.json               # @tradegist/relayport-types
     shared/
       index.d.ts               # Re-exports: BuySell, Fill, Trade
       types.d.ts               # Generated from services/shared/models.py
@@ -564,19 +564,19 @@ export { BrokerRelay, RelayApi };
       types.d.ts               # Generated from services/relay_core/relay_models.py (via relay_core.relay_models key)
       types.schema.json         # Intermediate JSON Schema
   ```
-- **Usage:** `import { BrokerRelay, RelayApi } from "@tradegist/broker-relay-types"`
+- **Usage:** `import { BrokerRelay, RelayApi } from "@tradegist/relayport-types"`
 - `schema_gen.py` owns the `SCHEMA_MODELS` dict (keyed by importable module path, e.g. `"shared"`, `"relay_core.relay_models"`). **To export a new model to TypeScript, add it to the relevant entry in `schema_gen.py:SCHEMA_MODELS` and update the corresponding `types/typescript/*/index.d.ts` re-exports.** The Python types package is auto-generated by `gen_python_types.py`.
 
 ## Python Types Package
 
-- Types are available as `b-relay-types` (PyPI package in `types/python/`, not yet published).
+- Types are available as `relayport-types` (PyPI package in `types/python/`, not yet published).
 - **Standalone Pydantic models** — no dependency on the relay service.
 - Mirrors the `relay_core` source structure so the package layout reflects the code design.
 - **Structure:**
   ```
   types/python/
-    pyproject.toml              # b-relay-types, deps: pydantic
-    b_relay_types/
+    pyproject.toml              # relayport-types, deps: pydantic
+    relayport_types/
       __init__.py               # Re-exports all public types
       shared.py                 # CommonFill primitives (generated from services/shared/models.py)
       relay_api.py              # Relay API types (generated from services/relay_core/relay_models.py)
@@ -586,12 +586,12 @@ export { BrokerRelay, RelayApi };
   ```
 - **Usage:**
   ```python
-  from b_relay_types import Fill, Trade, BuySell              # CommonFill primitives
-  from b_relay_types import WebhookPayload, WebhookPayloadTrades  # notifier contracts
-  from b_relay_types.notifier.models import WebhookPayloadTrades  # direct path
+  from relayport_types import Fill, Trade, BuySell              # CommonFill primitives
+  from relayport_types import WebhookPayload, WebhookPayloadTrades  # notifier contracts
+  from relayport_types.notifier.models import WebhookPayloadTrades  # direct path
   ```
 - **Auto-generated** by `gen_python_types.py` — each source file is copied verbatim with one import-depth rewrite. Run `make types` to regenerate. Do not edit generated files manually.
-- **Covered by `make lint` and `make typecheck`** — `types/python/b_relay_types/` is included in both targets. Generated code must pass ruff and mypy like any other Python module.
+- **Covered by `make lint` and `make typecheck`** — `types/python/relayport_types/` is included in both targets. Generated code must pass ruff and mypy like any other Python module.
 
 ## Code Style
 
@@ -627,11 +627,11 @@ python3 -m cli poll ibkr 1
 
 ## Deployment Model (MANDATORY)
 
-- **`make sync LOCAL_FILES=1` uses rsync** to transfer files from the local working tree to `/opt/broker-relay/` on the droplet. It does NOT use git on the droplet — no git clone, no deploy keys, no GitHub access needed from the server.
+- **`make sync LOCAL_FILES=1` uses rsync** to transfer files from the local working tree to `/opt/relayport/` on the droplet. It does NOT use git on the droplet — no git clone, no deploy keys, no GitHub access needed from the server.
 - **Guards:** Must be on `main` branch with a clean working tree (no uncommitted changes). This ensures rsync deploys a known committed state.
 - **`--delete` flag:** rsync removes files on the droplet that no longer exist locally. This correctly handles renames and deletions but is dangerous for server-generated files.
-- **Invariant: the project directory (`/opt/broker-relay/`) contains only source files.** No service, script, or container may write files into the project directory. All runtime-generated data (databases, caches, logs, certificates) MUST use Docker named volumes (e.g. `dedup-data:/data/dedup`, `relay-meta:/data/meta`, `caddy-data:/data`). Docker volumes live under `/var/lib/docker/volumes/`, completely outside the project directory, and are safe from rsync `--delete`.
-- **When adding new runtime data** (a new database, cache file, upload directory, etc.): create a Docker named volume in `docker-compose.yml` and mount it into the container. Never write to a path inside `/opt/broker-relay/`.
+- **Invariant: the project directory (`/opt/relayport/`) contains only source files.** No service, script, or container may write files into the project directory. All runtime-generated data (databases, caches, logs, certificates) MUST use Docker named volumes (e.g. `dedup-data:/data/dedup`, `relay-meta:/data/meta`, `caddy-data:/data`). Docker volumes live under `/var/lib/docker/volumes/`, completely outside the project directory, and are safe from rsync `--delete`.
+- **When adding new runtime data** (a new database, cache file, upload directory, etc.): create a Docker named volume in `docker-compose.yml` and mount it into the container. Never write to a path inside `/opt/relayport/`.
 - **`.deployed-sha`** is the only server-side file inside the project directory. It is written by `cli/sync.py` after each `--local-files` sync and is excluded from rsync `--delete`. It records the deployed commit SHA for traceability.
 - **rsync exclusions** (files never overwritten or deleted on the droplet):
   - `.git/` — not present on droplet (no git repo)
@@ -718,9 +718,9 @@ infra/                     # Infrastructure backbone (no business logic)
     ibkr.caddy             # /relays/* routes → relays:8000
     debug.caddy            # /debug/webhook/* → debug:9000
 types/                     # Type packages (TypeScript + Python)
-  typescript/              # @tradegist/broker-relay-types (BrokerRelay + RelayApi namespaces)
-  python/                  # b-relay-types PyPI package
+  typescript/              # @tradegist/relayport-types (BrokerRelay + RelayApi namespaces)
+  python/                  # relayport-types PyPI package
 schema_gen.py              # JSON Schema generator (Pydantic → TS types)
-gen_python_types.py        # Python types generator (mirrors relay_core structure → types/python/b_relay_types/)
+gen_python_types.py        # Python types generator (mirrors relay_core structure → types/python/relayport_types/)
 terraform/                 # Infrastructure as code (DigitalOcean)
 ```

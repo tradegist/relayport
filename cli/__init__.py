@@ -1,4 +1,4 @@
-"""BrokeRelay CLI — project-specific configuration.
+"""RelayPort CLI — project-specific configuration.
 
 Sets up CoreConfig and exposes project-specific helpers used by
 project-specific commands (poll, test_webhook).
@@ -15,7 +15,7 @@ from cli.core import CoreConfig, die, env, set_config
 from relay_core.notifier import validate_notifier_env
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
-PROJECT_NAME = "broker-relay"
+PROJECT_NAME = "relayport"
 REMOTE_DIR = f"/opt/{PROJECT_NAME}"
 
 
@@ -92,7 +92,7 @@ def relay_api(path, method="POST", data=None):
             die(f"Request failed ({e.code}): {content}")
 
 
-# ── CoreConfig for BrokeRelay project ──────────────────────────────
+# ── CoreConfig for RelayPort project ──────────────────────────────
 
 _CONFIG = CoreConfig(
     project_name=PROJECT_NAME,

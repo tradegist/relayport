@@ -3,16 +3,16 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "b-relay-types"
+name = "relayport-types"
 version = "0.4.0"
-description = "Pydantic types for Broker Relay — webhook payloads and relay API"
+description = "Pydantic types for RelayPort — webhook payloads and relay API"
 requires-python = ">=3.11"
 dependencies = ["pydantic>=2.0,<3"]
 license = {text = "MIT"}
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["b_relay_types*"]
+include = ["relayport_types*"]
 
 [tool.setuptools.package-data]
-b_relay_types = ["py.typed"]
+relayport_types = ["py.typed"]

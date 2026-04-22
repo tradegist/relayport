@@ -1,6 +1,6 @@
 .PHONY: deps setup deploy destroy pause resume sync poll test-webhook ibkr-flex-dump ibkr-flex-refresh types test typecheck lint e2e e2e-up e2e-run e2e-down local-up local-down logs stats ssh help
 
-PROJECT = broker-relay
+PROJECT = relayport
 PYTHON ?= .venv/bin/python3
 E2E_ENV = .env.test
 E2E_COMPOSE = SITE_DOMAIN=unused API_TOKEN=test-token docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
@@ -107,7 +107,7 @@ types: ## Regenerate TypeScript + Python types from Pydantic models
 	npx --yes json-schema-to-typescript types/typescript/relay_api/types.schema.json > types/typescript/relay_api/types.d.ts
 	@echo "Generated types/typescript/shared/types.d.ts + types/typescript/relay_api/types.d.ts"
 	$(PYTHON) gen_python_types.py
-	$(PYTHON) -m ruff check types/python/b_relay_types/ --fix --quiet
+	$(PYTHON) -m ruff check types/python/relayport_types/ --fix --quiet
 	$(MAKE) typecheck
 
 test: ## Run unit tests
@@ -121,10 +121,10 @@ typecheck: ## Run mypy strict type checking
 	MYPYPATH=services/debug $(PYTHON) -m mypy services/debug/
 	$(PYTHON) -m mypy schema_gen.py
 	$(PYTHON) -m mypy gen_python_types.py
-	$(PYTHON) -m mypy types/python/b_relay_types/
+	$(PYTHON) -m mypy types/python/relayport_types/
 
 lint: ## Run ruff linter (use FIX=1 to auto-fix)
-	$(PYTHON) -m ruff check services/shared/ services/relay_core/ services/relays/ services/debug/ cli/ schema_gen.py gen_python_types.py types/python/b_relay_types/ $(if $(FIX),--fix)
+	$(PYTHON) -m ruff check services/shared/ services/relay_core/ services/relays/ services/debug/ cli/ schema_gen.py gen_python_types.py types/python/relayport_types/ $(if $(FIX),--fix)
 	@if grep -rn '__all__' services/ types/ cli/ --include='*.py'; then echo "ERROR: __all__ is banned — use explicit re-exports"; exit 1; fi
 
 local-up: ## Start full stack locally (no TLS, direct port access)

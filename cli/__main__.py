@@ -16,7 +16,7 @@ _PROJECT_MODULES: dict[str, str] = {
 
 def main():
     parser = argparse.ArgumentParser(
-        description="BrokeRelay CLI",
+        description="RelayPort CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command")
