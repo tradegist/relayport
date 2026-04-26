@@ -19,7 +19,7 @@ _RESET_SCRIPT = (
 
 def run(args):
     load_env()
-    # Reads RELAY_ENV (set by make ENV=local via CLI_RELAY_ENV) or DEFAULT_CLI_ENV.
+    # Reads RELAY_ENV (set by make ENV=local) or falls back to DEFAULT_CLI_ENV.
     relay_env = get_relay_env()
     is_local = relay_env == "local"
     target = "local" if is_local else "prod"

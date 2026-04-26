@@ -6,7 +6,7 @@ E2E_ENV = .env.test
 E2E_COMPOSE = SITE_DOMAIN=unused API_TOKEN=test-token docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
 E2E_COMPOSE_DOWN = SITE_DOMAIN=unused API_TOKEN=test-token docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
 LOCAL_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.local.yml
-CLI_RELAY_ENV = $(if $(ENV),RELAY_ENV=$(ENV))
+_RESOLVE_ENV = . ./.env 2>/dev/null; . ./.env.droplet 2>/dev/null; env="$${RELAY_ENV:-$${DEFAULT_CLI_ENV:-prod}}"; [ -n "$(ENV)" ] && env="$(ENV)";
 
 define auto_debug_replicas
 if [ -f .env ]; then . ./.env; if [ -n "$$(printf '%s' "$${DEBUG_WEBHOOK_PATH:-}" | tr -d '[:space:]')" ]; then export DEBUG_REPLICAS=$${DEBUG_REPLICAS:-1}; fi; fi
@@ -55,9 +55,7 @@ resume: ## Restore droplet from snapshot
 	$(PYTHON) -m cli resume
 
 sync: ## Push .env + restart (S=service B=1 LOCAL_FILES=1 SKIP_E2E=1 ENV=local)
-	@. ./.env 2>/dev/null; . ./.env.droplet 2>/dev/null; \
-	env="$${RELAY_ENV:-$${DEFAULT_CLI_ENV:-prod}}"; \
-	[ -n "$(ENV)" ] && env="$(ENV)"; \
+	@$(_RESOLVE_ENV) \
 	if [ "$$env" = "local" ]; then \
 		$(auto_debug_replicas); \
 		$(LOCAL_COMPOSE) up -d --force-recreate $(if $(B),--build); \
@@ -66,16 +64,19 @@ sync: ## Push .env + restart (S=service B=1 LOCAL_FILES=1 SKIP_E2E=1 ENV=local)
 	fi
 
 poll: ## Trigger an immediate poll (RELAY=ibkr, IDX=1, V=1 verbose, REPLAY=N resend)
-	@relay="$(RELAY)"; \
+	@$(_RESOLVE_ENV) \
+	relay="$(RELAY)"; \
 	if [ -z "$$relay" ]; then relay=$$(. ./.env 2>/dev/null; echo "$${RELAYS%%,*}"); fi; \
 	relay=$${relay:-ibkr}; \
-	$(CLI_RELAY_ENV) $(PYTHON) -m cli poll $$relay $(or $(IDX),1) $(if $(V),-v) $(if $(REPLAY),--replay $(REPLAY))
+	RELAY_ENV=$$env $(PYTHON) -m cli poll $$relay $(or $(IDX),1) $(if $(V),-v) $(if $(REPLAY),--replay $(REPLAY))
 
 reset-db: ## Drop dedup and meta tables (fresh state) [ENV=local, Y=1 to skip prompt]
-	$(CLI_RELAY_ENV) $(PYTHON) -m cli reset-db $(if $(Y),--yes)
+	@$(_RESOLVE_ENV) \
+	RELAY_ENV=$$env $(PYTHON) -m cli reset-db $(if $(Y),--yes)
 
 test-webhook: ## Send sample trades to webhook endpoint (make test-webhook [S=2] [ENV=local])
-	$(CLI_RELAY_ENV) $(PYTHON) -m cli test-webhook $(S)
+	@$(_RESOLVE_ENV) \
+	RELAY_ENV=$$env $(PYTHON) -m cli test-webhook $(S)
 
 ibkr-flex-dump: ## Dump a live IBKR Flex XML response (make ibkr-flex-dump [F=/tmp/raw.xml] [S=_2])
 	@test -f .env.relays || { echo "ERROR: .env.relays not found — create it from env_examples/env.relays"; exit 1; }; \
@@ -181,9 +182,7 @@ e2e: ## Run E2E tests (starts/stops stack automatically)
 	exit $$ret
 
 logs: ## Stream logs (S=service ENV=local, default: poller on droplet)
-	@. ./.env 2>/dev/null; . ./.env.droplet 2>/dev/null; \
-	env="$${RELAY_ENV:-$${DEFAULT_CLI_ENV:-prod}}"; \
-	[ -n "$(ENV)" ] && env="$(ENV)"; \
+	@$(_RESOLVE_ENV) \
 	if [ "$$env" = "local" ]; then \
 		$(LOCAL_COMPOSE) logs -f $(or $(S),relays); \
 	else \

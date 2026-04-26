@@ -12,6 +12,7 @@ from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import aiohttp
+from pydantic import ValidationError
 
 from relay_core import (
     BaseNotifier,
@@ -258,7 +259,7 @@ def _on_message_factory(
 
         try:
             envelope = WsEnvelope.model_validate(data)
-        except Exception as exc:
+        except ValidationError as exc:
             msg = f"Failed to validate IBKR WsEnvelope (type={event_type!r}): {exc}"
             log.error(msg)
             return [OnMessageResult(error=msg)]

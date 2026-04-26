@@ -38,7 +38,7 @@ def bridge_to_iso(raw: str) -> str:
 
     Accepts two formats:
 
-    * **ISO-8601** (current): ``YYYY-MM-DDTHH:MM:SS[±HH:MM]`` — passed through
+    * **ISO-8601** (current): ``YYYY-MM-DDTHH:MM:SS[±HH:MM|Z]`` — passed through
       as-is so ``normalize_timestamp`` handles timezone conversion downstream.
     * **Legacy** ``YYYYMMDD-HH:MM:SS`` — converted to naive ISO-8601.
 

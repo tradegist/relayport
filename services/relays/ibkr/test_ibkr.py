@@ -249,15 +249,15 @@ class TestMapFill(unittest.TestCase):
         self.assertEqual(fill.side, BuySell.SELL)
 
     def test_unknown_side_raises(self) -> None:
-        with self.assertRaises(ValueError, msg="Unknown execution side"):
+        with self.assertRaisesRegex(ValueError, "Unknown execution side"):
             _map_fill(_make_envelope(side="UNKNOWN"), _TEST_TZ)
 
     def test_no_fill_raises(self) -> None:
-        with self.assertRaises(ValueError, msg="has no fill data"):
+        with self.assertRaisesRegex(ValueError, "has no fill data"):
             _map_fill(_make_envelope(has_fill=False), _TEST_TZ)
 
     def test_empty_exec_id_raises(self) -> None:
-        with self.assertRaises(ValueError, msg="Empty execId"):
+        with self.assertRaisesRegex(ValueError, "Empty execId"):
             _map_fill(_make_envelope(exec_id=""), _TEST_TZ)
 
     def test_fee_is_positive(self) -> None:
@@ -283,7 +283,7 @@ class TestMapFill(unittest.TestCase):
         bad_envelope = _make_envelope()
         assert bad_envelope.fill is not None
         bad_envelope.fill.execution.time = "not-a-timestamp"
-        with self.assertRaises(ValueError, msg="Bad execution time"):
+        with self.assertRaisesRegex(ValueError, "Bad execution time"):
             _map_fill(bad_envelope, _TEST_TZ)
 
 

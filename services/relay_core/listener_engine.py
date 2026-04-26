@@ -368,13 +368,9 @@ async def _handle_event(
                     relay_name, len(mark_fills),
                 )
     elif parse_errors:
-        # No valid fills — send errors immediately (don't wait for debounce).
-        try:
-            await asyncio.to_thread(
-                _send_and_mark, relay_name, [], db_path, parse_errors,
-            )
-        except Exception:
-            log.exception("[%s] Failed to dispatch parse errors", relay_name)
+        # TODO: route to a dedicated error notifier (email, configurable cadence)
+        # once that system exists. For now, errors are visible in server logs only.
+        pass
 
     if no_mark_fills:
         try:
