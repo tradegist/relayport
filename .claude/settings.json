@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(.env)",
+      "Read(.env.droplet)",
+      "Read(.env.relays)",
+      "Read(.env.test)",
+      "Bash(cat .env)",
+      "Bash(cat .env.droplet)",
+      "Bash(cat .env.relays)",
+      "Bash(cat .env.test)",
+      "Bash(* .env)",
+      "Bash(* .env.droplet)",
+      "Bash(* .env.relays)",
+      "Bash(* .env.test)"
+    ]
+  }
+}
