@@ -74,6 +74,27 @@ _FLOAT_FIELDS: frozenset[str] = frozenset({
 # XML tags that represent individual fills.
 _FILL_TAGS: tuple[str, ...] = ("TradeConfirmation", "TradeConfirm", "Trade")
 
+
+def _validate_fill_tags(tags: tuple[str, ...]) -> None:
+    """Reject ``<Order>`` summary elements as a fill source.
+
+    Activity Flex emits an ``<Order levelOfDetail="ORDER" ...>`` summary
+    immediately before its execution rows. Treating it as a fill would
+    double-count every order — it has no ``ibExecID``/``transactionID``
+    so the dedup guard wouldn't catch it (the parser would fall back to
+    ``tradeID``, which is also empty on Order rows, and skip it… but if
+    IBKR ever populates ``tradeID`` on Order rows, every executed order
+    would silently produce a duplicate Fill).
+    """
+    if "Order" in tags:
+        raise RuntimeError(
+            "_FILL_TAGS must not include 'Order' — Order rows are summary "
+            "elements (levelOfDetail=ORDER), not executions."
+        )
+
+
+_validate_fill_tags(_FILL_TAGS)
+
 # Flex XML buySell values → BuySell enum (lowercase).
 _SIDE_MAP: dict[str, BuySell] = {
     "BUY": BuySell.BUY,

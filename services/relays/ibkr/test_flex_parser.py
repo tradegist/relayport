@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from relays.ibkr.flex_parser import parse_fills
+from relays.ibkr.flex_parser import _FILL_TAGS, _validate_fill_tags, parse_fills
 from shared import BuySell, Fill, Trade, aggregate_fills
 
 _FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -122,6 +122,32 @@ TC_GOOG = (
     ' notes="P" orderTime="20250403;152959"'
     ' orderType="MKT" isAPIOrder="Y" />'
 )
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  _validate_fill_tags() — module-load guardrail
+# ═════════════════════════════════════════════════════════════════════════
+
+class TestValidateFillTags:
+    """Adding ``"Order"`` to ``_FILL_TAGS`` must crash at import.
+
+    ``<Order>`` rows are summary aggregations (levelOfDetail=ORDER) emitted
+    once per parent order, not per execution. If anyone wires them in as
+    a fill source, every executed order would be re-counted as a Fill —
+    inflating notifications and corrupting dedup state.
+    """
+
+    def test_real_fill_tags_pass(self) -> None:
+        # The real tuple imported from the parser must always validate.
+        _validate_fill_tags(_FILL_TAGS)
+
+    def test_order_tag_rejected(self) -> None:
+        with pytest.raises(RuntimeError, match="Order rows are summary"):
+            _validate_fill_tags(("Trade", "Order"))
+
+    def test_order_only_rejected(self) -> None:
+        with pytest.raises(RuntimeError, match="_FILL_TAGS"):
+            _validate_fill_tags(("Order",))
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -883,30 +909,67 @@ class TestLiveFixtures:
     """
 
     def test_activity_flex_sample_parses_cleanly(self) -> None:
+        """Five executions across four orders; no parse errors.
+
+        Mirrors a realistic Flex response: ``<Order>`` summary rows
+        interleaved with ``<Trade>`` execution rows, a multi-fill order,
+        and both stock and option asset classes.
+        """
         xml = (_FIXTURES_DIR / "activity_flex_sample.xml").read_text()
         fills, errors = parse_fills(xml)
 
         assert errors == []
-        assert len(fills) == 1
+        assert len(fills) == 5
 
-        fill = fills[0]
-        assert fill.symbol == "TSLA"
-        assert fill.assetClass == "equity"
-        assert fill.side == BuySell.BUY
-        assert fill.volume == 2.0
-        assert fill.source == "flex"
-        # execId flows from the sanitized ibExecID constant
-        assert fill.execId == "00018d97.00000001.01.01"
-        # Fixture has dateTime="20260413;093014" — canonical form, default UTC.
-        assert fill.timestamp == "2026-04-13T09:30:14"
+    def test_activity_flex_sample_ignores_order_summary_rows(self) -> None:
+        """``<Order levelOfDetail="ORDER"/>`` rows must not yield Fill objects.
+
+        The fixture has 4 ``<Order>`` rows + 5 ``<Trade>`` rows. If the
+        parser ever started consuming Order rows, fill count would jump
+        to 9 and dedup would do something unpredictable (Order rows have
+        empty ibExecID/transactionID/tradeID).
+        """
+        xml = (_FIXTURES_DIR / "activity_flex_sample.xml").read_text()
+        fills, _ = parse_fills(xml)
+        assert "<Order" in xml, "fixture should contain Order summary rows"
+        assert all(f.execId.startswith("00018d97.") for f in fills), (
+            "every fill must come from a <Trade>; Order rows have empty ibExecID"
+        )
+
+    def test_activity_flex_sample_includes_options(self) -> None:
+        """Both ``equity`` (STK) and ``option`` (OPT) asset classes are present."""
+        xml = (_FIXTURES_DIR / "activity_flex_sample.xml").read_text()
+        fills, _ = parse_fills(xml)
+        asset_classes = {f.assetClass for f in fills}
+        assert asset_classes == {"equity", "option"}
+
+    def test_activity_flex_sample_aggregates_multi_fill_order(self) -> None:
+        """A multi-fill order collapses into a single Trade with summed volume.
+
+        The CRCL order has two fills (qty 1 + qty 99); aggregation must
+        produce a single Trade with vol=100, fillCount=2.
+        """
+        xml = (_FIXTURES_DIR / "activity_flex_sample.xml").read_text()
+        fills, _ = parse_fills(xml)
+        trades = aggregate_fills(fills)
+
+        # 4 distinct orderIds → 4 trades (one of which has 2 fills).
+        assert len(trades) == 4
+        crcl = next(t for t in trades if t.symbol == "CRCL")
+        assert crcl.fillCount == 2
+        assert crcl.volume == pytest.approx(100.0)
 
     def test_activity_flex_sample_timestamp_with_tz(self) -> None:
-        """With IBKR_ACCOUNT_TIMEZONE=America/New_York, the 09:30:14 NY time
-        (EDT, -04:00 in April) converts to 13:30:14 UTC."""
+        """Naive Flex timestamps are interpreted in the supplied tz.
+
+        ALAB BUY's dateTime is ``20260406;094731`` (April → EDT, -04:00)
+        which converts to 13:47:31 UTC.
+        """
         xml = (_FIXTURES_DIR / "activity_flex_sample.xml").read_text()
         fills, errors = parse_fills(xml, tz=ZoneInfo("America/New_York"))
         assert errors == []
-        assert fills[0].timestamp == "2026-04-13T13:30:14"
+        alab = next(f for f in fills if f.symbol == "ALAB")
+        assert alab.timestamp == "2026-04-06T13:47:31"
 
     def test_trade_confirm_sample_parses_cleanly(self) -> None:
         xml = (_FIXTURES_DIR / "trade_confirm_sample.xml").read_text()
