@@ -261,7 +261,7 @@ def _on_message_factory(
             envelope = WsEnvelope.model_validate(data)
         except ValidationError as exc:
             sanitized = "; ".join(
-                f"{'.'.join(str(l) for l in e['loc'])}: {e['msg']}"
+                f"{'.'.join(str(loc) for loc in e['loc'])}: {e['msg']}"
                 for e in exc.errors(include_input=False, include_url=False)
             )
             log.error("Failed to validate IBKR WsEnvelope (type=%r): %s", event_type, sanitized)
