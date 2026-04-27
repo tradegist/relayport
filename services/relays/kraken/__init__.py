@@ -50,6 +50,21 @@ def _get_api_secret() -> str | None:
     return os.environ.get("KRAKEN_API_SECRET", "").strip() or None
 
 
+def _get_lookback_days() -> int:
+    raw = os.environ.get("KRAKEN_LOOKBACK_DAYS", "30").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        raise SystemExit(
+            f"Invalid KRAKEN_LOOKBACK_DAYS={raw!r} — must be a positive integer"
+        ) from None
+    if value < 1:
+        raise SystemExit(
+            f"Invalid KRAKEN_LOOKBACK_DAYS={raw!r} — must be >= 1"
+        )
+    return value
+
+
 # ── REST poller adapter ──────────────────────────────────────────
 
 
@@ -94,7 +109,7 @@ def _parse_rest_trade(txid: str, data: KrakenRestTrade) -> Fill:
     )
 
 
-def _build_fetch(client: KrakenClient) -> Callable[[], str | None]:
+def _build_fetch(client: KrakenClient, lookback_days: int) -> Callable[[], str | None]:
     """Return a fetch callable for the generic poller engine.
 
     Returns a JSON string of the raw trades dict, or None on failure.
@@ -105,9 +120,10 @@ def _build_fetch(client: KrakenClient) -> Callable[[], str | None]:
             all_trades: dict[str, KrakenRestTrade] = {}
             offset = 0
             total_count: int | None = None
+            start = int(time.time()) - lookback_days * 86400
 
             while True:
-                result = client.get_trades_history(ofs=offset)
+                result = client.get_trades_history(start=start, ofs=offset)
                 trades_raw = result.get("trades", {})
                 if not isinstance(trades_raw, dict):
                     raise ValueError(
@@ -215,9 +231,10 @@ def _build_poller_configs() -> list[PollerConfig]:
     except RuntimeError as exc:
         raise SystemExit(f"Kraken poller config error: {exc}") from exc
     interval = get_poll_interval("kraken")
+    lookback_days = _get_lookback_days()
 
     return [PollerConfig(
-        fetch=_build_fetch(client),
+        fetch=_build_fetch(client, lookback_days),
         parse=_build_parse(),
         interval=interval,
     )]

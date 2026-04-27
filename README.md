@@ -230,6 +230,7 @@ Configuration is split across three environment files. Templates are in `env_exa
 | `KRAKEN_API_SECRET`            | Yes\*    | Kraken API secret, base64-encoded (required with API key)                                       |
 | `KRAKEN_LISTENER_ENABLED`      | No       | Enable WS v2 real-time listener (default: `false`)                                              |
 | `KRAKEN_LISTENER_DEBOUNCE_MS`  | No       | Buffer fills N ms before dispatching webhook (default: `0`)                                     |
+| `KRAKEN_LOOKBACK_DAYS`         | No       | How far back each REST poll looks for trades, in days (default: `30`, min: `1`)                 |
 | `KRAKEN_POLL_INTERVAL`         | No       | Override `POLL_INTERVAL` for Kraken relay only                                                  |
 | `KRAKEN_POLLER_ENABLED`        | No       | Override `POLLER_ENABLED` for Kraken relay only                                                 |
 | `KRAKEN_NOTIFIERS`             | No       | Override `NOTIFIERS` for Kraken relay only                                                      |

@@ -21,6 +21,7 @@ from relays.kraken import (
     _event_filter,
     _get_api_key,
     _get_api_secret,
+    _get_lookback_days,
     _on_message,
     _parse_rest_trade,
     build_relay,
@@ -118,6 +119,45 @@ class TestEnvVarGetters(unittest.TestCase):
             get_debounce_ms("kraken")
         self.assertIn("KRAKEN_LISTENER_DEBOUNCE_MS", str(cm.exception))
         self.assertIn("abc", str(cm.exception))
+
+
+# ── Lookback days getter tests ────────────────────────────────────────────────
+
+
+class TestLookbackDaysGetter(unittest.TestCase):
+    """Test _get_lookback_days env var getter."""
+
+    def test_default_is_30(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("KRAKEN_LOOKBACK_DAYS", None)
+            self.assertEqual(_get_lookback_days(), 30)
+
+    def test_valid_integer(self) -> None:
+        with patch.dict(os.environ, {"KRAKEN_LOOKBACK_DAYS": "90"}):
+            self.assertEqual(_get_lookback_days(), 90)
+
+    def test_non_integer_raises(self) -> None:
+        with patch.dict(os.environ, {"KRAKEN_LOOKBACK_DAYS": "abc"}), \
+             self.assertRaises(SystemExit) as cm:
+            _get_lookback_days()
+        self.assertIn("KRAKEN_LOOKBACK_DAYS", str(cm.exception))
+        self.assertIn("abc", str(cm.exception))
+
+    def test_zero_raises(self) -> None:
+        with patch.dict(os.environ, {"KRAKEN_LOOKBACK_DAYS": "0"}), \
+             self.assertRaises(SystemExit) as cm:
+            _get_lookback_days()
+        self.assertIn("KRAKEN_LOOKBACK_DAYS", str(cm.exception))
+
+    def test_negative_raises(self) -> None:
+        with patch.dict(os.environ, {"KRAKEN_LOOKBACK_DAYS": "-7"}), \
+             self.assertRaises(SystemExit) as cm:
+            _get_lookback_days()
+        self.assertIn("KRAKEN_LOOKBACK_DAYS", str(cm.exception))
+
+    def test_strips_whitespace(self) -> None:
+        with patch.dict(os.environ, {"KRAKEN_LOOKBACK_DAYS": "  14  "}):
+            self.assertEqual(_get_lookback_days(), 14)
 
 
 # ── Event filter tests ────────────────────────────────────────────────────────
@@ -449,7 +489,7 @@ class TestBuildFetchPagination(unittest.TestCase):
         return client
 
     def _fetch_and_parse(self, client: MagicMock) -> dict[str, Any]:
-        fetch = _build_fetch(client)
+        fetch = _build_fetch(client, lookback_days=30)
         raw = fetch()
         self.assertIsNotNone(raw)
         raw_str = cast(str, raw)
@@ -465,7 +505,9 @@ class TestBuildFetchPagination(unittest.TestCase):
 
         self.assertEqual(len(result["trades"]), 2)
         self.assertEqual(result["count"], 2)
-        client.get_trades_history.assert_called_once_with(ofs=0)
+        # Verify ofs=0 on the only call (start value tested in TestBuildFetchLookback).
+        _, kwargs = client.get_trades_history.call_args_list[0]
+        self.assertEqual(kwargs["ofs"], 0)
 
     def test_multiple_pages(self) -> None:
         pages = [
@@ -521,18 +563,81 @@ class TestBuildFetchPagination(unittest.TestCase):
         """Non-dict 'trades' value causes fetch to return None (logged exception)."""
         pages = [{"trades": ["not", "a", "dict"], "count": 3}]
         client = self._make_client(pages)
-        fetch = _build_fetch(client)
+        fetch = _build_fetch(client, lookback_days=30)
         self.assertIsNone(fetch())
 
     def test_invalid_count_type_returns_none(self) -> None:
         """Non-integer 'count' value causes fetch to return None (logged exception)."""
         pages = [{"trades": {"T1": _make_rest_trade()}, "count": "abc"}]
         client = self._make_client(pages)
-        fetch = _build_fetch(client)
+        fetch = _build_fetch(client, lookback_days=30)
         self.assertIsNone(fetch())
 
     def test_api_exception_returns_none(self) -> None:
         client = MagicMock()
         client.get_trades_history = MagicMock(side_effect=RuntimeError("network error"))
-        fetch = _build_fetch(client)
+        fetch = _build_fetch(client, lookback_days=30)
         self.assertIsNone(fetch())
+
+
+# ── Lookback start timestamp tests ────────────────────────────────────────────
+
+
+class TestBuildFetchLookback(unittest.TestCase):
+    """Verify that _build_fetch computes and passes the correct start timestamp."""
+
+    _FIXED_NOW = 1_800_000_000  # arbitrary fixed Unix timestamp
+
+    def _make_client(self, page: dict[str, Any]) -> MagicMock:
+        client = MagicMock()
+        client.get_trades_history = MagicMock(return_value=page)
+        return client
+
+    def test_start_is_now_minus_lookback(self) -> None:
+        page = {"trades": {}, "count": 0}
+        client = self._make_client(page)
+        days = 7
+        expected_start = self._FIXED_NOW - days * 86400
+
+        with patch("relays.kraken.time.time", return_value=float(self._FIXED_NOW)):
+            fetch = _build_fetch(client, lookback_days=days)
+            fetch()
+
+        client.get_trades_history.assert_called_once_with(start=expected_start, ofs=0)
+
+    def test_start_passed_on_every_page(self) -> None:
+        """The same start timestamp must be used for all pages of a paginated fetch."""
+        pages = [
+            {"trades": {"T1": _make_rest_trade(), "T2": _make_rest_trade()}, "count": 3},
+            {"trades": {"T3": _make_rest_trade()}, "count": 3},
+        ]
+        client = MagicMock()
+        client.get_trades_history = MagicMock(side_effect=pages)
+        days = 14
+        expected_start = self._FIXED_NOW - days * 86400
+
+        with patch("relays.kraken.time.time", return_value=float(self._FIXED_NOW)):
+            fetch = _build_fetch(client, lookback_days=days)
+            fetch()
+
+        calls = client.get_trades_history.call_args_list
+        self.assertEqual(len(calls), 2)
+        for call in calls:
+            self.assertEqual(call.kwargs["start"], expected_start)
+
+    def test_start_computed_at_call_time_not_build_time(self) -> None:
+        """start is computed inside fetch(), not when _build_fetch() is called."""
+        page = {"trades": {}, "count": 0}
+        client = self._make_client(page)
+        build_time = self._FIXED_NOW
+        call_time = self._FIXED_NOW + 3600  # 1 hour later
+        days = 30
+
+        with patch("relays.kraken.time.time", return_value=float(build_time)):
+            fetch = _build_fetch(client, lookback_days=days)
+
+        with patch("relays.kraken.time.time", return_value=float(call_time)):
+            fetch()
+
+        expected_start = call_time - days * 86400
+        client.get_trades_history.assert_called_once_with(start=expected_start, ofs=0)
