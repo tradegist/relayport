@@ -355,6 +355,80 @@ class TestFieldNormalization:
 
 
 # ═════════════════════════════════════════════════════════════════════════
+#  rootSymbol — populated for options only, drawn from underlyingSymbol
+# ═════════════════════════════════════════════════════════════════════════
+
+class TestRootSymbol:
+    """Flex parser populates ``Fill.rootSymbol`` only for options.
+
+    The Flex XML emits ``underlyingSymbol`` on every Trade row, but for
+    equities it redundantly equals ``symbol``. Surfacing it on the Fill
+    only when there's a real underlying (i.e. derivatives) keeps the
+    field semantically meaningful — a non-None value signals "this is a
+    derivative; use this ticker to look up the underlying instrument".
+    """
+
+    def test_option_fill_has_root_symbol(self) -> None:
+        xml = _wrap_af(
+            '<Trade transactionID="1" ibOrderID="O1" assetCategory="OPT"'
+            ' buySell="BUY" symbol="AVGO  260508C00375000"'
+            ' underlyingSymbol="AVGO" strike="375" expiry="20260508"'
+            ' putCall="C" multiplier="100"'
+            ' quantity="1" tradePrice="18.7" />'
+        )
+        fills, errors = parse_fills(xml)
+        assert errors == []
+        assert fills[0].assetClass == "option"
+        assert fills[0].rootSymbol == "AVGO"
+
+    def test_equity_fill_has_no_root_symbol(self) -> None:
+        # Stock Trade rows in Flex carry underlyingSymbol="ALAB" (same as
+        # symbol). The parser must drop this redundant value so consumers
+        # can use ``rootSymbol`` as a derivative-detection signal.
+        xml = _wrap_af(
+            '<Trade transactionID="1" ibOrderID="O1" assetCategory="STK"'
+            ' buySell="BUY" symbol="ALAB" underlyingSymbol="ALAB"'
+            ' quantity="10" tradePrice="121.89" />'
+        )
+        fills, errors = parse_fills(xml)
+        assert errors == []
+        assert fills[0].assetClass == "equity"
+        assert fills[0].rootSymbol is None
+
+    def test_option_without_underlying_symbol_falls_back_to_none(self) -> None:
+        # Defensive: if Flex ever omits underlyingSymbol on an option row,
+        # rootSymbol must be None rather than an empty string — empty
+        # strings would falsely satisfy a "rootSymbol is set" check.
+        xml = _wrap_af(
+            '<Trade transactionID="1" ibOrderID="O1" assetCategory="OPT"'
+            ' buySell="BUY" symbol="AVGO  260508C00375000"'
+            ' strike="375" expiry="20260508" putCall="C"'
+            ' quantity="1" tradePrice="18.7" />'
+        )
+        fills, _ = parse_fills(xml)
+        assert fills[0].rootSymbol is None
+
+    def test_aggregate_fills_propagates_root_symbol(self) -> None:
+        """``Trade.rootSymbol`` is copied from the last fill in the order."""
+        xml = _wrap_af(
+            '<Trade transactionID="F1" ibOrderID="OPT_ORD" assetCategory="OPT"'
+            ' buySell="BUY" symbol="AVGO  260508C00375000"'
+            ' underlyingSymbol="AVGO" strike="375" expiry="20260508"'
+            ' putCall="C" multiplier="100"'
+            ' quantity="1" tradePrice="18.7" dateTime="20260410;105044" />',
+            '<Trade transactionID="F2" ibOrderID="OPT_ORD" assetCategory="OPT"'
+            ' buySell="BUY" symbol="AVGO  260508C00375000"'
+            ' underlyingSymbol="AVGO" strike="375" expiry="20260508"'
+            ' putCall="C" multiplier="100"'
+            ' quantity="1" tradePrice="18.7" dateTime="20260410;105045" />',
+        )
+        fills, _ = parse_fills(xml)
+        trades = aggregate_fills(fills)
+        assert len(trades) == 1
+        assert trades[0].rootSymbol == "AVGO"
+
+
+# ═════════════════════════════════════════════════════════════════════════
 #  AF vs TC parity — same trade, same canonical values
 # ═════════════════════════════════════════════════════════════════════════
 
@@ -942,6 +1016,28 @@ class TestLiveFixtures:
         fills, _ = parse_fills(xml)
         asset_classes = {f.assetClass for f in fills}
         assert asset_classes == {"equity", "option"}
+
+    def test_activity_flex_sample_root_symbol_on_options_only(self) -> None:
+        """``rootSymbol`` is the underlying ticker for options, None for stocks.
+
+        The AVGO option fills' ``underlyingSymbol="AVGO"`` must surface as
+        ``rootSymbol="AVGO"``. Equity fills (ALAB, CRCL) — where the Flex
+        ``underlyingSymbol`` redundantly equals ``symbol`` — must have
+        ``rootSymbol=None`` so consumers can distinguish derivatives.
+        """
+        xml = (_FIXTURES_DIR / "activity_flex_sample.xml").read_text()
+        fills, _ = parse_fills(xml)
+        for fill in fills:
+            if fill.assetClass == "option":
+                assert fill.rootSymbol == "AVGO", (
+                    f"option fill {fill.symbol!r} should have rootSymbol='AVGO',"
+                    f" got {fill.rootSymbol!r}"
+                )
+            else:
+                assert fill.rootSymbol is None, (
+                    f"non-option fill {fill.symbol!r} should have rootSymbol=None,"
+                    f" got {fill.rootSymbol!r}"
+                )
 
     def test_activity_flex_sample_aggregates_multi_fill_order(self) -> None:
         """A multi-fill order collapses into a single Trade with summed volume.

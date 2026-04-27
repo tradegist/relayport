@@ -30,6 +30,7 @@ export interface Trade {
   timestamp: string;
   source: Source;
   currency: string | null;
+  rootSymbol: string | null;
   fxRate: number | null;
   fxRateBase: string | null;
   fxRateSource: FxRateSource | null;
@@ -54,6 +55,7 @@ export interface Fill {
   timestamp: string;
   source: Source;
   currency: string | null;
+  rootSymbol: string | null;
   raw: {
     [k: string]: unknown;
   };

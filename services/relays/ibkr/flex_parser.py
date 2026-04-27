@@ -182,6 +182,16 @@ def parse_fills(
             currency_raw = str(raw.get("currency", "")).strip().upper()
             currency = currency_raw or None
 
+            # rootSymbol — only populated for derivatives. For equities the
+            # underlyingSymbol attr equals symbol (redundant), so we drop it
+            # to keep the field semantically meaningful. Empty values on an
+            # option row also collapse to None — an empty rootSymbol would
+            # falsely satisfy a "is this a derivative?" presence check.
+            root_symbol_raw = str(raw.get("underlyingSymbol", "")).strip()
+            root_symbol = (
+                (root_symbol_raw or None) if asset_class == "option" else None
+            )
+
             ts_raw = str(raw.get("dateTime", ""))
             if ts_raw:
                 try:
@@ -212,6 +222,7 @@ def parse_fills(
                     timestamp=ts,
                     source="flex",
                     currency=currency,
+                    rootSymbol=root_symbol,
                     raw=raw,
                 )
             except Exception as exc:

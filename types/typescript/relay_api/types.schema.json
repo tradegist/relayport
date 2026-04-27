@@ -95,6 +95,17 @@
           ],
           "default": null
         },
+        "rootSymbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "fxRate": {
           "anyOf": [
             {
@@ -152,6 +163,7 @@
         "timestamp",
         "source",
         "currency",
+        "rootSymbol",
         "fxRate",
         "fxRateBase",
         "fxRateSource",

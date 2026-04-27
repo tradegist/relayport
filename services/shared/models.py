@@ -81,6 +81,10 @@ class Fill(BaseModel):
     # broker does not expose an unambiguous fiat currency for the fill (e.g.
     # crypto-quoted-in-crypto pairs like ETH/BTC).
     currency: str | None = None
+    # Underlying ticker for derivative contracts (e.g. "AVGO" for an AVGO
+    # option). None for non-derivatives where the underlying concept doesn't
+    # apply — e.g. plain equity, where ``symbol`` already is the ticker.
+    rootSymbol: str | None = None
     raw: dict[str, Any]
 
 
@@ -106,6 +110,9 @@ class Trade(BaseModel):
     source: Source
     # Copied from the last fill — ISO-4217 or None (see Fill.currency).
     currency: str | None = None
+    # Copied from the last fill — underlying ticker for derivatives, None
+    # otherwise (see Fill.rootSymbol).
+    rootSymbol: str | None = None
     # Units of fxRateBase per 1 unit of currency, such that
     # cost * fxRate == cost_in_base_currency. Populated by the FX
     # enrichment layer when FX_RATES_ENABLED=true and currency is known.

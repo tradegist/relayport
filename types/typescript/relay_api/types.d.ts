@@ -36,6 +36,7 @@ export interface Trade {
   timestamp: string;
   source: "flex" | "execDetailsEvent" | "commissionReportEvent" | "rest_poll" | "ws_execution";
   currency: string | null;
+  rootSymbol: string | null;
   fxRate: number | null;
   fxRateBase: string | null;
   fxRateSource: ("historical" | "latest") | null;

@@ -213,12 +213,31 @@ def _map_fill(envelope: WsEnvelope, tz: ZoneInfo) -> Fill:
 
     source = cast(Source, envelope.type)
     currency = contract.currency.strip().upper() or None
+    asset_class = normalize_asset_class(contract.secType)
+
+    # symbol / rootSymbol resolution.  ib_async populates Contract.symbol
+    # with the underlying ticker for every secType (so for OPT it's e.g.
+    # "TSLA", not the option contract).  The OCC option ticker
+    # (e.g. "TSLA  281215C00350000") lives on Contract.localSymbol.
+    # Mirror Flex's convention: Fill.symbol = full instrument identifier,
+    # Fill.rootSymbol = underlying for derivatives, None otherwise.
+    if asset_class == "option":
+        symbol = contract.localSymbol.strip()
+        if not symbol:
+            raise ValueError(
+                f"Empty localSymbol for option execId={exec_id!r}"
+                f" underlying={contract.symbol!r} — cannot identify the contract"
+            )
+        root_symbol: str | None = contract.symbol or None
+    else:
+        symbol = contract.symbol
+        root_symbol = None
 
     return Fill(
         execId=exec_id,
         orderId=str(ex.permId),
-        symbol=contract.symbol,
-        assetClass=normalize_asset_class(contract.secType),
+        symbol=symbol,
+        assetClass=asset_class,
         side=side,
         orderType=None,  # WS events don't carry order type info
         price=ex.price,
@@ -228,6 +247,7 @@ def _map_fill(envelope: WsEnvelope, tz: ZoneInfo) -> Fill:
         timestamp=ts,
         source=source,
         currency=currency,
+        rootSymbol=root_symbol,
         raw=envelope.model_dump(),
     )
 

@@ -286,6 +286,62 @@ class TestMapFill(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Bad execution time"):
             _map_fill(bad_envelope, _TEST_TZ)
 
+    def test_equity_fill_has_no_root_symbol(self) -> None:
+        # Default fixture is secType="STK" with symbol="AAPL" — rootSymbol
+        # only carries meaning for derivatives, so equities must be None.
+        fill = _map_fill(_make_envelope(), _TEST_TZ)
+        self.assertEqual(fill.assetClass, "equity")
+        self.assertIsNone(fill.rootSymbol)
+
+    def test_option_fill_uses_local_symbol_and_underlying(self) -> None:
+        # For options ib_async splits the identifiers:
+        #   Contract.symbol      = underlying ticker (e.g. "AVGO")
+        #   Contract.localSymbol = OCC option ticker (e.g. "AVGO  260508C00375000")
+        # The relay must surface localSymbol as Fill.symbol (matching Flex's
+        # convention where ``symbol`` is the full instrument identifier) and
+        # the underlying as Fill.rootSymbol — using contract.symbol for both
+        # would lose the option contract entirely.
+        opt_contract = _DEFAULT_CONTRACT.model_copy(update={
+            "secType": "OPT",
+            "symbol": "AVGO",
+            "localSymbol": "AVGO  260508C00375000",
+            "strike": 375.0,
+            "right": "C",
+            "lastTradeDateOrContractMonth": "20260508",
+            "multiplier": "100",
+        })
+        envelope = _make_envelope()
+        assert envelope.fill is not None
+        envelope.fill.contract = opt_contract
+        fill = _map_fill(envelope, _TEST_TZ)
+        self.assertEqual(fill.assetClass, "option")
+        self.assertEqual(fill.symbol, "AVGO  260508C00375000")
+        self.assertEqual(fill.rootSymbol, "AVGO")
+
+    def test_option_fill_without_local_symbol_raises(self) -> None:
+        # An option fill with no localSymbol can't be uniquely identified
+        # (every option on the same underlying would collapse to one symbol).
+        # Fail loudly rather than silently emitting a fill with the
+        # underlying ticker as the contract identifier.
+        opt_contract = _DEFAULT_CONTRACT.model_copy(update={
+            "secType": "OPT",
+            "symbol": "AVGO",
+            "localSymbol": "",
+        })
+        envelope = _make_envelope()
+        assert envelope.fill is not None
+        envelope.fill.contract = opt_contract
+        with self.assertRaisesRegex(ValueError, "Empty localSymbol for option"):
+            _map_fill(envelope, _TEST_TZ)
+
+    def test_equity_fill_uses_contract_symbol(self) -> None:
+        # Sanity check that the equity path is unchanged: Fill.symbol must
+        # still come from contract.symbol (not localSymbol — for stocks the
+        # two are usually equal anyway, but the code paths are now distinct).
+        fill = _map_fill(_make_envelope(), _TEST_TZ)
+        self.assertEqual(fill.assetClass, "equity")
+        self.assertEqual(fill.symbol, "AAPL")  # _DEFAULT_CONTRACT.symbol
+
 
 # ── on_message dispatch tests ───────────────────────────────────────
 

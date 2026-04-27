@@ -59,6 +59,7 @@ def aggregate_fills(fills: list[Fill]) -> list[Trade]:
             timestamp=last.timestamp,
             source=last.source,
             currency=last.currency,
+            rootSymbol=last.rootSymbol,
             raw=order_fills[0].raw,
         ))
 
