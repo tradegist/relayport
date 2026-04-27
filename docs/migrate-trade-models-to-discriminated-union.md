@@ -21,7 +21,7 @@ AssetClass = Literal["equity", "option", "crypto", "future", "forex", "other"]
 
 
 class OptionContract(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", json_schema_extra=_all_fields_required)
     rootSymbol: str
     strike: float
     expiryDate: str       # YYYY-MM-DD

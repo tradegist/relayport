@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +23,34 @@ from relay_core.listener_engine import (
     _strip_prefix,
 )
 from shared import BuySell, Fill
+
+# ── Module-level FX guard ────────────────────────────────────────────
+# _send_and_mark / _send_no_mark call enrich_if_enabled(), which reads
+# FX_RATES_ENABLED and caches a process-wide singleton on first use.
+# Force FX off for the entire module so a developer with
+# FX_RATES_ENABLED=true in their shell cannot make tests env-dependent
+# or trigger network / cache I/O.
+
+_ORIG_FX_ENABLED: str | None = None
+
+
+def setUpModule() -> None:
+    from relay_core.fx import _reset_for_tests
+
+    global _ORIG_FX_ENABLED
+    _ORIG_FX_ENABLED = os.environ.get("FX_RATES_ENABLED")
+    os.environ["FX_RATES_ENABLED"] = "false"
+    _reset_for_tests()
+
+
+def tearDownModule() -> None:
+    from relay_core.fx import _reset_for_tests
+
+    if _ORIG_FX_ENABLED is None:
+        os.environ.pop("FX_RATES_ENABLED", None)
+    else:
+        os.environ["FX_RATES_ENABLED"] = _ORIG_FX_ENABLED
+    _reset_for_tests()
 
 
 async def _dummy_connect(session: aiohttp.ClientSession) -> aiohttp.ClientWebSocketResponse:
