@@ -286,61 +286,143 @@ class TestMapFill(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Bad execution time"):
             _map_fill(bad_envelope, _TEST_TZ)
 
-    def test_equity_fill_has_no_root_symbol(self) -> None:
-        # Default fixture is secType="STK" with symbol="AAPL" — rootSymbol
+    def test_equity_fill_has_no_option(self) -> None:
+        # Default fixture is secType="STK" with symbol="AAPL" — Fill.option
         # only carries meaning for derivatives, so equities must be None.
         fill = _map_fill(_make_envelope(), _TEST_TZ)
         self.assertEqual(fill.assetClass, "equity")
-        self.assertIsNone(fill.rootSymbol)
-
-    def test_option_fill_uses_local_symbol_and_underlying(self) -> None:
-        # For options ib_async splits the identifiers:
-        #   Contract.symbol      = underlying ticker (e.g. "AVGO")
-        #   Contract.localSymbol = OCC option ticker (e.g. "AVGO  260508C00375000")
-        # The relay must surface localSymbol as Fill.symbol (matching Flex's
-        # convention where ``symbol`` is the full instrument identifier) and
-        # the underlying as Fill.rootSymbol — using contract.symbol for both
-        # would lose the option contract entirely.
-        opt_contract = _DEFAULT_CONTRACT.model_copy(update={
-            "secType": "OPT",
-            "symbol": "AVGO",
-            "localSymbol": "AVGO  260508C00375000",
-            "strike": 375.0,
-            "right": "C",
-            "lastTradeDateOrContractMonth": "20260508",
-            "multiplier": "100",
-        })
-        envelope = _make_envelope()
-        assert envelope.fill is not None
-        envelope.fill.contract = opt_contract
-        fill = _map_fill(envelope, _TEST_TZ)
-        self.assertEqual(fill.assetClass, "option")
-        self.assertEqual(fill.symbol, "AVGO  260508C00375000")
-        self.assertEqual(fill.rootSymbol, "AVGO")
-
-    def test_option_fill_without_local_symbol_raises(self) -> None:
-        # An option fill with no localSymbol can't be uniquely identified
-        # (every option on the same underlying would collapse to one symbol).
-        # Fail loudly rather than silently emitting a fill with the
-        # underlying ticker as the contract identifier.
-        opt_contract = _DEFAULT_CONTRACT.model_copy(update={
-            "secType": "OPT",
-            "symbol": "AVGO",
-            "localSymbol": "",
-        })
-        envelope = _make_envelope()
-        assert envelope.fill is not None
-        envelope.fill.contract = opt_contract
-        with self.assertRaisesRegex(ValueError, "Empty localSymbol for option"):
-            _map_fill(envelope, _TEST_TZ)
+        self.assertIsNone(fill.option)
 
     def test_equity_fill_uses_contract_symbol(self) -> None:
-        # Sanity check that the equity path is unchanged: Fill.symbol must
-        # still come from contract.symbol (not localSymbol — for stocks the
-        # two are usually equal anyway, but the code paths are now distinct).
+        # Sanity check the equity path is unchanged: Fill.symbol comes from
+        # contract.symbol (not localSymbol — for stocks the two are usually
+        # equal, but the code paths are now distinct).
         fill = _map_fill(_make_envelope(), _TEST_TZ)
-        self.assertEqual(fill.assetClass, "equity")
         self.assertEqual(fill.symbol, "AAPL")  # _DEFAULT_CONTRACT.symbol
+
+
+def _option_contract(**overrides: Any) -> WsContract:
+    """Build a WsContract representing the AVGO  260508C00375000 call.
+
+    Centralised so individual TestOptionMapFill cases can mutate one
+    field at a time and exercise the validation branches.
+    """
+    base = _DEFAULT_CONTRACT.model_copy(update={
+        "secType": "OPT",
+        "symbol": "AVGO",
+        "localSymbol": "AVGO  260508C00375000",
+        "strike": 375.0,
+        "right": "C",
+        "lastTradeDateOrContractMonth": "20260508",
+        "multiplier": "100",
+    })
+    return base.model_copy(update=overrides) if overrides else base
+
+
+def _envelope_with_contract(contract: WsContract) -> WsEnvelope:
+    envelope = _make_envelope()
+    assert envelope.fill is not None
+    envelope.fill.contract = contract
+    return envelope
+
+
+class TestOptionMapFill(unittest.TestCase):
+    """WS path builds a full :class:`OptionContract` from ib_async fields.
+
+    ib_async splits option identifiers across two ``Contract`` fields:
+    ``symbol`` is the underlying ticker (e.g. ``"AVGO"``) and
+    ``localSymbol`` is the OCC option ticker (e.g.
+    ``"AVGO  260508C00375000"``).  The relay surfaces ``localSymbol`` as
+    ``Fill.symbol`` (matching the Flex convention) and packs the option
+    metadata — including the underlying — into ``Fill.option``.
+    """
+
+    # ── happy path ───────────────────────────────────────────────────
+
+    def test_option_fill_uses_local_symbol_for_symbol(self) -> None:
+        fill = _map_fill(_envelope_with_contract(_option_contract()), _TEST_TZ)
+        self.assertEqual(fill.symbol, "AVGO  260508C00375000")
+
+    def test_option_fill_has_full_option_contract(self) -> None:
+        fill = _map_fill(_envelope_with_contract(_option_contract()), _TEST_TZ)
+        self.assertEqual(fill.assetClass, "option")
+        opt = fill.option
+        assert opt is not None
+        self.assertEqual(opt.rootSymbol, "AVGO")
+        self.assertEqual(opt.strike, 375.0)
+        self.assertEqual(opt.expiryDate, "2026-05-08")
+        self.assertEqual(opt.type, "call")
+
+    def test_right_p_maps_to_put(self) -> None:
+        fill = _map_fill(
+            _envelope_with_contract(_option_contract(right="P")), _TEST_TZ,
+        )
+        opt = fill.option
+        assert opt is not None
+        self.assertEqual(opt.type, "put")
+
+    def test_right_call_spelled_out_maps_to_call(self) -> None:
+        # ib_async docstring lists "CALL" / "PUT" as valid alternative forms
+        # alongside "C"/"P".  Both must be accepted.
+        fill = _map_fill(
+            _envelope_with_contract(_option_contract(right="CALL")), _TEST_TZ,
+        )
+        opt = fill.option
+        assert opt is not None
+        self.assertEqual(opt.type, "call")
+
+    # ── validation: failures raise ValueError ────────────────────────
+
+    def test_empty_local_symbol_raises(self) -> None:
+        # An option fill with no localSymbol can't be uniquely identified —
+        # every option on the same underlying would collapse to one symbol.
+        with self.assertRaisesRegex(ValueError, "Empty localSymbol for option"):
+            _map_fill(
+                _envelope_with_contract(_option_contract(localSymbol="")),
+                _TEST_TZ,
+            )
+
+    def test_empty_underlying_raises(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Empty Contract.symbol on option"):
+            _map_fill(
+                _envelope_with_contract(_option_contract(symbol="")),
+                _TEST_TZ,
+            )
+
+    def test_zero_strike_raises(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Non-positive Contract.strike"):
+            _map_fill(
+                _envelope_with_contract(_option_contract(strike=0.0)),
+                _TEST_TZ,
+            )
+
+    def test_empty_expiry_raises(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Empty lastTradeDateOrContractMonth"):
+            _map_fill(
+                _envelope_with_contract(
+                    _option_contract(lastTradeDateOrContractMonth=""),
+                ),
+                _TEST_TZ,
+            )
+
+    def test_bad_expiry_format_raises(self) -> None:
+        # ``flex_date_to_iso`` accepts both YYYYMMDD and ISO YYYY-MM-DD as a
+        # defensive forwarding measure — use a value that matches neither.
+        with self.assertRaisesRegex(ValueError, "Bad lastTradeDateOrContractMonth"):
+            _map_fill(
+                _envelope_with_contract(
+                    _option_contract(lastTradeDateOrContractMonth="20261308"),
+                ),
+                _TEST_TZ,
+            )
+
+    def test_unknown_right_raises(self) -> None:
+        # Financial enum — never assume a default for option type.
+        with self.assertRaisesRegex(ValueError, "Unknown Contract.right"):
+            _map_fill(
+                _envelope_with_contract(_option_contract(right="X")),
+                _TEST_TZ,
+            )
 
 
 # ── on_message dispatch tests ───────────────────────────────────────

@@ -33,6 +33,48 @@ def flex_to_iso(raw: str) -> str:
     return dt.isoformat(timespec="seconds")
 
 
+def flex_date_to_iso(raw: str) -> str:
+    """Normalise an IBKR option-expiry date to ISO ``YYYY-MM-DD``.
+
+    Used for option ``expiry`` (Flex) and ``lastTradeDateOrContractMonth``
+    (ib_async). Accepts two input shapes:
+
+    * **Compact** ``YYYYMMDD`` (current wire format) — converted to ISO.
+    * **ISO** ``YYYY-MM-DD`` — passed through as-is. Defensive: if IBKR
+      ever flips the wire format on us, the helper keeps working without
+      a code change.
+
+    Strict otherwise — typos and partial-format inputs raise
+    ``ValueError`` so they can't sneak through as semantically
+    meaningful but wrong dates. The explicit length + ``isdigit``
+    guards exist because Python's ``strptime("%Y%m%d")`` is greedy on
+    ``%Y`` and silently accepts 7-character inputs like ``"2026508"``
+    as year=2026, month=5, day=08.
+    """
+    # ISO YYYY-MM-DD: validate and forward unchanged.
+    if len(raw) == 10 and raw[4] == "-" and raw[7] == "-":
+        try:
+            datetime.strptime(raw, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError(
+                f"Not a valid ISO date (expected YYYY-MM-DD): {raw!r}"
+            ) from exc
+        return raw
+
+    # Compact YYYYMMDD: convert to ISO.
+    if len(raw) != 8 or not raw.isdigit():
+        raise ValueError(
+            f"Not a valid IBKR date (expected YYYYMMDD or YYYY-MM-DD): {raw!r}"
+        )
+    try:
+        dt = datetime.strptime(raw, "%Y%m%d")
+    except ValueError as exc:
+        raise ValueError(
+            f"Not a valid IBKR compact date (expected YYYYMMDD): {raw!r}"
+        ) from exc
+    return dt.date().isoformat()
+
+
 def bridge_to_iso(raw: str) -> str:
     """Convert an ib_async bridge ``Execution.time`` to ISO-8601.
 

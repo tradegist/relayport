@@ -8,7 +8,7 @@ env var getters, Flex fetch, XML parsing, WS envelope mapping.
 import logging
 import os
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -26,12 +26,19 @@ from relay_core import (
     is_listener_enabled,
     is_poller_enabled,
 )
-from shared import BuySell, Fill, Source, normalize_timestamp, parse_timezone
+from shared import (
+    BuySell,
+    Fill,
+    OptionContract,
+    Source,
+    normalize_timestamp,
+    parse_timezone,
+)
 
-from .bridge_models import WsEnvelope
+from .bridge_models import WsContract, WsEnvelope
 from .flex_fetch import RedactTokenFilter, fetch_flex_report
 from .flex_parser import parse_fills
-from .timestamps import bridge_to_iso
+from .timestamps import bridge_to_iso, flex_date_to_iso
 from .utilities import normalize_asset_class
 
 log = logging.getLogger("relays.ibkr")
@@ -215,12 +222,13 @@ def _map_fill(envelope: WsEnvelope, tz: ZoneInfo) -> Fill:
     currency = contract.currency.strip().upper() or None
     asset_class = normalize_asset_class(contract.secType)
 
-    # symbol / rootSymbol resolution.  ib_async populates Contract.symbol
-    # with the underlying ticker for every secType (so for OPT it's e.g.
-    # "TSLA", not the option contract).  The OCC option ticker
+    # symbol / option resolution.  ib_async populates Contract.symbol with
+    # the underlying ticker for every secType (so for OPT it's e.g. "TSLA",
+    # not the option contract).  The OCC option ticker
     # (e.g. "TSLA  281215C00350000") lives on Contract.localSymbol.
     # Mirror Flex's convention: Fill.symbol = full instrument identifier,
-    # Fill.rootSymbol = underlying for derivatives, None otherwise.
+    # Fill.option = nested OptionContract for derivatives, None otherwise.
+    option: OptionContract | None
     if asset_class == "option":
         symbol = contract.localSymbol.strip()
         if not symbol:
@@ -228,10 +236,10 @@ def _map_fill(envelope: WsEnvelope, tz: ZoneInfo) -> Fill:
                 f"Empty localSymbol for option execId={exec_id!r}"
                 f" underlying={contract.symbol!r} — cannot identify the contract"
             )
-        root_symbol: str | None = contract.symbol or None
+        option = _build_option_contract(contract, exec_id)
     else:
         symbol = contract.symbol
-        root_symbol = None
+        option = None
 
     return Fill(
         execId=exec_id,
@@ -247,8 +255,68 @@ def _map_fill(envelope: WsEnvelope, tz: ZoneInfo) -> Fill:
         timestamp=ts,
         source=source,
         currency=currency,
-        rootSymbol=root_symbol,
+        option=option,
         raw=envelope.model_dump(),
+    )
+
+
+# Bridge ``Contract.right`` values → OptionContract.type literals.
+# ib_async accepts either single-letter or spelled-out forms.
+_OPT_RIGHT_MAP: dict[str, Literal["call", "put"]] = {
+    "C": "call",
+    "CALL": "call",
+    "P": "put",
+    "PUT": "put",
+}
+
+
+def _build_option_contract(contract: WsContract, exec_id: str) -> OptionContract:
+    """Assemble an :class:`OptionContract` from a bridge ``WsContract``.
+
+    Raises :class:`ValueError` (caller maps this to an OnMessageResult error)
+    when any required option field is missing or invalid — emitting an
+    option fill with incomplete metadata produces a webhook payload that
+    consumers can't reliably interpret.
+    """
+    root_symbol = contract.symbol.strip()
+    if not root_symbol:
+        raise ValueError(
+            f"Empty Contract.symbol on option execId={exec_id!r}"
+            f" — cannot identify the underlying"
+        )
+
+    if contract.strike <= 0:
+        raise ValueError(
+            f"Non-positive Contract.strike {contract.strike!r} on option"
+            f" execId={exec_id!r}"
+        )
+
+    expiry_raw = contract.lastTradeDateOrContractMonth.strip()
+    if not expiry_raw:
+        raise ValueError(
+            f"Empty lastTradeDateOrContractMonth on option execId={exec_id!r}"
+        )
+    try:
+        expiry_iso = flex_date_to_iso(expiry_raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"Bad lastTradeDateOrContractMonth {expiry_raw!r} on option"
+            f" execId={exec_id!r}: {exc}"
+        ) from exc
+
+    right_upper = contract.right.strip().upper()
+    opt_type = _OPT_RIGHT_MAP.get(right_upper)
+    if opt_type is None:
+        raise ValueError(
+            f"Unknown Contract.right {contract.right!r} on option"
+            f" execId={exec_id!r}"
+        )
+
+    return OptionContract(
+        rootSymbol=root_symbol,
+        strike=contract.strike,
+        expiryDate=expiry_iso,
+        type=opt_type,
     )
 
 

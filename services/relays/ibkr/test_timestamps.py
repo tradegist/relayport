@@ -2,7 +2,7 @@
 
 import unittest
 
-from .timestamps import bridge_to_iso, flex_to_iso
+from .timestamps import bridge_to_iso, flex_date_to_iso, flex_to_iso
 
 
 class TestFlexToIso(unittest.TestCase):
@@ -36,6 +36,64 @@ class TestFlexToIso(unittest.TestCase):
     def test_invalid_time_raises(self) -> None:
         with self.assertRaises(ValueError):
             flex_to_iso("20250403;253000")  # hour 25
+
+
+class TestFlexDateToIso(unittest.TestCase):
+
+    def test_basic(self) -> None:
+        assert flex_date_to_iso("20260508") == "2026-05-08"
+
+    def test_january_first(self) -> None:
+        assert flex_date_to_iso("20260101") == "2026-01-01"
+
+    def test_too_short_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            flex_date_to_iso("2026508")
+
+    def test_too_long_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            flex_date_to_iso("202605081")
+
+    def test_iso_input_passed_through(self) -> None:
+        # Defensive forwarding: if IBKR ever flips the wire format from
+        # YYYYMMDD to ISO, the helper keeps working without a code change.
+        assert flex_date_to_iso("2026-05-08") == "2026-05-08"
+
+    def test_invalid_iso_month_raises(self) -> None:
+        # Forwarding does not mean trusting — malformed ISO must still fail.
+        with self.assertRaises(ValueError):
+            flex_date_to_iso("2026-13-08")
+
+    def test_invalid_iso_day_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            flex_date_to_iso("2026-02-30")  # Feb 30
+
+    def test_iso_with_time_component_raises(self) -> None:
+        # Only bare dates are forwarded; full ISO timestamps are rejected to
+        # keep the contract crisp.
+        with self.assertRaises(ValueError):
+            flex_date_to_iso("2026-05-08T00:00:00")
+
+    def test_iso_unpadded_components_raises(self) -> None:
+        # "2026-5-8" is technically representable but not strict ISO 8601.
+        with self.assertRaises(ValueError):
+            flex_date_to_iso("2026-5-8")
+
+    def test_invalid_month_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            flex_date_to_iso("20261308")
+
+    def test_invalid_day_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            flex_date_to_iso("20260230")  # Feb 30
+
+    def test_empty_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            flex_date_to_iso("")
+
+    def test_non_digit_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            flex_date_to_iso("2026MAY8 ")
 
 
 class TestBridgeToIso(unittest.TestCase):

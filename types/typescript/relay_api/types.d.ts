@@ -36,13 +36,28 @@ export interface Trade {
   timestamp: string;
   source: "flex" | "execDetailsEvent" | "commissionReportEvent" | "rest_poll" | "ws_execution";
   currency: string | null;
-  rootSymbol: string | null;
+  option: OptionContract | null;
   fxRate: number | null;
   fxRateBase: string | null;
   fxRateSource: ("historical" | "latest") | null;
   raw: {
     [k: string]: unknown;
   };
+}
+/**
+ * Option-specific contract metadata.
+ *
+ * Populated only on fills/trades whose ``assetClass == "option"``. Future
+ * derivatives (futures, FOPs, warrants) will get their own sibling
+ * contract objects rather than reusing this one — see
+ * ``docs/migrate-trade-models-to-discriminated-union.md`` for the planned
+ * discriminated-union evolution.
+ */
+export interface OptionContract {
+  rootSymbol: string;
+  strike: number;
+  expiryDate: string;
+  type: "call" | "put";
 }
 export interface RunPollResponse {
   trades: Trade[];

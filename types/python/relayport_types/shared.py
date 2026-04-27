@@ -49,6 +49,28 @@ def _all_fields_required(schema: dict[str, Any]) -> None:
     schema["required"] = list(properties.keys())
 
 
+class OptionContract(BaseModel):
+    """Option-specific contract metadata.
+
+    Populated only on fills/trades whose ``assetClass == "option"``. Future
+    derivatives (futures, FOPs, warrants) will get their own sibling
+    contract objects rather than reusing this one — see
+    ``docs/migrate-trade-models-to-discriminated-union.md`` for the planned
+    discriminated-union evolution.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid", json_schema_extra=_all_fields_required,
+    )
+
+    # Underlying ticker (e.g. "AVGO" for an AVGO option).
+    rootSymbol: str
+    strike: float
+    # Last trading day in canonical ISO ``YYYY-MM-DD`` form (e.g. "2026-05-08").
+    expiryDate: str
+    type: Literal["call", "put"]
+
+
 class Fill(BaseModel):
     """Individual execution from a broker (CommonFill spec)."""
 
@@ -72,10 +94,11 @@ class Fill(BaseModel):
     # broker does not expose an unambiguous fiat currency for the fill (e.g.
     # crypto-quoted-in-crypto pairs like ETH/BTC).
     currency: str | None = None
-    # Underlying ticker for derivative contracts (e.g. "AVGO" for an AVGO
-    # option). None for non-derivatives where the underlying concept doesn't
-    # apply — e.g. plain equity, where ``symbol`` already is the ticker.
-    rootSymbol: str | None = None
+    # Option-contract metadata. Populated when ``assetClass == "option"``,
+    # None for every other asset class. Cross-field consistency (option
+    # populated iff assetClass == "option") is enforced by the producing
+    # parsers, not by the model itself — see migration plan in docs/.
+    option: OptionContract | None = None
     raw: dict[str, Any]
 
 
@@ -101,9 +124,9 @@ class Trade(BaseModel):
     source: Source
     # Copied from the last fill — ISO-4217 or None (see Fill.currency).
     currency: str | None = None
-    # Copied from the last fill — underlying ticker for derivatives, None
-    # otherwise (see Fill.rootSymbol).
-    rootSymbol: str | None = None
+    # Copied from the last fill — option contract metadata for option
+    # trades, None for every other asset class (see Fill.option).
+    option: OptionContract | None = None
     # Units of fxRateBase per 1 unit of currency, such that
     # cost * fxRate == cost_in_base_currency. Populated by the FX
     # enrichment layer when FX_RATES_ENABLED=true and currency is known.

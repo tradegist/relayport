@@ -30,13 +30,28 @@ export interface Trade {
   timestamp: string;
   source: Source;
   currency: string | null;
-  rootSymbol: string | null;
+  option: OptionContract | null;
   fxRate: number | null;
   fxRateBase: string | null;
   fxRateSource: FxRateSource | null;
   raw: {
     [k: string]: unknown;
   };
+}
+/**
+ * Option-specific contract metadata.
+ *
+ * Populated only on fills/trades whose ``assetClass == "option"``. Future
+ * derivatives (futures, FOPs, warrants) will get their own sibling
+ * contract objects rather than reusing this one — see
+ * ``docs/migrate-trade-models-to-discriminated-union.md`` for the planned
+ * discriminated-union evolution.
+ */
+export interface OptionContract {
+  rootSymbol: string;
+  strike: number;
+  expiryDate: string;
+  type: "call" | "put";
 }
 /**
  * Individual execution from a broker (CommonFill spec).
@@ -55,7 +70,7 @@ export interface Fill {
   timestamp: string;
   source: Source;
   currency: string | null;
-  rootSymbol: string | null;
+  option: OptionContract | null;
   raw: {
     [k: string]: unknown;
   };
