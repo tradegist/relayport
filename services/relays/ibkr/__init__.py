@@ -135,8 +135,10 @@ def _build_poller_configs(tz: ZoneInfo) -> list[PollerConfig]:
     interval = get_poll_interval("ibkr")
     if interval < 420:
         log.warning(
-            "IBKR poll interval is %ds — IBKR enforces a 10 req/hour limit per query ID."
-            " Values below 420s (7 min) risk ErrorCode 1003 (too many requests).",
+            "IBKR poll interval is %ds — IBKR's Flex Web Service is limited to"
+            " 10 requests per minute per token (shared across query IDs). Values"
+            " below 420s (7 min) leave little headroom for retries and risk"
+            " ErrorCode 1018 (too many requests).",
             interval,
         )
     parse = _build_parse(tz)

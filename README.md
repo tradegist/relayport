@@ -181,26 +181,26 @@ Configuration is split across three environment files. Templates are in `env_exa
 
 ### `.env` — App config
 
-| Variable                            | Required | Default | Description                                                                                                     |
-| ----------------------------------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------- |
-| `SITE_DOMAIN`                       | Yes      | —       | Domain for the relay API (see [Domains & HTTPS](#domains--https))                                               |
-| `API_TOKEN`                         | Yes      | —       | Bearer token for `/relays/*` endpoints (`openssl rand -hex 32`)                                                 |
-| `RELAYS`                            | No       | —       | Comma-separated relay adapters (e.g. `ibkr`, `ibkr,kraken`). Empty = API server only                            |
-| `NOTIFIERS`                         | No       | —       | Active notification backends (e.g. `webhook`). Empty = dry-run                                                  |
-| `TARGET_WEBHOOK_URL`                | No       | —       | Webhook endpoint (empty = log-only dry-run)                                                                     |
-| `WEBHOOK_SECRET`                    | No       | —       | HMAC-SHA256 key for signing payloads (required if NOTIFIERS=webhook)                                            |
-| `POLL_INTERVAL`                     | No       | `600`   | Flex poll interval (seconds). **IBKR limit: 10 req/hour per query ID — do not set below 420 (7 min)**           |
-| `POLLER_ENABLED`                    | No       | `true`  | Set to `false` to disable the poller globally (relay override: `{RELAY}_POLLER_ENABLED`)                        |
-| `LISTENER_ENABLED`                  | No       | —       | Set to `true` to enable real-time WS listeners globally; IBKR requires `ibkr_bridge`, Kraken does not           |
-| `LISTENER_DEBOUNCE_MS`              | No       | `0`     | Milliseconds to buffer fills before flushing                                                                    |
-| `IBKR_LISTENER_EXEC_EVENTS_ENABLED` | No       | `false` | Enable `execDetailsEvent` webhooks (2x volume, lower latency)                                                   |
-| `DEBUG_WEBHOOK_PATH`                | No       | —       | Route webhooks to debug inbox instead of `TARGET_WEBHOOK_URL` (see [Debug Webhook Inbox](#debug-webhook-inbox)) |
-| `MAX_DEBUG_WEBHOOK_PAYLOADS`        | No       | `100`   | Max payloads stored in the debug inbox (hard max: 150, FIFO eviction)                                           |
-| `DEBUG_LOG_LEVEL`                   | No       | `INFO`  | Set to `DEBUG` to include full payload+headers in `docker logs debug`                                           |
-| `FX_RATES_ENABLED`                  | No       | `false` | Attach `fxRate`/`fxRateBase`/`fxRateSource` to each Trade (see [FX Rate Enrichment](#fx-rate-enrichment))       |
-| `FX_RATES_BASE_CURRENCY`            | No\*     | —       | ISO-4217 base currency (required when `FX_RATES_ENABLED=true`)                                                  |
-| `FX_RATE_API_KEY`                   | No       | —       | [exchangerate-api.com](https://www.exchangerate-api.com) key — enables historical rates                         |
-| `FX_CACHE_RETENTION_DAYS`           | No       | `730`   | Days to retain cached historical rates in the meta DB                                                           |
+| Variable                            | Required | Default | Description                                                                                                                    |
+| ----------------------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `SITE_DOMAIN`                       | Yes      | —       | Domain for the relay API (see [Domains & HTTPS](#domains--https))                                                              |
+| `API_TOKEN`                         | Yes      | —       | Bearer token for `/relays/*` endpoints (`openssl rand -hex 32`)                                                                |
+| `RELAYS`                            | No       | —       | Comma-separated relay adapters (e.g. `ibkr`, `ibkr,kraken`). Empty = API server only                                           |
+| `NOTIFIERS`                         | No       | —       | Active notification backends (e.g. `webhook`). Empty = dry-run                                                                 |
+| `TARGET_WEBHOOK_URL`                | No       | —       | Webhook endpoint (empty = log-only dry-run)                                                                                    |
+| `WEBHOOK_SECRET`                    | No       | —       | HMAC-SHA256 key for signing payloads (required if NOTIFIERS=webhook)                                                           |
+| `POLL_INTERVAL`                     | No       | `600`   | Flex poll interval (seconds). **IBKR limit: 10 req/minute per token (shared across query IDs) — do not set below 420 (7 min)** |
+| `POLLER_ENABLED`                    | No       | `true`  | Set to `false` to disable the poller globally (relay override: `{RELAY}_POLLER_ENABLED`)                                       |
+| `LISTENER_ENABLED`                  | No       | —       | Set to `true` to enable real-time WS listeners globally; IBKR requires `ibkr_bridge`, Kraken does not                          |
+| `LISTENER_DEBOUNCE_MS`              | No       | `0`     | Milliseconds to buffer fills before flushing                                                                                   |
+| `IBKR_LISTENER_EXEC_EVENTS_ENABLED` | No       | `false` | Enable `execDetailsEvent` webhooks (2x volume, lower latency)                                                                  |
+| `DEBUG_WEBHOOK_PATH`                | No       | —       | Route webhooks to debug inbox instead of `TARGET_WEBHOOK_URL` (see [Debug Webhook Inbox](#debug-webhook-inbox))                |
+| `MAX_DEBUG_WEBHOOK_PAYLOADS`        | No       | `100`   | Max payloads stored in the debug inbox (hard max: 150, FIFO eviction)                                                          |
+| `DEBUG_LOG_LEVEL`                   | No       | `INFO`  | Set to `DEBUG` to include full payload+headers in `docker logs debug`                                                          |
+| `FX_RATES_ENABLED`                  | No       | `false` | Attach `fxRate`/`fxRateBase`/`fxRateSource` to each Trade (see [FX Rate Enrichment](#fx-rate-enrichment))                      |
+| `FX_RATES_BASE_CURRENCY`            | No\*     | —       | ISO-4217 base currency (required when `FX_RATES_ENABLED=true`)                                                                 |
+| `FX_RATE_API_KEY`                   | No       | —       | [exchangerate-api.com](https://www.exchangerate-api.com) key — enables historical rates                                        |
+| `FX_CACHE_RETENTION_DAYS`           | No       | `730`   | Days to retain cached historical rates in the meta DB                                                                          |
 
 ### `.env.droplet` — CLI-only (never pushed to containers)
 
@@ -214,31 +214,31 @@ Configuration is split across three environment files. Templates are in `env_exa
 
 ### `.env.relays` — Relay-prefixed vars
 
-| Variable                       | Required | Description                                                                                     |
-| ------------------------------ | -------- | ----------------------------------------------------------------------------------------------- |
-| `IBKR_FLEX_TOKEN`              | Yes      | Flex Web Service token (from Client Portal)                                                     |
-| `IBKR_FLEX_QUERY_ID`           | Yes      | Flex Query ID (Trade Confirmation or Activity)                                                  |
-| `IBKR_ACCOUNT_TIMEZONE`        | No       | IANA tz for IBKR timestamps (e.g. `America/New_York`). Default: `UTC`. Invalid value fails boot |
-| `IBKR_FLEX_QUERY_ID_2`         | No       | Second account query ID (enables second poller within same relay)                               |
-| `IBKR_FLEX_TOKEN_2`            | No       | Second account token (defaults to primary if omitted)                                           |
-| `IBKR_NOTIFIERS`               | No       | Override `NOTIFIERS` for IBKR relay only                                                        |
-| `IBKR_TARGET_WEBHOOK_URL`      | No       | Override `TARGET_WEBHOOK_URL` for IBKR relay only                                               |
-| `IBKR_WEBHOOK_SECRET`          | No       | Override `WEBHOOK_SECRET` for IBKR relay only                                                   |
-| `IBKR_POLL_INTERVAL`           | No       | Override `POLL_INTERVAL` for IBKR relay only. **Minimum recommended: 420 (7 min)**              |
-| `IBKR_POLLER_ENABLED`          | No       | Override `POLLER_ENABLED` for IBKR relay only                                                   |
-| **Kraken**                     |          |                                                                                                 |
-| `KRAKEN_API_KEY`               | Yes\*    | Kraken API key (required when `kraken` is in `RELAYS`)                                          |
-| `KRAKEN_API_SECRET`            | Yes\*    | Kraken API secret, base64-encoded (required with API key)                                       |
-| `KRAKEN_LISTENER_ENABLED`      | No       | Enable WS v2 real-time listener (default: `false`)                                              |
-| `KRAKEN_LISTENER_DEBOUNCE_MS`  | No       | Buffer fills N ms before dispatching webhook (default: `0`)                                     |
-| `KRAKEN_LOOKBACK_DAYS`         | No       | How far back each REST poll looks for trades, in days (default: `30`, min: `1`)                 |
-| `KRAKEN_POLL_INTERVAL`         | No       | Override `POLL_INTERVAL` for Kraken relay only                                                  |
-| `KRAKEN_POLLER_ENABLED`        | No       | Override `POLLER_ENABLED` for Kraken relay only                                                 |
-| `KRAKEN_NOTIFIERS`             | No       | Override `NOTIFIERS` for Kraken relay only                                                      |
-| `KRAKEN_TARGET_WEBHOOK_URL`    | No       | Override `TARGET_WEBHOOK_URL` for Kraken relay only                                             |
-| `KRAKEN_WEBHOOK_SECRET`        | No       | Override `WEBHOOK_SECRET` for Kraken relay only                                                 |
-| `KRAKEN_NOTIFY_RETRIES`        | No       | Override `NOTIFY_RETRIES` for Kraken relay only                                                 |
-| `KRAKEN_NOTIFY_RETRY_DELAY_MS` | No       | Override `NOTIFY_RETRY_DELAY_MS` for Kraken relay only                                          |
+| Variable                       | Required | Description                                                                                                                 |
+| ------------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `IBKR_FLEX_TOKEN`              | Yes      | Flex Web Service token (from Client Portal)                                                                                 |
+| `IBKR_FLEX_QUERY_ID`           | Yes      | Flex Query ID (Trade Confirmation or Activity)                                                                              |
+| `IBKR_ACCOUNT_TIMEZONE`        | No       | IANA tz for IBKR timestamps (e.g. `America/New_York`). Default: `UTC`. Invalid value fails boot                             |
+| `IBKR_FLEX_QUERY_ID_2`         | No       | Second account query ID (enables second poller within same relay)                                                           |
+| `IBKR_FLEX_TOKEN_2`            | No       | Second account token (defaults to primary if omitted)                                                                       |
+| `IBKR_NOTIFIERS`               | No       | Override `NOTIFIERS` for IBKR relay only                                                                                    |
+| `IBKR_TARGET_WEBHOOK_URL`      | No       | Override `TARGET_WEBHOOK_URL` for IBKR relay only                                                                           |
+| `IBKR_WEBHOOK_SECRET`          | No       | Override `WEBHOOK_SECRET` for IBKR relay only                                                                               |
+| `IBKR_POLL_INTERVAL`           | No       | Override `POLL_INTERVAL` for IBKR relay only. **Minimum recommended: 420 (7 min) — see rate-limit note in `POLL_INTERVAL`** |
+| `IBKR_POLLER_ENABLED`          | No       | Override `POLLER_ENABLED` for IBKR relay only                                                                               |
+| **Kraken**                     |          |                                                                                                                             |
+| `KRAKEN_API_KEY`               | Yes\*    | Kraken API key (required when `kraken` is in `RELAYS`)                                                                      |
+| `KRAKEN_API_SECRET`            | Yes\*    | Kraken API secret, base64-encoded (required with API key)                                                                   |
+| `KRAKEN_LISTENER_ENABLED`      | No       | Enable WS v2 real-time listener (default: `false`)                                                                          |
+| `KRAKEN_LISTENER_DEBOUNCE_MS`  | No       | Buffer fills N ms before dispatching webhook (default: `0`)                                                                 |
+| `KRAKEN_LOOKBACK_DAYS`         | No       | How far back each REST poll looks for trades, in days (default: `30`, min: `1`)                                             |
+| `KRAKEN_POLL_INTERVAL`         | No       | Override `POLL_INTERVAL` for Kraken relay only                                                                              |
+| `KRAKEN_POLLER_ENABLED`        | No       | Override `POLLER_ENABLED` for Kraken relay only                                                                             |
+| `KRAKEN_NOTIFIERS`             | No       | Override `NOTIFIERS` for Kraken relay only                                                                                  |
+| `KRAKEN_TARGET_WEBHOOK_URL`    | No       | Override `TARGET_WEBHOOK_URL` for Kraken relay only                                                                         |
+| `KRAKEN_WEBHOOK_SECRET`        | No       | Override `WEBHOOK_SECRET` for Kraken relay only                                                                             |
+| `KRAKEN_NOTIFY_RETRIES`        | No       | Override `NOTIFY_RETRIES` for Kraken relay only                                                                             |
+| `KRAKEN_NOTIFY_RETRY_DELAY_MS` | No       | Override `NOTIFY_RETRY_DELAY_MS` for Kraken relay only                                                                      |
 
 Adding a new relay's vars requires no compose changes — just add prefixed vars to `.env.relays`.
 
@@ -471,7 +471,7 @@ Before deploying, create an Activity Flex Query in IBKR Client Portal:
 
 The IBKR poller calls the Flex Web Service at the configured interval (default: 600s). Override with `IBKR_POLL_INTERVAL` in `.env.relays`.
 
-> **Rate limit:** IBKR enforces a limit of **10 requests per hour per query ID**. Do not set `IBKR_POLL_INTERVAL` (or `POLL_INTERVAL`) below **420 seconds (7 minutes)** — at 6 minutes you are exactly at the limit with zero headroom for retries; below that you will receive `ErrorCode 1003` (too many requests). The default of 600s (10 min, 6 req/hour) provides a comfortable margin.
+> **Rate limit:** IBKR enforces a limit of **10 requests per minute per token** (and 1 per second), per [Flex Web Service error code 1018](https://www.ibkrguides.com/orgportal/performanceandstatements/flex3error.htm). The limit is scoped to the _token_, so multiple query IDs (e.g. `_2` suffixed pollers) share the same budget. Hitting it returns `ErrorCode 1018 — Too many requests`. The technical floor is ~6 seconds, but Flex report generation is slow (5–30 s typical), retries need headroom, and there's no benefit to polling faster than the broker generates data. We recommend `IBKR_POLL_INTERVAL` (or `POLL_INTERVAL`) at **420 seconds (7 minutes) minimum**; the default of 600 s (10 min) is a comfortable margin.
 
 > **Why Activity instead of Trade Confirmation?** Trade Confirmation queries are locked to "Today" only. Activity queries support a configurable lookback period, so if the droplet is offline for a few days the first poll after restart will catch all missed fills. The SQLite dedup prevents double-sending.
 
