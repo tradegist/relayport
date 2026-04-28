@@ -1,7 +1,6 @@
 """Tests for KrakenClient.get_ws_token validation."""
 
 import threading
-import time
 import unittest
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -74,11 +73,7 @@ class TestNonceMonotonic(unittest.TestCase):
         def worker() -> None:
             local: list[int] = []
             for _ in range(200):
-                # Mirror production call ordering: _request acquires the
-                # same lock around _next_nonce, so two threads cannot
-                # observe an interleaved nonce.
-                with client._request_lock:
-                    local.append(client._next_nonce())
+                local.append(client._next_nonce())
             with results_lock:
                 results.extend(local)
 
@@ -123,11 +118,14 @@ class TestRequestSerialization(unittest.TestCase):
             resp.json.return_value = {"error": [], "result": {}}
             return resp
 
+        t2_at_lock = threading.Event()
+
         with patch("relays.kraken.rest_client.httpx.post", side_effect=mock_post):
             t2_done = threading.Event()
 
             def thread2() -> None:
                 first_entered.wait()
+                t2_at_lock.set()  # signal: about to attempt _request_lock
                 client._request("/0/private/GetWebSocketsToken")
                 t2_done.set()
 
@@ -137,7 +135,7 @@ class TestRequestSerialization(unittest.TestCase):
             t1.start()
             first_entered.wait()
             t2.start()
-            time.sleep(0.05)  # let t2 reach and block on _request_lock
+            t2_at_lock.wait()  # t2 has passed the gate; t1 still holds _request_lock
 
             self.assertEqual(
                 len(nonces_sent),
@@ -148,6 +146,7 @@ class TestRequestSerialization(unittest.TestCase):
 
             release_first.set()
             t1.join(timeout=2)
+            self.assertFalse(t1.is_alive(), "t1 did not finish within 2 seconds")
             self.assertTrue(t2_done.wait(timeout=2))
 
             self.assertEqual(len(nonces_sent), 2)
