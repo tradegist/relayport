@@ -33,19 +33,22 @@ class KrakenClient:
         # Kraken's view strictly monotonic when the poller and listener
         # fire concurrently, and the _last_nonce floor protects against
         # NTP backwards-jumps and microsecond-resolution collisions.
-        self._request_lock = threading.Lock()
+        # RLock so _request() can serialize the full nonce-sign-send path
+        # while _next_nonce() enforces synchronization internally as well.
+        self._request_lock = threading.RLock()
         self._last_nonce = 0
 
     def _get_secret(self) -> bytes:
         return self._api_secret_decoded
 
     def _next_nonce(self) -> int:
-        """Return a strictly-increasing nonce. Caller must hold the request lock."""
-        candidate = int(time.time() * 1_000_000)
-        if candidate <= self._last_nonce:
-            candidate = self._last_nonce + 1
-        self._last_nonce = candidate
-        return candidate
+        """Return a strictly-increasing nonce, safe to call without pre-acquiring the lock."""
+        with self._request_lock:
+            candidate = int(time.time() * 1_000_000)
+            if candidate <= self._last_nonce:
+                candidate = self._last_nonce + 1
+            self._last_nonce = candidate
+            return candidate
 
     def _sign(self, urlpath: str, data: dict[str, str | int]) -> str:
         """Compute API-Sign header value."""
