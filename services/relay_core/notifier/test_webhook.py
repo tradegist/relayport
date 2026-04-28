@@ -126,6 +126,36 @@ class TestWebhookNotifier:
             notifier.send(_SamplePayload(symbol="AAPL", quantity=1))
 
     @patch("notifier.webhook.httpx.post")
+    def test_4xx_includes_response_body_in_message(
+        self, mock_post: MagicMock,
+    ) -> None:
+        """A text/plain response body must be surfaced in the exception message
+        so downstream alerting (logs, emails) can show *why* the receiver
+        rejected the request."""
+        import httpx
+
+        resp = MagicMock()
+        resp.status_code = 400
+        resp.text = "You've exceeded your daily quota"
+        resp.content = resp.text.encode()
+        resp.headers = {"Content-Type": "text/plain"}
+        resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Client error '400 Bad Request' for url 'https://example.com/hook'",
+            request=MagicMock(), response=resp,
+        )
+        mock_post.return_value = resp
+        env = {
+            "TARGET_WEBHOOK_URL": "https://example.com/hook",
+            "WEBHOOK_SECRET": "s",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            notifier = WebhookNotifier()
+
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            notifier.send(_SamplePayload(symbol="AAPL", quantity=1))
+        assert "You've exceeded your daily quota" in str(exc_info.value)
+
+    @patch("notifier.webhook.httpx.post")
     def test_suffix_reads_suffixed_vars(self, mock_post: MagicMock) -> None:
         """Suffix=_2 reads TARGET_WEBHOOK_URL_2, etc."""
         mock_post.return_value = MagicMock(status_code=200)

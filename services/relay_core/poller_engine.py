@@ -262,6 +262,7 @@ def poll_once(
                     WebhookPayloadTrades(relay=relay_name, data=trades, errors=parse_errors),
                     retries=notify_retries,
                     retry_delay_ms=notify_retry_delay_ms,
+                    relay_name=relay_name,
                 )
                 return trades
             relay_log.info("No new fills")
@@ -289,6 +290,7 @@ def poll_once(
             WebhookPayloadTrades(relay=relay_name, data=trades, errors=parse_errors),
             retries=notify_retries,
             retry_delay_ms=notify_retry_delay_ms,
+            relay_name=relay_name,
         )
 
         # Mark all fills as processed after successful webhook (prefixed)
