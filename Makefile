@@ -80,7 +80,7 @@ test-webhook: ## Send sample trades to webhook endpoint (make test-webhook [S=2]
 
 watermark-reset: ## Reset timestamp watermark to now [RELAY=ibkr or empty for all] [ENV=local]
 	@$(_RESOLVE_ENV) \
-	RELAY_ENV=$$env $(PYTHON) -m cli watermark-reset $(RELAY)
+	RELAY_ENV=$$env $(PYTHON) -m cli watermark-reset $(if $(RELAY),--relay $(RELAY))
 
 ibkr-flex-dump: ## Dump a live IBKR Flex XML response (make ibkr-flex-dump [F=/tmp/raw.xml] [S=_2] [LOOKBACK_DAYS=40])
 	@test -f .env.relays || { echo "ERROR: .env.relays not found — create it from env_examples/env.relays"; exit 1; }; \

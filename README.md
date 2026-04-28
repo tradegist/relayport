@@ -656,12 +656,12 @@ make watermark-reset ENV=local    # target the local Docker stack
 Or use the CLI directly:
 
 ```bash
-python3 -m cli watermark-reset               # all relays
-python3 -m cli watermark-reset ibkr          # single relay
-python3 -m cli watermark-reset ibkr kraken   # multiple relays
+python3 -m cli watermark-reset                       # all relays
+python3 -m cli watermark-reset --relay ibkr          # single relay
+python3 -m cli watermark-reset --relay ibkr kraken   # multiple relays
 ```
 
-The command scans all poller indices for the given relay(s) (including multi-account `_2` pollers) and sets every matching watermark to `int(time.time())`. After the reset, the next poll cycle will only process fills timestamped at or after that moment.
+The command resets watermark keys already present in the metadata DB for the given relay(s) to `int(time.time())`. If a relay has no watermark rows yet, it initializes the default poller watermark for that relay. Poller indices that have never written metadata yet (for example, a multi-account `_2` poller before its first successful poll) are not discovered by this command until they have run at least once. After the reset, the next poll cycle will only process fills timestamped at or after that moment for the pollers whose watermark keys were reset.
 
 > **Note:** The dedup layer is not cleared by this command — fills already marked as processed are still skipped. To also clear dedup state use `make reset-db` (drops both tables) or `make poll REPLAY=N` to resend the last N fills regardless of dedup state.
 

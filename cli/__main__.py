@@ -44,7 +44,8 @@ def main() -> None:
 
     p = sub.add_parser("watermark-reset",
                        help="Reset existing timestamp watermark entries to now")
-    p.add_argument("relays", nargs="*", metavar="RELAY",
+    p.add_argument("--relay", "--relays", dest="relays_flag",
+                   action="extend", nargs="+", metavar="RELAY", default=None,
                    help="Relay name(s) to reset (default: all)")
 
     args = parser.parse_args()

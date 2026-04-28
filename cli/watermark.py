@@ -31,16 +31,16 @@ def _build_script(relay_names: list[str]) -> str:
         f'expected = {{r + ":{WATERMARK_KEY_SUFFIX}" for r in configured}}; '
         # Union, then apply relay_filter
         'keys = [k for k in existing | expected if relay_filter is None or k.split(":")[0] in relay_filter]; '
-        '[conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", (k, str(now))) for k in keys]; '
-        "conn.commit(); conn.close(); "
-        '[print("  " + k + " -> " + str(now)) for k in keys]; '
+        'conn.executemany("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", ((k, str(now)) for k in keys)); '
+        "conn.commit(); conn.close()\n"
+        'for k in keys: print("  " + k + " -> " + str(now))\n'
         'print(str(len(keys)) + " watermark(s) reset") if keys else print("No watermark keys found")'
     )
 
 
 def run(args: argparse.Namespace) -> None:
     load_env()
-    relay_names: list[str] = [n.lower() for n in (getattr(args, "relays", None) or [])]
+    relay_names: list[str] = [n.lower() for n in (args.relays_flag or [])]
     for name in relay_names:
         if not re.match(r"^[a-z0-9_]+$", name):
             die(f"Invalid relay name {name!r} — must contain only letters, digits, and underscores")
