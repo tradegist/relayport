@@ -184,6 +184,7 @@ def _send_and_mark(
             relay.notifiers, payload,
             retries=relay.notify_retries,
             retry_delay_ms=relay.notify_retry_delay_ms,
+            relay_name=relay_name,
         )
 
         # Mark processed AFTER notify (relay-prefixed keys)
@@ -230,6 +231,7 @@ def _send_no_mark(
         WebhookPayloadTrades(relay=relay_name, data=trades, errors=all_errors),
         retries=relay.notify_retries,
         retry_delay_ms=relay.notify_retry_delay_ms,
+        relay_name=relay_name,
     )
 
 

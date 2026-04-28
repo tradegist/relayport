@@ -65,6 +65,8 @@ class WebhookNotifier(BaseNotifier):
     name = "webhook"
 
     def __init__(self, prefix: str = "", suffix: str = "") -> None:
+        self._prefix = prefix
+        self._suffix = suffix
         self._url = _resolve_webhook_url(prefix, suffix)
         self._secret = _get_webhook_secret(prefix, suffix)
         self._header_name = _get_webhook_header_name(prefix, suffix)
@@ -139,5 +141,17 @@ class WebhookNotifier(BaseNotifier):
             headers=headers,
             timeout=10.0,
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # Surface the response body in the exception message so downstream
+            # error reporting (logs, alerter emails) can show *why* the
+            # receiver rejected the request.  httpx.HTTPStatusError's default
+            # __str__() only includes status + URL.
+            body_excerpt = exc.response.text[:500]
+            raise httpx.HTTPStatusError(
+                f"{exc} — body: {body_excerpt}",
+                request=exc.request,
+                response=exc.response,
+            ) from exc
         log.info("Webhook sent — status %d", resp.status_code)

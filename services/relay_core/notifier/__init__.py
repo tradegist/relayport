@@ -2,10 +2,12 @@
 
 import logging
 import time
+from datetime import UTC, datetime
 
 import httpx
 from pydantic import BaseModel
 
+from relay_core.alerter import send_alert
 from relay_core.env import get_env, get_env_int
 
 from .base import BaseNotifier
@@ -156,12 +158,62 @@ def _is_retryable(exc: Exception) -> bool:
     return isinstance(exc, httpx.HTTPError)
 
 
+def _short_reason(exc: Exception) -> str:
+    """Return a brief, subject-line-friendly reason from an exception."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code}"
+    return type(exc).__name__
+
+
+def _format_alert_subject(
+    notifier_name: str, exc: Exception, relay_name: str | None,
+) -> str:
+    relay_part = f" ({relay_name})" if relay_name else ""
+    return f"[relayport] {notifier_name}{relay_part} failed: {_short_reason(exc)}"
+
+
+def _format_alert_body(
+    notifier: BaseNotifier,
+    exc: Exception,
+    *,
+    relay_name: str | None,
+    attempts: int,
+) -> str:
+    """Build the plain-text email body.
+
+    Explicit field-by-field formatting (never ``str(payload)``) so a future
+    change to a notifier cannot accidentally leak the trade payload into the
+    alert email.
+    """
+    suffix = getattr(notifier, "_suffix", "") or "(none)"
+    destination = getattr(notifier, "_url", "<unknown>")
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return (
+        f"Notifier:    {type(notifier).__name__}\n"
+        f"Relay:       {relay_name or '(unknown)'}\n"
+        f"Suffix:      {suffix}\n"
+        f"Destination: {destination}\n"
+        f"Attempts:    {attempts}\n"
+        f"Failure:     {exc}\n"
+        f"Time (UTC):  {timestamp}\n"
+        "\n"
+        "Trade payload is intentionally omitted (may contain account data).\n"
+        "\n"
+        "To diagnose, view logs on the droplet:\n"
+        "  make logs S=relays\n"
+        "or\n"
+        "  ssh root@$DROPLET_IP "
+        "\"cd /opt/relayport && docker compose logs --tail=200 relays\"\n"
+    )
+
+
 def notify(
     notifiers: list[BaseNotifier],
     payload: BaseModel,
     *,
     retries: int = 0,
     retry_delay_ms: int = 1000,
+    relay_name: str | None = None,
 ) -> None:
     """Dispatch payload to all configured notifiers.
 
@@ -169,6 +221,10 @@ def notify(
     (5xx, timeout, network error). 4xx errors are not retried.
     If at least one backend succeeds, return normally (log warnings for failures).
     If ALL backends fail, raise ``NotificationError`` — caller must NOT mark fills.
+
+    A failed backend (after retries exhausted) also triggers an operational
+    email alert via :mod:`relay_core.alerter` — best-effort, throttled, and
+    fully optional (silent no-op when alert env vars are unset).
     """
     if not notifiers:
         log.info("No notifiers configured — skipping notification")
@@ -200,11 +256,22 @@ def notify(
                     break
 
         if last_exc is not None:
+            notifier_name = type(notifier).__name__
             log.error(
                 "Notifier %s failed after %d attempt(s): %s",
-                type(notifier).__name__, 1 + retries, last_exc,
+                notifier_name, 1 + retries, last_exc,
             )
-            failures.append((type(notifier).__name__, last_exc))
+            failures.append((notifier_name, last_exc))
+            suffix = getattr(notifier, "_suffix", "") or "-"
+            send_alert(
+                subject=_format_alert_subject(notifier_name, last_exc, relay_name),
+                body=_format_alert_body(
+                    notifier, last_exc,
+                    relay_name=relay_name,
+                    attempts=1 + retries,
+                ),
+                key=f"{notifier_name}:{relay_name or '-'}:{suffix}",
+            )
 
     if succeeded == 0:
         raise NotificationError(failures)
