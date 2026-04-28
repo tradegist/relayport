@@ -1,4 +1,4 @@
-.PHONY: deps setup deploy destroy pause resume sync poll test-webhook ibkr-flex-dump ibkr-flex-refresh types test typecheck lint e2e e2e-up e2e-run e2e-down local-up local-down logs stats ssh help
+.PHONY: deps setup deploy destroy pause resume sync poll test-webhook watermark-reset ibkr-flex-dump ibkr-flex-refresh types test typecheck lint e2e e2e-up e2e-run e2e-down local-up local-down logs stats ssh help
 
 PROJECT = relayport
 PYTHON ?= .venv/bin/python3
@@ -77,6 +77,10 @@ reset-db: ## Drop dedup and meta tables (fresh state) [ENV=local, Y=1 to skip pr
 test-webhook: ## Send sample trades to webhook endpoint (make test-webhook [S=2] [ENV=local])
 	@$(_RESOLVE_ENV) \
 	RELAY_ENV=$$env $(PYTHON) -m cli test-webhook $(S)
+
+watermark-reset: ## Reset timestamp watermark to now [RELAY=ibkr or empty for all] [ENV=local]
+	@$(_RESOLVE_ENV) \
+	RELAY_ENV=$$env $(PYTHON) -m cli watermark-reset $(RELAY)
 
 ibkr-flex-dump: ## Dump a live IBKR Flex XML response (make ibkr-flex-dump [F=/tmp/raw.xml] [S=_2] [LOOKBACK_DAYS=40])
 	@test -f .env.relays || { echo "ERROR: .env.relays not found — create it from env_examples/env.relays"; exit 1; }; \

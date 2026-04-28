@@ -38,6 +38,7 @@ Currently supports **IBKR** (Interactive Brokers) via the Flex Web Service and *
 - [IBKR Setup](#ibkr-setup)
 - [Kraken Setup](#kraken-setup)
 - [On-Demand Poll](#on-demand-poll)
+- [Watermark Management](#watermark-management)
 - [Pause & Resume](#pause--resume)
 - [Security](#security)
 - [Current Status](#current-status)
@@ -641,6 +642,28 @@ source .env && curl -s -X POST "https://${SITE_DOMAIN}/relays/ibkr/poll/1" \
   -H "Authorization: Bearer ${API_TOKEN}" \
   | python3 -m json.tool
 ```
+
+## Watermark Management
+
+The relay uses a timestamp watermark per poller to skip fills already seen in previous cycles. In normal operation this is fully automatic. Use `watermark-reset` when you want to force the next poll to reprocess recent fills — for example, after fixing a parse bug, swapping a webhook destination, or recovering from an extended outage.
+
+```bash
+make watermark-reset              # reset watermark for all relays to now
+make watermark-reset RELAY=ibkr  # reset ibkr only
+make watermark-reset ENV=local    # target the local Docker stack
+```
+
+Or use the CLI directly:
+
+```bash
+python3 -m cli watermark-reset               # all relays
+python3 -m cli watermark-reset ibkr          # single relay
+python3 -m cli watermark-reset ibkr kraken   # multiple relays
+```
+
+The command scans all poller indices for the given relay(s) (including multi-account `_2` pollers) and sets every matching watermark to `int(time.time())`. After the reset, the next poll cycle will only process fills timestamped at or after that moment.
+
+> **Note:** The dedup layer is not cleared by this command — fills already marked as processed are still skipped. To also clear dedup state use `make reset-db` (drops both tables) or `make poll REPLAY=N` to resend the last N fills regardless of dedup state.
 
 ## Pause & Resume
 

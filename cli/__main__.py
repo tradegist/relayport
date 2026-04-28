@@ -11,6 +11,7 @@ _PROJECT_MODULES: dict[str, str] = {
     "poll": "cli.poll",
     "reset-db": "cli.reset_db",
     "test-webhook": "cli.test_webhook",
+    "watermark-reset": "cli.watermark",
 }
 
 
@@ -40,6 +41,11 @@ def main():
     p = sub.add_parser("test-webhook", help="Send sample trades to webhook endpoint")
     p.add_argument("poller", nargs="?", default="1", choices=["1", "2"],
                    help="Which poller's webhook URL (default: 1)")
+
+    p = sub.add_parser("watermark-reset",
+                       help="Reset timestamp watermark to now (all poller indices)")
+    p.add_argument("relays", nargs="*", metavar="RELAY",
+                   help="Relay name(s) to reset (default: all)")
 
     args = parser.parse_args()
 

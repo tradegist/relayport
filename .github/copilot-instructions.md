@@ -627,6 +627,7 @@ make destroy   # Terraform destroy
 make pause     # Snapshot + delete droplet (save costs)
 make resume    # Restore from snapshot
 make poll      # Trigger immediate poll (RELAY=ibkr, IDX=1)
+make watermark-reset    # Reset timestamp watermark to now [RELAY=ibkr or empty for all] [ENV=local]
 make ibkr-flex-dump     # Dump live IBKR Flex XML to fixtures/raw.xml (F=path to override, S=_2 for second account)
 make ibkr-flex-refresh  # Fetch live Flex, auto-detect type, sanitize, write fixture (S=_2 for second account)
 make e2e       # Run E2E tests (starts/stops stack)
@@ -639,6 +640,8 @@ Direct CLI (no Make required, works on Windows):
 python3 -m cli deploy
 python3 -m cli sync --local-files
 python3 -m cli poll ibkr 1
+python3 -m cli watermark-reset            # all relays
+python3 -m cli watermark-reset ibkr       # single relay
 ```
 
 ## Deployment Model (MANDATORY)
