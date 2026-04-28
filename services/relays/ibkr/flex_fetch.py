@@ -59,7 +59,8 @@ def fetch_flex_report(
     regardless of how the query is configured server-side.  ``None``
     (default) lets the saved query Period apply.
 
-    Returns the raw XML text on success, or ``None`` on any error.
+    Returns the raw XML text on success, or ``None`` on any HTTP/XML
+    error.  Raises ``ValueError`` if *lookback_days* is outside 1-365.
     """
     if lookback_days is not None and not 1 <= lookback_days <= 365:
         raise ValueError(
