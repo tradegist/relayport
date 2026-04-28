@@ -56,6 +56,32 @@ def _get_flex_query_id(suffix: str = "") -> str | None:
     return os.environ.get(key, "").strip() or None
 
 
+def _get_flex_lookback_days() -> int | None:
+    """Optional override for the Flex query's saved Period.
+
+    When set, ``SendRequest`` is called with the documented ``p`` URL
+    param so IBKR returns the last N calendar days regardless of how
+    the query is configured server-side.  IBKR caps the override at
+    365 days; values outside ``[1, 365]`` raise ``SystemExit`` at boot.
+
+    Returning ``None`` (var unset) lets the saved query Period apply.
+    """
+    raw = os.environ.get("IBKR_FLEX_LOOKBACK_DAYS", "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        raise SystemExit(
+            f"Invalid IBKR_FLEX_LOOKBACK_DAYS={raw!r} — must be an integer"
+        ) from None
+    if value < 1 or value > 365:
+        raise SystemExit(
+            f"Invalid IBKR_FLEX_LOOKBACK_DAYS={raw!r} — must be between 1 and 365"
+        )
+    return value
+
+
 def _get_bridge_ws_url() -> str:
     key = "IBKR_BRIDGE_WS_URL"
     val = os.environ.get(key, "").strip()
@@ -103,12 +129,16 @@ def _get_account_timezone() -> ZoneInfo:
 
 # ── Flex poller adapter ──────────────────────────────────────────────
 
-def _build_fetch(flex_token: str, flex_query_id: str) -> Callable[[], str | None]:
+def _build_fetch(
+    flex_token: str, flex_query_id: str, lookback_days: int | None,
+) -> Callable[[], str | None]:
     """Return a fetch callable for the generic poller engine."""
 
     def fetch() -> str | None:
         return fetch_flex_report(
-            flex_token=flex_token, flex_query_id=flex_query_id,
+            flex_token=flex_token,
+            flex_query_id=flex_query_id,
+            lookback_days=lookback_days,
         )
 
     return fetch
@@ -142,13 +172,14 @@ def _build_poller_configs(tz: ZoneInfo) -> list[PollerConfig]:
             interval,
         )
     parse = _build_parse(tz)
+    lookback_days = _get_flex_lookback_days()
 
     # Primary poller — optional (both must be set, or both unset)
     token = _get_flex_token()
     query_id = _get_flex_query_id()
     if token and query_id:
         configs.append(PollerConfig(
-            fetch=_build_fetch(token, query_id),
+            fetch=_build_fetch(token, query_id, lookback_days),
             parse=parse,
             interval=interval,
         ))
@@ -169,7 +200,7 @@ def _build_poller_configs(tz: ZoneInfo) -> list[PollerConfig]:
                 " — set IBKR_FLEX_TOKEN_2 or IBKR_FLEX_TOKEN"
             )
         configs.append(PollerConfig(
-            fetch=_build_fetch(token_2, query_2),
+            fetch=_build_fetch(token_2, query_2, lookback_days),
             parse=parse,
             interval=interval,
         ))

@@ -46,18 +46,31 @@ FLEX_BASE = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebServ
 USER_AGENT = "ibkr-relay/1.0"
 
 
-def fetch_flex_report(flex_token: str, flex_query_id: str) -> str | None:
+def fetch_flex_report(
+    flex_token: str,
+    flex_query_id: str,
+    *,
+    lookback_days: int | None = None,
+) -> str | None:
     """Two-step Flex Web Service: SendRequest -> GetStatement.
+
+    *lookback_days* (1-365) overrides the saved query's Period via the
+    documented ``p`` URL param so IBKR returns the last N calendar days
+    regardless of how the query is configured server-side.  ``None``
+    (default) lets the saved query Period apply.
 
     Returns the raw XML text on success, or ``None`` on any error.
     """
     headers = {"User-Agent": USER_AGENT}
+    params: dict[str, str] = {"t": flex_token, "q": flex_query_id, "v": "3"}
+    if lookback_days is not None:
+        params["p"] = str(lookback_days)
 
     try:
         # Step 1: request report generation
         resp = httpx.get(
             f"{FLEX_BASE}/SendRequest",
-            params={"t": flex_token, "q": flex_query_id, "v": "3"},
+            params=params,
             headers=headers,
             timeout=30.0,
         )

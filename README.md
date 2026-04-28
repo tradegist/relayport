@@ -221,6 +221,7 @@ Configuration is split across three environment files. Templates are in `env_exa
 | `IBKR_ACCOUNT_TIMEZONE`        | No       | IANA tz for IBKR timestamps (e.g. `America/New_York`). Default: `UTC`. Invalid value fails boot                             |
 | `IBKR_FLEX_QUERY_ID_2`         | No       | Second account query ID (enables second poller within same relay)                                                           |
 | `IBKR_FLEX_TOKEN_2`            | No       | Second account token (defaults to primary if omitted)                                                                       |
+| `IBKR_FLEX_LOOKBACK_DAYS`      | No       | Override saved query Period with "last N calendar days" via the `p` URL param (1-365)                                       |
 | `IBKR_NOTIFIERS`               | No       | Override `NOTIFIERS` for IBKR relay only                                                                                    |
 | `IBKR_TARGET_WEBHOOK_URL`      | No       | Override `TARGET_WEBHOOK_URL` for IBKR relay only                                                                           |
 | `IBKR_WEBHOOK_SECRET`          | No       | Override `WEBHOOK_SECRET` for IBKR relay only                                                                               |

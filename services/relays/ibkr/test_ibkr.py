@@ -15,6 +15,7 @@ from relays.ibkr import (
     _get_account_timezone,
     _get_bridge_api_token,
     _get_bridge_ws_url,
+    _get_flex_lookback_days,
     _get_flex_query_id,
     _get_flex_token,
     _is_exec_events_enabled,
@@ -206,6 +207,34 @@ class TestEnvVarGetters(unittest.TestCase):
             _get_account_timezone()
         self.assertIn("IBKR_ACCOUNT_TIMEZONE", str(cm.exception))
         self.assertIn("Not/A_Zone", str(cm.exception))
+
+    # ── IBKR_FLEX_LOOKBACK_DAYS ──
+
+    def test_flex_lookback_days_unset_returns_none(self) -> None:
+        with patch.dict(os.environ, {"IBKR_FLEX_LOOKBACK_DAYS": ""}):
+            self.assertIsNone(_get_flex_lookback_days())
+
+    def test_flex_lookback_days_valid(self) -> None:
+        with patch.dict(os.environ, {"IBKR_FLEX_LOOKBACK_DAYS": "40"}):
+            self.assertEqual(_get_flex_lookback_days(), 40)
+
+    def test_flex_lookback_days_non_integer_raises(self) -> None:
+        with patch.dict(os.environ, {"IBKR_FLEX_LOOKBACK_DAYS": "abc"}), \
+             self.assertRaises(SystemExit) as cm:
+            _get_flex_lookback_days()
+        self.assertIn("IBKR_FLEX_LOOKBACK_DAYS", str(cm.exception))
+        self.assertIn("abc", str(cm.exception))
+
+    def test_flex_lookback_days_zero_raises(self) -> None:
+        with patch.dict(os.environ, {"IBKR_FLEX_LOOKBACK_DAYS": "0"}), \
+             self.assertRaises(SystemExit):
+            _get_flex_lookback_days()
+
+    def test_flex_lookback_days_above_cap_raises(self) -> None:
+        with patch.dict(os.environ, {"IBKR_FLEX_LOOKBACK_DAYS": "366"}), \
+             self.assertRaises(SystemExit) as cm:
+            _get_flex_lookback_days()
+        self.assertIn("365", str(cm.exception))
 
 
 # ── Event filter tests ───────────────────────────────────────────────

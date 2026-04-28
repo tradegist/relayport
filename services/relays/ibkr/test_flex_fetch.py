@@ -212,3 +212,36 @@ class TestFetchFlexReport(unittest.TestCase):
         ]
         result = fetch_flex_report("tok", "qid")
         self.assertIsNone(result)
+
+    # ── lookback_days override ──────────────────────────────────────
+
+    def test_lookback_days_adds_p_param(
+        self, mock_get: MagicMock, _sleep: MagicMock,
+    ) -> None:
+        mock_get.side_effect = [
+            _mock_response(_SEND_OK),
+            _mock_response(_REPORT_XML),
+        ]
+        fetch_flex_report("tok", "qid", lookback_days=40)
+
+        send_call = mock_get.call_args_list[0]
+        params = send_call.kwargs["params"]
+        self.assertEqual(params["p"], "40")
+        self.assertEqual(params["t"], "tok")
+        self.assertEqual(params["q"], "qid")
+        self.assertEqual(params["v"], "3")
+        # Step 2 (GetStatement) reuses ref_code, no p override
+        get_call = mock_get.call_args_list[1]
+        self.assertNotIn("p", get_call.kwargs["params"])
+
+    def test_no_lookback_omits_p_param(
+        self, mock_get: MagicMock, _sleep: MagicMock,
+    ) -> None:
+        mock_get.side_effect = [
+            _mock_response(_SEND_OK),
+            _mock_response(_REPORT_XML),
+        ]
+        fetch_flex_report("tok", "qid")
+
+        params = mock_get.call_args_list[0].kwargs["params"]
+        self.assertNotIn("p", params)

@@ -78,23 +78,27 @@ test-webhook: ## Send sample trades to webhook endpoint (make test-webhook [S=2]
 	@$(_RESOLVE_ENV) \
 	RELAY_ENV=$$env $(PYTHON) -m cli test-webhook $(S)
 
-ibkr-flex-dump: ## Dump a live IBKR Flex XML response (make ibkr-flex-dump [F=/tmp/raw.xml] [S=_2])
+ibkr-flex-dump: ## Dump a live IBKR Flex XML response (make ibkr-flex-dump [F=/tmp/raw.xml] [S=_2] [LOOKBACK_DAYS=40])
 	@test -f .env.relays || { echo "ERROR: .env.relays not found — create it from env_examples/env.relays"; exit 1; }; \
 	set -a; . ./.env.relays; set +a; \
 	suffix="$(S)"; \
+	days="$(LOOKBACK_DAYS)"; days="$${days:-$$IBKR_FLEX_LOOKBACK_DAYS}"; \
 	$(PYTHON) -m relays.ibkr.flex_dump \
 		--token "$$(printenv "IBKR_FLEX_TOKEN$$suffix")" \
 		--query-id "$$(printenv "IBKR_FLEX_QUERY_ID$$suffix")" \
+		$${days:+--lookback-days $$days} \
 		$(if $(F),--dump $(F))
 
-ibkr-flex-refresh: ## Refresh IBKR Flex fixture (fetch + auto-detect AF/TC + sanitize) [S=_2]
+ibkr-flex-refresh: ## Refresh IBKR Flex fixture (fetch + auto-detect AF/TC + sanitize) [S=_2] [LOOKBACK_DAYS=40]
 	@raw=services/relays/ibkr/fixtures/raw.xml; \
 	test -f .env.relays || { echo "ERROR: .env.relays not found — create it from env_examples/env.relays"; exit 1; }; \
 	set -a; . ./.env.relays; set +a; \
 	suffix="$(S)"; \
+	days="$(LOOKBACK_DAYS)"; days="$${days:-$$IBKR_FLEX_LOOKBACK_DAYS}"; \
 	$(PYTHON) -m relays.ibkr.flex_dump \
 		--token "$$(printenv "IBKR_FLEX_TOKEN$$suffix")" \
-		--query-id "$$(printenv "IBKR_FLEX_QUERY_ID$$suffix")" && \
+		--query-id "$$(printenv "IBKR_FLEX_QUERY_ID$$suffix")" \
+		$${days:+--lookback-days $$days} && \
 	if grep -q '<TradeConfirm' $$raw; then \
 		out=services/relays/ibkr/fixtures/trade_confirm_sample.xml; kind="Trade Confirmation"; \
 	else \
