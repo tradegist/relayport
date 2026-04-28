@@ -171,8 +171,8 @@ e2e-up: ## Start E2E test stack (relays + debug)
 e2e-down: ## Stop and remove E2E test stack
 	$(E2E_COMPOSE_DOWN) down
 
-e2e-run: ## Run E2E tests (stack must be up)
-	@$(E2E_COMPOSE) restart relays debug > /dev/null 2>&1 && sleep 3
+e2e-run: ## Run E2E tests (stack must be up; recreates containers to pick up .env.test changes)
+	@$(E2E_COMPOSE) up -d --force-recreate --wait relays debug > /dev/null 2>&1
 	$(PYTHON) -m pytest services/relay_core/tests/e2e/ -v
 
 e2e: ## Run E2E tests (starts/stops stack automatically)
