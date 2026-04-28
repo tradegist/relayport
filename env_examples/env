@@ -85,3 +85,20 @@ POLL_INTERVAL=600
 # Delay between retries in milliseconds (default: 1000, max: 30000)
 
 #NOTIFY_RETRY_DELAY_MS=1000
+
+# ── Operational alerts (optional) ────────────────────────────────────
+# When a notifier fails to deliver (after retries), the operator is
+# emailed via Resend. Set RESEND_API_KEY and ALERT_REPORT_EMAIL_TO to
+# enable — otherwise alerting is silently disabled (opt-in only).
+
+#RESEND_API_KEY=re_xxxxxxxxxxxx
+#ALERT_REPORT_EMAIL_TO=ops@example.com
+
+# Optional sender address. Defaults to onboarding@resend.dev (Resend's
+# shared sandbox). For production, verify your domain in Resend and set
+# a sender on it.
+#ALERT_EMAIL_FROM=alerts@example.com
+
+# Suppress duplicate alerts within this many minutes (default: 60).
+# Container restart re-fires once if the destination is still broken.
+#ALERT_COOLDOWN_MINUTES=60

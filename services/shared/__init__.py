@@ -19,6 +19,8 @@ from .models import Source as Source
 from .models import Trade as Trade
 
 # ── Internal utilities (re-exported for sibling services) ────────────
+from .redact import redact_url as redact_url
+from .redact import safe_http_error_context as safe_http_error_context
 from .time_format import normalize_timestamp as normalize_timestamp
 from .time_format import parse_timezone as parse_timezone
 from .time_format import to_epoch as to_epoch

@@ -221,6 +221,116 @@ class TestNotify:
         assert n1.send.call_count == 1
 
 
+class TestNotifyAlerter:
+    """Verify notify() triggers send_alert() per-backend on failure."""
+
+    @patch("relay_core.notifier.send_alert")
+    def test_failure_triggers_alert(self, mock_alert: MagicMock) -> None:
+        n1 = MagicMock()
+        n1._suffix = ""
+        n1.send.side_effect = RuntimeError("boom")
+
+        with pytest.raises(NotificationError):
+            notify([n1], _SamplePayload(symbol="AAPL"), relay_name="ibkr")
+
+        mock_alert.assert_called_once()
+        kwargs = mock_alert.call_args.kwargs
+        assert "ibkr" in kwargs["subject"]
+        assert "boom" in kwargs["body"]
+        assert kwargs["key"] == "MagicMock:ibkr:-"
+
+    @patch("relay_core.notifier.send_alert")
+    def test_success_does_not_alert(self, mock_alert: MagicMock) -> None:
+        n1 = MagicMock()
+        notify([n1], _SamplePayload(symbol="AAPL"), relay_name="ibkr")
+        mock_alert.assert_not_called()
+
+    @patch("relay_core.notifier.send_alert")
+    def test_alert_per_backend_on_partial_failure(
+        self, mock_alert: MagicMock,
+    ) -> None:
+        """Only the failing backend triggers an alert; partial-success notify
+        does not raise but still alerts on the failed backend."""
+        n_fail = MagicMock()
+        n_fail._suffix = ""
+        n_fail.send.side_effect = RuntimeError("boom")
+        n_ok = MagicMock()  # succeeds
+
+        notify([n_fail, n_ok], _SamplePayload(symbol="AAPL"), relay_name="ibkr")
+
+        assert mock_alert.call_count == 1
+
+    @patch("relay_core.notifier.send_alert")
+    def test_alert_exception_does_not_propagate(
+        self, mock_alert: MagicMock,
+    ) -> None:
+        """If send_alert itself raises, it must NOT mask NotificationError."""
+        mock_alert.side_effect = RuntimeError("alerter exploded")
+        n1 = MagicMock()
+        n1._suffix = ""
+        n1.send.side_effect = RuntimeError("boom")
+
+        # The contract: send_alert is best-effort. If it raises, the caller's
+        # NotificationError must still surface. We assert the *original*
+        # delivery error reaches the caller.
+        with pytest.raises(NotificationError):
+            notify([n1], _SamplePayload(symbol="AAPL"), relay_name="ibkr")
+
+    @patch("relay_core.notifier.send_alert")
+    def test_alert_includes_destination_and_attempts(
+        self, mock_alert: MagicMock,
+    ) -> None:
+        n1 = MagicMock()
+        n1._suffix = "_2"
+        n1._url = "https://my.endpoint/hook?token=SECRET"
+        n1.send.side_effect = RuntimeError("boom")
+
+        with pytest.raises(NotificationError):
+            notify([n1], _SamplePayload(symbol="AAPL"), relay_name="kraken")
+
+        body = mock_alert.call_args.kwargs["body"]
+        # Host kept, last path segment + query string redacted.
+        assert "https://my.endpoint/***" in body
+        assert "hook" not in body
+        assert "SECRET" not in body
+        assert "token=" not in body
+        assert "kraken" in body
+        assert "_2" in body
+        assert "Attempts:    1" in body
+        # Body must NOT echo the trade payload.
+        assert "AAPL" not in body
+
+    @patch("relay_core.notifier.send_alert")
+    def test_alert_reports_actual_attempts_on_non_retryable_error(
+        self, mock_alert: MagicMock,
+    ) -> None:
+        """A non-retryable 4xx exits after 1 attempt even when retries > 0."""
+        import httpx
+        n1 = MagicMock()
+        n1._suffix = ""
+        resp = MagicMock(status_code=400)
+        n1.send.side_effect = httpx.HTTPStatusError(
+            "400", request=MagicMock(), response=resp,
+        )
+
+        with pytest.raises(NotificationError):
+            notify([n1], _SamplePayload(symbol="AAPL"), relay_name="ibkr", retries=3)
+
+        body = mock_alert.call_args.kwargs["body"]
+        assert "Attempts:    1" in body
+
+    @patch("relay_core.notifier.send_alert")
+    def test_alert_key_includes_suffix(self, mock_alert: MagicMock) -> None:
+        n1 = MagicMock()
+        n1._suffix = "_2"
+        n1.send.side_effect = RuntimeError("boom")
+
+        with pytest.raises(NotificationError):
+            notify([n1], _SamplePayload(symbol="AAPL"), relay_name="ibkr")
+
+        assert mock_alert.call_args.kwargs["key"] == "MagicMock:ibkr:_2"
+
+
 class TestLoadRetryConfig:
     def test_defaults(self) -> None:
         with patch.dict("os.environ", {}, clear=True):

@@ -34,6 +34,7 @@ Currently supports **IBKR** (Interactive Brokers) via the Flex Web Service and *
   - [Option contracts](#option-contracts)
   - [FX Rate Enrichment](#fx-rate-enrichment)
   - [Debug Webhook Inbox](#debug-webhook-inbox)
+  - [Operational Alerts](#operational-alerts)
 - [IBKR Setup](#ibkr-setup)
 - [Kraken Setup](#kraken-setup)
 - [On-Demand Poll](#on-demand-poll)
@@ -181,26 +182,30 @@ Configuration is split across three environment files. Templates are in `env_exa
 
 ### `.env` — App config
 
-| Variable                            | Required | Default | Description                                                                                                                    |
-| ----------------------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `SITE_DOMAIN`                       | Yes      | —       | Domain for the relay API (see [Domains & HTTPS](#domains--https))                                                              |
-| `API_TOKEN`                         | Yes      | —       | Bearer token for `/relays/*` endpoints (`openssl rand -hex 32`)                                                                |
-| `RELAYS`                            | No       | —       | Comma-separated relay adapters (e.g. `ibkr`, `ibkr,kraken`). Empty = API server only                                           |
-| `NOTIFIERS`                         | No       | —       | Active notification backends (e.g. `webhook`). Empty = dry-run                                                                 |
-| `TARGET_WEBHOOK_URL`                | No       | —       | Webhook endpoint (empty = log-only dry-run)                                                                                    |
-| `WEBHOOK_SECRET`                    | No       | —       | HMAC-SHA256 key for signing payloads (required if NOTIFIERS=webhook)                                                           |
-| `POLL_INTERVAL`                     | No       | `600`   | Flex poll interval (seconds). **IBKR limit: 10 req/minute per token (shared across query IDs) — do not set below 420 (7 min)** |
-| `POLLER_ENABLED`                    | No       | `true`  | Set to `false` to disable the poller globally (relay override: `{RELAY}_POLLER_ENABLED`)                                       |
-| `LISTENER_ENABLED`                  | No       | —       | Set to `true` to enable real-time WS listeners globally; IBKR requires `ibkr_bridge`, Kraken does not                          |
-| `LISTENER_DEBOUNCE_MS`              | No       | `0`     | Milliseconds to buffer fills before flushing                                                                                   |
-| `IBKR_LISTENER_EXEC_EVENTS_ENABLED` | No       | `false` | Enable `execDetailsEvent` webhooks (2x volume, lower latency)                                                                  |
-| `DEBUG_WEBHOOK_PATH`                | No       | —       | Route webhooks to debug inbox instead of `TARGET_WEBHOOK_URL` (see [Debug Webhook Inbox](#debug-webhook-inbox))                |
-| `MAX_DEBUG_WEBHOOK_PAYLOADS`        | No       | `100`   | Max payloads stored in the debug inbox (hard max: 150, FIFO eviction)                                                          |
-| `DEBUG_LOG_LEVEL`                   | No       | `INFO`  | Set to `DEBUG` to include full payload+headers in `docker logs debug`                                                          |
-| `FX_RATES_ENABLED`                  | No       | `false` | Attach `fxRate`/`fxRateBase`/`fxRateSource` to each Trade (see [FX Rate Enrichment](#fx-rate-enrichment))                      |
-| `FX_RATES_BASE_CURRENCY`            | No\*     | —       | ISO-4217 base currency (required when `FX_RATES_ENABLED=true`)                                                                 |
-| `FX_RATE_API_KEY`                   | No       | —       | [exchangerate-api.com](https://www.exchangerate-api.com) key — enables historical rates                                        |
-| `FX_CACHE_RETENTION_DAYS`           | No       | `730`   | Days to retain cached historical rates in the meta DB                                                                          |
+| Variable                            | Required | Default                 | Description                                                                                                                    |
+| ----------------------------------- | -------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `SITE_DOMAIN`                       | Yes      | —                       | Domain for the relay API (see [Domains & HTTPS](#domains--https))                                                              |
+| `API_TOKEN`                         | Yes      | —                       | Bearer token for `/relays/*` endpoints (`openssl rand -hex 32`)                                                                |
+| `RELAYS`                            | No       | —                       | Comma-separated relay adapters (e.g. `ibkr`, `ibkr,kraken`). Empty = API server only                                           |
+| `NOTIFIERS`                         | No       | —                       | Active notification backends (e.g. `webhook`). Empty = dry-run                                                                 |
+| `TARGET_WEBHOOK_URL`                | No       | —                       | Webhook endpoint (empty = log-only dry-run)                                                                                    |
+| `WEBHOOK_SECRET`                    | No       | —                       | HMAC-SHA256 key for signing payloads (required if NOTIFIERS=webhook)                                                           |
+| `POLL_INTERVAL`                     | No       | `600`                   | Flex poll interval (seconds). **IBKR limit: 10 req/minute per token (shared across query IDs) — do not set below 420 (7 min)** |
+| `POLLER_ENABLED`                    | No       | `true`                  | Set to `false` to disable the poller globally (relay override: `{RELAY}_POLLER_ENABLED`)                                       |
+| `LISTENER_ENABLED`                  | No       | —                       | Set to `true` to enable real-time WS listeners globally; IBKR requires `ibkr_bridge`, Kraken does not                          |
+| `LISTENER_DEBOUNCE_MS`              | No       | `0`                     | Milliseconds to buffer fills before flushing                                                                                   |
+| `IBKR_LISTENER_EXEC_EVENTS_ENABLED` | No       | `false`                 | Enable `execDetailsEvent` webhooks (2x volume, lower latency)                                                                  |
+| `DEBUG_WEBHOOK_PATH`                | No       | —                       | Route webhooks to debug inbox instead of `TARGET_WEBHOOK_URL` (see [Debug Webhook Inbox](#debug-webhook-inbox))                |
+| `MAX_DEBUG_WEBHOOK_PAYLOADS`        | No       | `100`                   | Max payloads stored in the debug inbox (hard max: 150, FIFO eviction)                                                          |
+| `DEBUG_LOG_LEVEL`                   | No       | `INFO`                  | Set to `DEBUG` to include full payload+headers in `docker logs debug`                                                          |
+| `FX_RATES_ENABLED`                  | No       | `false`                 | Attach `fxRate`/`fxRateBase`/`fxRateSource` to each Trade (see [FX Rate Enrichment](#fx-rate-enrichment))                      |
+| `FX_RATES_BASE_CURRENCY`            | No\*     | —                       | ISO-4217 base currency (required when `FX_RATES_ENABLED=true`)                                                                 |
+| `FX_RATE_API_KEY`                   | No       | —                       | [exchangerate-api.com](https://www.exchangerate-api.com) key — enables historical rates                                        |
+| `FX_CACHE_RETENTION_DAYS`           | No       | `730`                   | Days to retain cached historical rates in the meta DB                                                                          |
+| `RESEND_API_KEY`                    | No\*     | —                       | Resend API key — enables [Operational Alerts](#operational-alerts) when set with `ALERT_REPORT_EMAIL_TO`                       |
+| `ALERT_REPORT_EMAIL_TO`             | No\*     | —                       | Recipient email for delivery-failure alerts (required to enable alerts)                                                        |
+| `ALERT_EMAIL_FROM`                  | No       | `onboarding@resend.dev` | Optional sender address (must be verified in Resend for production use)                                                        |
+| `ALERT_COOLDOWN_MINUTES`            | No       | `60`                    | Suppress duplicate alerts for the same destination within this window                                                          |
 
 ### `.env.droplet` — CLI-only (never pushed to containers)
 
@@ -453,6 +458,31 @@ make logs S=debug
 Payloads are logged at DEBUG level (full payload + headers). At INFO level (default), only a count summary is logged. Log rotation is aggressive (`max-size: 10k`) so sensitive data does not accumulate on disk.
 
 To disable, remove or comment out `DEBUG_WEBHOOK_PATH` and run `make sync`. The container stops automatically (`DEBUG_REPLICAS=0`).
+
+### Operational Alerts
+
+When a notifier fails to deliver (after retries exhaust), the relay can email the operator via [Resend](https://resend.com/) so a broken destination — quota-exhausted webhook, dead URL, malformed receiver — surfaces immediately instead of being buried in `docker logs`.
+
+Alerting is **opt-in**. If `RESEND_API_KEY` or `ALERT_REPORT_EMAIL_TO` is unset, the alerter is a silent no-op. Enable it by setting both required vars in `.env`:
+
+```env
+RESEND_API_KEY=re_xxxxxxxxxxxx
+ALERT_REPORT_EMAIL_TO=ops@example.com
+#ALERT_EMAIL_FROM=alerts@example.com   # optional, defaults to onboarding@resend.dev
+#ALERT_COOLDOWN_MINUTES=60             # optional, default 60
+```
+
+**What triggers an alert.** Each notifier failure (per-backend, after retries exhaust) fires one email. Partial-success cycles still alert on the failing backend. The body includes:
+
+- Notifier class, relay name, suffix, destination URL
+- Attempt count and the underlying exception message — including the receiver's response body excerpt (e.g. `"You've exceeded your daily quota"`)
+- Timestamp and a CTA pointing the operator at logs
+
+**What does NOT go in the email.** The trade payload itself is intentionally omitted — it can contain account IDs and execution data.
+
+**Throttling.** The first failure for a given destination fires immediately. Subsequent failures within `ALERT_COOLDOWN_MINUTES` (default 60) are suppressed. State is in-memory: a container restart with a still-broken destination re-fires once, which is itself useful signal.
+
+**Best-effort guarantee.** Alert delivery never raises, never affects the retry/mark-processed contract. A misconfigured `ALERT_COOLDOWN_MINUTES`, a Resend outage, or a network error all log a single line and are otherwise invisible to the relay.
 
 ## IBKR Setup
 

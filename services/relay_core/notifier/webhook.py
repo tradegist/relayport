@@ -9,6 +9,7 @@ import httpx
 from pydantic import BaseModel
 
 from relay_core.env import get_env
+from shared import safe_http_error_context
 
 from .base import BaseNotifier
 
@@ -65,6 +66,8 @@ class WebhookNotifier(BaseNotifier):
     name = "webhook"
 
     def __init__(self, prefix: str = "", suffix: str = "") -> None:
+        self._prefix = prefix
+        self._suffix = suffix
         self._url = _resolve_webhook_url(prefix, suffix)
         self._secret = _get_webhook_secret(prefix, suffix)
         self._header_name = _get_webhook_header_name(prefix, suffix)
@@ -139,5 +142,18 @@ class WebhookNotifier(BaseNotifier):
             headers=headers,
             timeout=10.0,
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # Surface a sanitised diagnostic context (request-id, capped
+            # text/json body) so downstream logs and alert emails can
+            # show *why* the receiver rejected the request without
+            # echoing arbitrary HTML/binary content.
+            context = safe_http_error_context(exc.response)
+            msg = f"{exc} — {context}" if context else str(exc)
+            raise httpx.HTTPStatusError(
+                msg,
+                request=exc.request,
+                response=exc.response,
+            ) from exc
         log.info("Webhook sent — status %d", resp.status_code)

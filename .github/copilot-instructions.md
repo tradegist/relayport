@@ -115,8 +115,8 @@ RelayPort is a **relay between broker accounts** that provides clear, common int
 ## Dependency Management
 
 - **Runtime deps (`services/relay_core/requirements.txt`)** use exact pins (`==`). These are deployed to production containers — builds must be reproducible.
-- **Dev deps (`requirements-dev.txt`)** use major-version constraints (`>=X,<X+1`). This allows minor/patch updates while preventing breaking changes.
-- **When adding a new dependency**, always pin it immediately — never leave it unpinned. Use exact pin for runtime, major-version constraint for dev.
+- **`requirements-dev.txt` contains only dev-only tools** (mypy, pytest, ruff). Runtime deps (`pydantic`, `httpx`, etc.) belong exclusively in `services/relay_core/requirements.txt`. Both files are always installed together (CI and `make setup`), so runtime deps are available in the dev environment without duplication. Never add a runtime dep to `requirements-dev.txt` — it would create two separate Dependabot PRs for the same package with no way to combine them.
+- **When adding a new dependency**, always pin it immediately — never leave it unpinned. Runtime deps go in the service's `requirements.txt` with an exact pin (`==`); dev-only tools go in `requirements-dev.txt` with a major-version constraint (`>=X,<X+1`).
 - **All services pinning the same dependency must use the same version.** When multiple `requirements.txt` files pin the same package (e.g. `aiohttp`), keep versions aligned. Check existing pins with `grep -r 'aiohttp==' services/*/requirements.txt` before adding a new one.
 
 ## Environment Files
