@@ -640,8 +640,8 @@ Direct CLI (no Make required, works on Windows):
 python3 -m cli deploy
 python3 -m cli sync --local-files
 python3 -m cli poll ibkr 1
-python3 -m cli watermark-reset            # all relays
-python3 -m cli watermark-reset ibkr       # single relay
+python3 -m cli watermark-reset               # all relays
+python3 -m cli watermark-reset --relay ibkr  # single relay
 ```
 
 ## Deployment Model (MANDATORY)
