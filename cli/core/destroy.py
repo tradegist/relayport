@@ -1,10 +1,11 @@
+import argparse
 import os
 import shutil
 
 from cli.core import config, die, load_env, require_env, terraform
 
 
-def run(args):
+def run(args: argparse.Namespace) -> None:
     if not shutil.which("terraform"):
         die("'terraform' is required but not installed.")
 

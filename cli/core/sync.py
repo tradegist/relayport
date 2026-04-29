@@ -1,10 +1,11 @@
+import argparse
 import shutil
 import subprocess
 
 from cli.core import config, die, env, is_shared, load_env, scp_file, ssh_cmd, ssh_key_path
 
 
-def _run_checks(skip_e2e):
+def _run_checks(skip_e2e: bool) -> None:
     """Run pre-deploy checks: branch, clean tree, typecheck, tests, E2E."""
     cfg = config()
 
@@ -40,7 +41,7 @@ def _run_checks(skip_e2e):
         subprocess.run(["make", "e2e"], check=True, cwd=cfg.project_dir)
 
 
-def _sync_local_files(droplet_ip, *, strict_host_check=True):
+def _sync_local_files(droplet_ip: str, *, strict_host_check: bool = True) -> None:
     """Rsync project files to the droplet."""
     cfg = config()
 
@@ -74,7 +75,7 @@ def _sync_local_files(droplet_ip, *, strict_host_check=True):
     print(f"Deployed commit: {sha[:12]}")
 
 
-def run(args):
+def run(args: argparse.Namespace) -> None:
     load_env()
     cfg = config()
 
@@ -109,7 +110,7 @@ def run(args):
                 f"cd {cfg.remote_dir} && {compose_env}COMPOSE_PROFILES='{profiles}' "
                 f"docker compose {compose_files}up -d {build}--force-recreate")
     else:
-        services = []
+        services: list[str] = []
         for name in args.services:
             svc = cfg.service_map.get(name)
             if not svc:

@@ -109,7 +109,7 @@ def test_listener_receives_commission_fill(
         )
 
     # Verify fill shape.
-    assert fill_trade["side"] in ("BUY", "SELL")
+    assert fill_trade["side"] in ("buy", "sell")
     assert fill_trade["fillCount"] >= 1
     assert fill_trade["volume"] > 0
     assert fill_trade["price"] > 0

@@ -22,6 +22,8 @@ from shared import Fill, RelayName, Trade, aggregate_fills, to_epoch
 
 log = logging.getLogger(__name__)
 
+WATERMARK_KEY_SUFFIX = "last_poll_ts"
+
 
 # ── Poller configuration ─────────────────────────────────────────────
 
@@ -88,8 +90,8 @@ def init_meta_db(db_path: str | None = None) -> sqlite3.Connection:
 def _meta_key(relay_name: str, poller_index: int) -> str:
     """Build a namespaced metadata key for timestamp watermark."""
     if poller_index == 0:
-        return f"{relay_name}:last_poll_ts"
-    return f"{relay_name}:{poller_index}:last_poll_ts"
+        return f"{relay_name}:{WATERMARK_KEY_SUFFIX}"
+    return f"{relay_name}:{poller_index}:{WATERMARK_KEY_SUFFIX}"
 
 
 def get_last_poll_ts(

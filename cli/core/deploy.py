@@ -1,3 +1,4 @@
+import argparse
 import ipaddress
 import os
 import re
@@ -21,7 +22,7 @@ from cli.core import (
 )
 
 
-def _deploy_standalone():
+def _deploy_standalone() -> None:
     """Deploy via Terraform (own droplet), then rsync files and start services."""
     from cli.core.sync import _run_checks, _sync_local_files
 
@@ -131,7 +132,7 @@ def _template_caddy_snippet(src: Path) -> str:
         die(f"Caddy snippet {src.name} references undefined env vars: "
             f"{', '.join(missing)}\nSet them in .env before deploying.")
 
-    def _sub(m: re.Match) -> str:
+    def _sub(m: re.Match[str]) -> str:
         name, default = m.group(1), m.group(2) or ""
         return os.environ.get(name) or default
 
@@ -191,7 +192,7 @@ def _deploy_caddy_snippets(droplet_ip: str) -> None:
                 "caddy reload --config /etc/caddy/Caddyfile")
 
 
-def _deploy_shared():
+def _deploy_shared() -> None:
     """Deploy to an existing shared droplet (no Terraform)."""
     from cli.core.sync import _run_checks, _sync_local_files
 
@@ -224,7 +225,7 @@ def _deploy_shared():
     print()
 
 
-def run(args):
+def run(args: argparse.Namespace) -> None:
     load_env()
 
     mode = deploy_mode()

@@ -10,6 +10,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 from cli.core import CoreConfig, die, env, set_config
 from relay_core.notifier import validate_notifier_env
@@ -67,7 +68,7 @@ def get_relay_env() -> str:
     )
 
 
-def relay_api(path, method="POST", data=None):
+def relay_api(path: str, method: str = "POST", data: dict[str, object] | None = None) -> Any:
     relay_env = get_relay_env()
     base_url = _RELAY_URLS.get(relay_env)
     if base_url:

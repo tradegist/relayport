@@ -1,10 +1,11 @@
+import argparse
 import time
 from datetime import datetime
 
 from cli.core import config, die, do_api, env, load_env
 
 
-def run(args):
+def run(args: argparse.Namespace) -> None:
     cfg = config()
     state_file = cfg.project_dir / ".pause-state"
 

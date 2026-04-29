@@ -1,3 +1,4 @@
+import argparse
 import os
 import subprocess
 import time
@@ -5,7 +6,7 @@ import time
 from cli.core import config, die, do_api, env, load_env, scp_file, ssh_cmd
 
 
-def run(args):
+def run(args: argparse.Namespace) -> None:
     cfg = config()
     state_file = cfg.project_dir / ".pause-state"
 

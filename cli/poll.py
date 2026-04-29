@@ -1,3 +1,4 @@
+import argparse
 import json
 import subprocess
 import sys
@@ -7,7 +8,7 @@ from cli import REMOTE_DIR, get_relay_env, relay_api
 from cli.core import die, env, load_env, ssh_key_path
 
 
-def _start_log_tail(is_local: bool) -> subprocess.Popen[str]:
+def _start_log_tail(is_local: bool) -> "subprocess.Popen[bytes]":
     """Start tailing relays container logs in the background."""
     if is_local:
         cmd = [
@@ -23,7 +24,7 @@ def _start_log_tail(is_local: bool) -> subprocess.Popen[str]:
     return subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)
 
 
-def run(args):
+def run(args: argparse.Namespace) -> None:
     load_env()
 
     relay = getattr(args, "relay", "ibkr")

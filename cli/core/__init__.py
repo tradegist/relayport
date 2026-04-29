@@ -14,7 +14,7 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast, overload
+from typing import Any, NoReturn, cast, overload
 
 _UNSET = object()
 _VALID_DEPLOY_MODES = ("standalone", "shared")
@@ -137,7 +137,7 @@ def register_parsers(sub: "argparse._SubParsersAction[argparse.ArgumentParser]")
 
 # ── Generic helpers ─────────────────────────────────────────────────
 
-def die(msg: str) -> "None":
+def die(msg: str) -> NoReturn:
     print(f"Error: {msg}", file=sys.stderr)
     sys.exit(1)
 
@@ -245,7 +245,7 @@ def scp_file(
 
 # ── DigitalOcean API ────────────────────────────────────────────────
 
-def do_api(method: str, path: str, data: dict[str, object] | None = None) -> dict[str, object] | None:
+def do_api(method: str, path: str, data: dict[str, object] | None = None) -> dict[str, Any]:
     token = env("DO_API_TOKEN")
     url = f"https://api.digitalocean.com/v2{path}"
     body = json.dumps(data).encode() if data else None
@@ -255,11 +255,10 @@ def do_api(method: str, path: str, data: dict[str, object] | None = None) -> dic
     try:
         with urllib.request.urlopen(req) as resp:
             content = resp.read()
-            return json.loads(content) if content else None
+            return json.loads(content) if content else {}
     except urllib.error.HTTPError as e:
         err_body = e.read().decode()
         die(f"DO API error ({e.code} {method} {path}): {err_body}")
-        return None  # unreachable, satisfies type checker
 
 
 # ── Terraform ───────────────────────────────────────────────────────

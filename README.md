@@ -38,6 +38,7 @@ Currently supports **IBKR** (Interactive Brokers) via the Flex Web Service and *
 - [IBKR Setup](#ibkr-setup)
 - [Kraken Setup](#kraken-setup)
 - [On-Demand Poll](#on-demand-poll)
+- [Watermark Management](#watermark-management)
 - [Pause & Resume](#pause--resume)
 - [Security](#security)
 - [Current Status](#current-status)
@@ -641,6 +642,28 @@ source .env && curl -s -X POST "https://${SITE_DOMAIN}/relays/ibkr/poll/1" \
   -H "Authorization: Bearer ${API_TOKEN}" \
   | python3 -m json.tool
 ```
+
+## Watermark Management
+
+The relay uses a timestamp watermark per poller to skip fills already seen in previous cycles. In normal operation this is fully automatic. Use `watermark-reset` to fast-forward the watermark to the current time so the next poll skips any older backlog and starts fresh from new fills only. This is useful when you intentionally want to discard a backlog — for example, after a long outage when you only care about new activity going forward.
+
+```bash
+make watermark-reset              # set watermark to now for all relays
+make watermark-reset RELAY=ibkr  # set watermark to now for ibkr only
+make watermark-reset ENV=local    # target the local Docker stack
+```
+
+Or use the CLI directly:
+
+```bash
+python3 -m cli watermark-reset                       # all relays
+python3 -m cli watermark-reset --relay ibkr          # single relay
+python3 -m cli watermark-reset --relay ibkr kraken   # multiple relays
+```
+
+The command resets watermark keys already present in the metadata DB for the given relay(s) to `int(time.time())`. If a relay has no watermark rows yet, it initializes the default poller watermark for that relay. Poller indices that have never written metadata yet (for example, a multi-account `_2` poller before its first successful poll) are not discovered by this command until they have run at least once. After the reset, the next poll cycle will only process fills timestamped at or after that moment for the pollers whose watermark keys were reset.
+
+> **Note:** The dedup layer is not cleared by this command — fills already marked as processed are still skipped. To also clear dedup state use `make reset-db` (drops both tables) or `make poll REPLAY=N` to resend the last N fills regardless of dedup state.
 
 ## Pause & Resume
 

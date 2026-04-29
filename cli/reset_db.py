@@ -1,3 +1,4 @@
+import argparse
 import subprocess
 import sys
 
@@ -17,7 +18,7 @@ _RESET_SCRIPT = (
 )
 
 
-def run(args):
+def run(args: argparse.Namespace) -> None:
     load_env()
     # Reads RELAY_ENV (set by make ENV=local) or falls back to DEFAULT_CLI_ENV.
     relay_env = get_relay_env()

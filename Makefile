@@ -1,4 +1,4 @@
-.PHONY: deps setup deploy destroy pause resume sync poll test-webhook ibkr-flex-dump ibkr-flex-refresh types test typecheck lint e2e e2e-up e2e-run e2e-down local-up local-down logs stats ssh help
+.PHONY: deps setup deploy destroy pause resume sync poll test-webhook watermark-reset ibkr-flex-dump ibkr-flex-refresh types test typecheck lint e2e e2e-up e2e-run e2e-down local-up local-down logs stats ssh help
 
 PROJECT = relayport
 PYTHON ?= .venv/bin/python3
@@ -78,6 +78,10 @@ test-webhook: ## Send sample trades to webhook endpoint (make test-webhook [S=2]
 	@$(_RESOLVE_ENV) \
 	RELAY_ENV=$$env $(PYTHON) -m cli test-webhook $(S)
 
+watermark-reset: ## Reset timestamp watermark to now [RELAY=ibkr or empty for all] [ENV=local]
+	@$(_RESOLVE_ENV) \
+	RELAY_ENV=$$env $(PYTHON) -m cli watermark-reset $(if $(RELAY),--relay $(RELAY))
+
 ibkr-flex-dump: ## Dump a live IBKR Flex XML response (make ibkr-flex-dump [F=/tmp/raw.xml] [S=_2] [LOOKBACK_DAYS=40])
 	@test -f .env.relays || { echo "ERROR: .env.relays not found — create it from env_examples/env.relays"; exit 1; }; \
 	set -a; . ./.env.relays; set +a; \
@@ -121,7 +125,7 @@ test: ## Run unit tests
 	PYTHONPATH=.:services:services/relay_core:services/debug $(PYTHON) -m pytest -v
 
 typecheck: ## Run mypy strict type checking
-	MYPYPATH=services/relay_core:services $(PYTHON) -m mypy cli/test_webhook.py
+	MYPYPATH=services/relay_core:services $(PYTHON) -m mypy cli/
 	MYPYPATH=services $(PYTHON) -m mypy services/shared/
 	MYPYPATH=services $(PYTHON) -m mypy services/relay_core/
 	MYPYPATH=services $(PYTHON) -m mypy services/relays/
@@ -171,8 +175,8 @@ e2e-up: ## Start E2E test stack (relays + debug)
 e2e-down: ## Stop and remove E2E test stack
 	$(E2E_COMPOSE_DOWN) down
 
-e2e-run: ## Run E2E tests (stack must be up)
-	@$(E2E_COMPOSE) restart relays debug > /dev/null 2>&1 && sleep 3
+e2e-run: ## Run E2E tests (stack must be up; recreates containers to pick up .env.test changes)
+	@$(E2E_COMPOSE) up -d --force-recreate --wait relays debug > /dev/null 2>&1
 	$(PYTHON) -m pytest services/relay_core/tests/e2e/ -v
 
 e2e: ## Run E2E tests (starts/stops stack automatically)
