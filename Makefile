@@ -126,7 +126,6 @@ types: ## Regenerate TypeScript + Python types from Pydantic models
 	$(PYTHON) gen_ts_barrels.py
 	$(PYTHON) gen_python_types.py
 	$(PYTHON) -m ruff check types/python/relayport_types/ --fix --quiet
-	$(MAKE) typecheck
 
 test: ## Run unit tests
 	PYTHONPATH=.:services:services/relay_core:services/debug $(PYTHON) -m pytest -v
