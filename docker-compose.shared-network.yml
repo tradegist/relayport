@@ -1,0 +1,18 @@
+# Mark the shared Docker network as externally-managed.
+#
+# Applied by the CLI whenever SHARED_NETWORK is set in .env / .env.droplet.
+# The CLI pre-creates the network on the droplet (idempotent) before running
+# `docker compose up`, so deployment order across projects no longer matters.
+#
+# Without this overlay, the base docker-compose.yml declares the network with
+# only `name: ${SHARED_NETWORK:-}`, which makes Compose try to "own" the
+# network for the current project — producing a warning when another project
+# created it first.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.shared-network.yml up -d
+
+networks:
+  default:
+    name: ${SHARED_NETWORK:?Set SHARED_NETWORK to use the shared-network overlay}
+    external: true

@@ -7,6 +7,7 @@ Project-specific config is injected via ``CoreConfig``.
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -18,6 +19,10 @@ from typing import Any, NoReturn, cast, overload
 
 _UNSET = object()
 _VALID_DEPLOY_MODES = ("standalone", "shared")
+# Docker network names: start with alphanumeric, then alphanumeric/_/./- only.
+# Matches the moby/moby validator; we enforce it locally to keep injected
+# shell metacharacters out of remote `docker network ...` invocations.
+_DOCKER_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 
 
 # ── CoreConfig ──────────────────────────────────────────────────────
@@ -207,6 +212,52 @@ def deploy_mode() -> str:
 
 def is_shared() -> bool:
     return deploy_mode() == "shared"
+
+
+# ── Shared Docker network ───────────────────────────────────────────
+
+def shared_network() -> str:
+    """Return SHARED_NETWORK env var (trimmed); empty string if unset.
+
+    The value is interpolated into remote ``docker network ...`` commands,
+    so reject anything outside Docker's network-name grammar
+    (``[a-zA-Z0-9][a-zA-Z0-9_.-]*``) here. This blocks shell metacharacters
+    at the source rather than relying on every call site to quote.
+    """
+    val = os.environ.get("SHARED_NETWORK", "").strip()
+    if val and not _DOCKER_NAME_RE.fullmatch(val):
+        die(f"SHARED_NETWORK={val!r} is not a valid Docker network name "
+            f"(must match [a-zA-Z0-9][a-zA-Z0-9_.-]*).")
+    return val
+
+
+def shared_network_compose_flag() -> str:
+    """Return the ``-f docker-compose.shared-network.yml `` flag when
+    SHARED_NETWORK is set (with trailing space), else empty string.
+
+    The overlay marks the shared network as ``external: true`` so Compose
+    does not try to own it. Without the overlay, Compose attempts to claim
+    the network for the current project and warns if another project
+    created it first.
+    """
+    return "-f docker-compose.shared-network.yml " if shared_network() else ""
+
+
+def ensure_shared_network(droplet_ip: str) -> None:
+    """Idempotently create the SHARED_NETWORK on the droplet.
+
+    No-op when SHARED_NETWORK is unset. Safe to run on every deploy/sync —
+    ``docker network inspect`` returns non-zero (network missing) → create;
+    otherwise the create step is skipped.
+    """
+    net = shared_network()
+    if not net:
+        return
+    print(f"Ensuring shared Docker network '{net}' exists on droplet...")
+    ssh_cmd(
+        droplet_ip,
+        f"docker network inspect {net} >/dev/null 2>&1 || docker network create {net}",
+    )
 
 
 # ── SSH ─────────────────────────────────────────────────────────────
