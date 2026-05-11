@@ -1,5 +1,6 @@
 """Unit tests for notifier registry, loader, and dispatcher."""
 
+from collections.abc import Generator
 from typing import cast
 from unittest.mock import MagicMock, patch
 
@@ -131,6 +132,21 @@ class TestLoadNotifiers:
 
 
 class TestNotify:
+    @pytest.fixture(autouse=True)
+    def _mute_send_alert(self) -> Generator[MagicMock]:
+        """Stub ``send_alert`` for every test in this class.
+
+        These tests pass ``MagicMock`` notifiers that raise on ``.send()``,
+        which makes ``notify()`` reach the real ``send_alert``. With a real
+        ``RESEND_API_KEY`` + ``ALERT_REPORT_EMAIL_TO`` in the environment
+        (e.g. when run via ``make sync LOCAL_FILES=1``, which loads ``.env``
+        before invoking ``make test``), that would POST to Resend for real.
+        ``TestNotifyAlerter`` further down asserts the alerting contract
+        explicitly; here we just need the no-op.
+        """
+        with patch("relay_core.notifier.send_alert") as m:
+            yield m
+
     def test_dispatches_to_all(self) -> None:
         n1 = MagicMock()
         n2 = MagicMock()
