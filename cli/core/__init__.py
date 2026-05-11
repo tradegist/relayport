@@ -7,6 +7,7 @@ Project-specific config is injected via ``CoreConfig``.
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -18,6 +19,10 @@ from typing import Any, NoReturn, cast, overload
 
 _UNSET = object()
 _VALID_DEPLOY_MODES = ("standalone", "shared")
+# Docker network names: start with alphanumeric, then alphanumeric/_/./- only.
+# Matches the moby/moby validator; we enforce it locally to keep injected
+# shell metacharacters out of remote `docker network ...` invocations.
+_DOCKER_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 
 
 # ── CoreConfig ──────────────────────────────────────────────────────
@@ -212,8 +217,18 @@ def is_shared() -> bool:
 # ── Shared Docker network ───────────────────────────────────────────
 
 def shared_network() -> str:
-    """Return SHARED_NETWORK env var (trimmed); empty string if unset."""
-    return os.environ.get("SHARED_NETWORK", "").strip()
+    """Return SHARED_NETWORK env var (trimmed); empty string if unset.
+
+    The value is interpolated into remote ``docker network ...`` commands,
+    so reject anything outside Docker's network-name grammar
+    (``[a-zA-Z0-9][a-zA-Z0-9_.-]*``) here. This blocks shell metacharacters
+    at the source rather than relying on every call site to quote.
+    """
+    val = os.environ.get("SHARED_NETWORK", "").strip()
+    if val and not _DOCKER_NAME_RE.fullmatch(val):
+        die(f"SHARED_NETWORK={val!r} is not a valid Docker network name "
+            f"(must match [a-zA-Z0-9][a-zA-Z0-9_.-]*).")
+    return val
 
 
 def shared_network_compose_flag() -> str:

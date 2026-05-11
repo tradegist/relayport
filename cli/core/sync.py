@@ -100,6 +100,15 @@ def run(args: argparse.Namespace) -> None:
     if args.local_files:
         _run_checks(args.skip_e2e)
         _sync_local_files(droplet_ip)
+    elif shared_network_compose_flag():
+        # `make sync` (without --local-files) doesn't rsync project files, so
+        # the shared-network overlay must be pushed explicitly. With
+        # --local-files the rsync above has already pushed the same file.
+        scp_file(
+            cfg.project_dir / "docker-compose.shared-network.yml",
+            f"{cfg.remote_dir}/docker-compose.shared-network.yml",
+            droplet_ip,
+        )
 
     build = "--build " if (args.build or args.local_files) else ""
 
@@ -108,8 +117,9 @@ def run(args: argparse.Namespace) -> None:
     # standalone host project still uses the shared-network overlay when it sets
     # SHARED_NETWORK so it joins the same externally-managed network.
     if is_shared() and not shared_network():
-        die("SHARED_NETWORK must be set in .env when DEPLOY_MODE=shared "
-            "(it names the Docker network shared with the host project).")
+        die("SHARED_NETWORK must be set in .env or .env.droplet when "
+            "DEPLOY_MODE=shared (it names the Docker network shared with "
+            "the host project).")
     overlays = ""
     if is_shared():
         overlays += "-f docker-compose.shared.yml "

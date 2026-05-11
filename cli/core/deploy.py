@@ -225,8 +225,9 @@ def _deploy_shared() -> None:
     # the host project's Caddy), so the shared-network overlay always applies.
     net_overlay = shared_network_compose_flag()
     if not net_overlay:
-        die("SHARED_NETWORK must be set in .env when DEPLOY_MODE=shared "
-            "(it names the Docker network shared with the host project).")
+        die("SHARED_NETWORK must be set in .env or .env.droplet when "
+            "DEPLOY_MODE=shared (it names the Docker network shared with "
+            "the host project).")
     print("Starting services (shared mode)...")
     ssh_cmd(droplet_ip,
             f"cd {cfg.remote_dir} && {compose_env}COMPOSE_PROFILES='{profiles}' "
