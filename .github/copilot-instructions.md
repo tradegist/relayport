@@ -268,12 +268,17 @@ The deployment mode is controlled by `DEPLOY_MODE` in `.env.droplet` (required, 
 
 ### Shared Mode (`DEPLOY_MODE=shared`)
 
-- Set `DROPLET_IP` and `SSH_KEY` in `.env.droplet` (no `DO_API_TOKEN` needed).
-- `make deploy` rsyncs files, pushes `.env` + `.env.relays`, and starts services using `docker-compose.shared.yml` overlay.
-- The shared overlay disables Caddy (the host project runs it) and connects all containers to the shared Docker network (`SHARED_NETWORK` env var, typically `relay-net`).
-- **`SHARED_NETWORK` controls cross-project networking.** The base `docker-compose.yml` uses `name: ${SHARED_NETWORK:-}` for the default network. When unset, Docker Compose creates a project-scoped network (isolated). When set to the same value across projects (e.g. `relay-net`), all projects share a single network and can reach each other's containers by service name. The shared overlay (`docker-compose.shared.yml`) sets the network to `external: true`, which merges on top of the base definition.
+- Set `DROPLET_IP`, `SSH_KEY`, and `SHARED_NETWORK` in `.env.droplet` (no `DO_API_TOKEN` needed). `SHARED_NETWORK` is **required** in shared mode — the CLI fails fast with a clear error if it's unset.
+- `make deploy` rsyncs files, pushes `.env` + `.env.relays`, ensures the shared Docker network exists on the droplet, and starts services with the `docker-compose.shared.yml` + `docker-compose.shared-network.yml` overlays.
+- The `docker-compose.shared.yml` overlay disables Caddy (the host project runs it). The `docker-compose.shared-network.yml` overlay marks the shared network as `external: true` so Compose joins it rather than trying to own it.
 - Caddy snippet files must be deployed to the host project's Caddy to enable routing.
-- `make sync` uses the shared compose overlay automatically.
+- `make sync` uses both overlays automatically.
+
+### Shared Network (`SHARED_NETWORK`)
+
+- **`SHARED_NETWORK` controls cross-project networking.** The base `docker-compose.yml` uses `name: ${SHARED_NETWORK:-}` for the default network. When unset, Compose creates an isolated project-scoped network. When set (e.g. `relay-net`), the CLI **always** applies `docker-compose.shared-network.yml`, which adds `external: true` on top of the base name. Both host and shared projects therefore declare the network as external and join an externally-managed network.
+- **The CLI is the network owner.** Before running `docker compose up`, `cli/core/__init__.py::ensure_shared_network` runs `docker network inspect <name> >/dev/null 2>&1 || docker network create <name>` on the droplet. This is idempotent — safe to call on every deploy/sync — and removes any ordering dependency between projects (relayport and ibkr_bridge can deploy in either order).
+- **Running `docker compose up` manually on the droplet bypasses the CLI's overlay assembly** and falls back to the base `name: ${SHARED_NETWORK:-}` only. This re-introduces the "network was not created for project X" warning. Always go through `make sync` / `make deploy` for production operations.
 
 ## Droplet Sizing
 
@@ -672,8 +677,9 @@ env_examples/              # Env var templates (make setup copies to .<name>)
   env.droplet              # CLI-only deployment config (.env.droplet)
   env.relays               # Relay-prefixed vars (.env.relays)
   env.test                 # E2E test config (.env.test)
-docker-compose.yml         # All services (caddy, relays, debug)
-docker-compose.shared.yml  # Shared-mode overlay (disables Caddy, uses SHARED_NETWORK)
+docker-compose.yml             # All services (caddy, relays, debug)
+docker-compose.shared.yml      # Shared-mode overlay (disables Caddy)
+docker-compose.shared-network.yml # Marks SHARED_NETWORK as external (CLI pre-creates it)
 docker-compose.local.yml   # Local dev override (direct port access, no TLS)
 docker-compose.test.yml    # Test stack override (env_file: !override with .env.test)
 cli/                       # Python CLI (operator scripts, stdlib only)

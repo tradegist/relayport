@@ -2,7 +2,19 @@ import argparse
 import shutil
 import subprocess
 
-from cli.core import config, die, env, is_shared, load_env, scp_file, ssh_cmd, ssh_key_path
+from cli.core import (
+    config,
+    die,
+    ensure_shared_network,
+    env,
+    is_shared,
+    load_env,
+    scp_file,
+    shared_network,
+    shared_network_compose_flag,
+    ssh_cmd,
+    ssh_key_path,
+)
 
 
 def _run_checks(skip_e2e: bool) -> None:
@@ -91,16 +103,26 @@ def run(args: argparse.Namespace) -> None:
 
     build = "--build " if (args.build or args.local_files) else ""
 
-    # Shared mode uses the shared compose overlay
-    compose_files = ""
+    # Assemble compose overlays: shared-mode (disable Caddy) and/or shared-network
+    # (mark relay-net as external). Either may apply independently — e.g. a
+    # standalone host project still uses the shared-network overlay when it sets
+    # SHARED_NETWORK so it joins the same externally-managed network.
+    if is_shared() and not shared_network():
+        die("SHARED_NETWORK must be set in .env when DEPLOY_MODE=shared "
+            "(it names the Docker network shared with the host project).")
+    overlays = ""
     if is_shared():
-        compose_files = "-f docker-compose.yml -f docker-compose.shared.yml "
+        overlays += "-f docker-compose.shared.yml "
+    overlays += shared_network_compose_flag()
+    compose_files = f"-f docker-compose.yml {overlays}" if overlays else ""
 
     print("Pushing env files to droplet...")
     scp_file(cfg.project_dir / ".env", f"{cfg.remote_dir}/.env", droplet_ip)
     relays_env = cfg.project_dir / ".env.relays"
     if relays_env.exists():
         scp_file(relays_env, f"{cfg.remote_dir}/.env.relays", droplet_ip)
+
+    ensure_shared_network(droplet_ip)
 
     compose_env = cfg.compose_env()
 

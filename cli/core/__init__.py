@@ -209,6 +209,42 @@ def is_shared() -> bool:
     return deploy_mode() == "shared"
 
 
+# ── Shared Docker network ───────────────────────────────────────────
+
+def shared_network() -> str:
+    """Return SHARED_NETWORK env var (trimmed); empty string if unset."""
+    return os.environ.get("SHARED_NETWORK", "").strip()
+
+
+def shared_network_compose_flag() -> str:
+    """Return the ``-f docker-compose.shared-network.yml `` flag when
+    SHARED_NETWORK is set (with trailing space), else empty string.
+
+    The overlay marks the shared network as ``external: true`` so Compose
+    does not try to own it. Without the overlay, Compose attempts to claim
+    the network for the current project and warns if another project
+    created it first.
+    """
+    return "-f docker-compose.shared-network.yml " if shared_network() else ""
+
+
+def ensure_shared_network(droplet_ip: str) -> None:
+    """Idempotently create the SHARED_NETWORK on the droplet.
+
+    No-op when SHARED_NETWORK is unset. Safe to run on every deploy/sync —
+    ``docker network inspect`` returns non-zero (network missing) → create;
+    otherwise the create step is skipped.
+    """
+    net = shared_network()
+    if not net:
+        return
+    print(f"Ensuring shared Docker network '{net}' exists on droplet...")
+    ssh_cmd(
+        droplet_ip,
+        f"docker network inspect {net} >/dev/null 2>&1 || docker network create {net}",
+    )
+
+
 # ── SSH ─────────────────────────────────────────────────────────────
 
 def ssh_key_path() -> str:
