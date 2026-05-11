@@ -17,6 +17,7 @@ from cli.core import (
     load_env,
     require_env,
     scp_file,
+    shared_network_compose_env,
     shared_network_compose_flag,
     ssh_cmd,
     ssh_key_path,
@@ -98,10 +99,12 @@ def _deploy_standalone() -> None:
     # sets SHARED_NETWORK, so it joins the same externally-managed network as
     # downstream shared projects.
     net_overlay = shared_network_compose_flag()
+    net_env = shared_network_compose_env()
     compose_files = f"-f docker-compose.yml {net_overlay}" if net_overlay else ""
     print("Starting services...")
     ssh_cmd(droplet_ip,
-            f"cd {cfg.remote_dir} && {compose_env}COMPOSE_PROFILES='{profiles}' "
+            f"cd {cfg.remote_dir} && {compose_env}{net_env}"
+            f"COMPOSE_PROFILES='{profiles}' "
             f"docker compose {compose_files}up -d --build")
 
     print()
@@ -225,12 +228,14 @@ def _deploy_shared() -> None:
     # the host project's Caddy), so the shared-network overlay always applies.
     net_overlay = shared_network_compose_flag()
     if not net_overlay:
-        die("SHARED_NETWORK must be set in .env or .env.droplet when "
-            "DEPLOY_MODE=shared (it names the Docker network shared with "
-            "the host project).")
+        die("SHARED_NETWORK must be set (in .env or .env.droplet) when "
+            "DEPLOY_MODE=shared — it names the Docker network shared with "
+            "the host project.")
+    net_env = shared_network_compose_env()
     print("Starting services (shared mode)...")
     ssh_cmd(droplet_ip,
-            f"cd {cfg.remote_dir} && {compose_env}COMPOSE_PROFILES='{profiles}' "
+            f"cd {cfg.remote_dir} && {compose_env}{net_env}"
+            f"COMPOSE_PROFILES='{profiles}' "
             f"docker compose -f docker-compose.yml -f docker-compose.shared.yml "
             f"{net_overlay}up -d --build --force-recreate")
 

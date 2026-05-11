@@ -11,6 +11,7 @@ from cli.core import (
     load_env,
     scp_file,
     shared_network,
+    shared_network_compose_env,
     shared_network_compose_flag,
     ssh_cmd,
     ssh_key_path,
@@ -117,9 +118,9 @@ def run(args: argparse.Namespace) -> None:
     # standalone host project still uses the shared-network overlay when it sets
     # SHARED_NETWORK so it joins the same externally-managed network.
     if is_shared() and not shared_network():
-        die("SHARED_NETWORK must be set in .env or .env.droplet when "
-            "DEPLOY_MODE=shared (it names the Docker network shared with "
-            "the host project).")
+        die("SHARED_NETWORK must be set (in .env or .env.droplet) when "
+            "DEPLOY_MODE=shared — it names the Docker network shared with "
+            "the host project.")
     overlays = ""
     if is_shared():
         overlays += "-f docker-compose.shared.yml "
@@ -135,11 +136,13 @@ def run(args: argparse.Namespace) -> None:
     ensure_shared_network(droplet_ip)
 
     compose_env = cfg.compose_env()
+    net_env = shared_network_compose_env()
 
     if not args.services:
         print(f"{'Rebuilding + restarting' if build else 'Restarting'} all services...")
         ssh_cmd(droplet_ip,
-                f"cd {cfg.remote_dir} && {compose_env}COMPOSE_PROFILES='{profiles}' "
+                f"cd {cfg.remote_dir} && {compose_env}{net_env}"
+                f"COMPOSE_PROFILES='{profiles}' "
                 f"docker compose {compose_files}up -d {build}--force-recreate")
     else:
         services: list[str] = []
@@ -153,7 +156,8 @@ def run(args: argparse.Namespace) -> None:
         svc_str = " ".join(services)
         print(f"{'Rebuilding + restarting' if build else 'Restarting'}: {svc_str}...")
         ssh_cmd(droplet_ip,
-                f"cd {cfg.remote_dir} && {compose_env}COMPOSE_PROFILES='{profiles}' "
+                f"cd {cfg.remote_dir} && {compose_env}{net_env}"
+                f"COMPOSE_PROFILES='{profiles}' "
                 f"docker compose {compose_files}up -d {build}--force-recreate {svc_str}")
 
     print("Done.")

@@ -243,6 +243,23 @@ def shared_network_compose_flag() -> str:
     return "-f docker-compose.shared-network.yml " if shared_network() else ""
 
 
+def shared_network_compose_env() -> str:
+    """Return ``SHARED_NETWORK='<value>' `` (trailing space) when set, else empty.
+
+    Prepended to remote ``docker compose`` commands so Compose's variable
+    interpolation always sees ``SHARED_NETWORK`` — even if the user placed it
+    only in ``.env.droplet`` (which is CLI-only and not scp'd to the droplet).
+    Shell-env precedence beats the droplet's ``.env``, so this also acts as a
+    self-correcting nudge when the two files disagree.
+
+    The value passes through ``shared_network()`` which validates it against
+    Docker's name grammar, so direct interpolation is shell-safe; the single
+    quotes match the surrounding style for ``COMPOSE_PROFILES`` etc.
+    """
+    net = shared_network()
+    return f"SHARED_NETWORK='{net}' " if net else ""
+
+
 def ensure_shared_network(droplet_ip: str) -> None:
     """Idempotently create the SHARED_NETWORK on the droplet.
 

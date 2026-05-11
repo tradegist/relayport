@@ -268,7 +268,7 @@ The deployment mode is controlled by `DEPLOY_MODE` in `.env.droplet` (required, 
 
 ### Shared Mode (`DEPLOY_MODE=shared`)
 
-- Set `DROPLET_IP`, `SSH_KEY`, and `SHARED_NETWORK` in `.env.droplet` (no `DO_API_TOKEN` needed). `SHARED_NETWORK` is **required** in shared mode — the CLI fails fast with a clear error if it's unset.
+- Set `DROPLET_IP` and `SSH_KEY` in `.env.droplet` (no `DO_API_TOKEN` needed). Set `SHARED_NETWORK` in `.env` — it's **required** in shared mode and the CLI fails fast with a clear error if it's unset. `.env` is the recommended location for `SHARED_NETWORK` because `.env` is the only file scp'd to the droplet, so a manual `docker compose up` on the droplet — bypassing the CLI — also finds it; the CLI injects the value into the remote command env either way.
 - `make deploy` rsyncs files, pushes `.env` + `.env.relays`, ensures the shared Docker network exists on the droplet, and starts services with the `docker-compose.shared.yml` + `docker-compose.shared-network.yml` overlays.
 - The `docker-compose.shared.yml` overlay disables Caddy (the host project runs it). The `docker-compose.shared-network.yml` overlay marks the shared network as `external: true` so Compose joins it rather than trying to own it.
 - Caddy snippet files must be deployed to the host project's Caddy to enable routing.
@@ -277,6 +277,7 @@ The deployment mode is controlled by `DEPLOY_MODE` in `.env.droplet` (required, 
 ### Shared Network (`SHARED_NETWORK`)
 
 - **`SHARED_NETWORK` controls cross-project networking.** The base `docker-compose.yml` uses `name: ${SHARED_NETWORK:-}` for the default network. When unset, Compose creates an isolated project-scoped network. When set (e.g. `relay-net`), the CLI **always** applies `docker-compose.shared-network.yml`, which adds `external: true` on top of the base name. Both host and shared projects therefore declare the network as external and join an externally-managed network.
+- **`SHARED_NETWORK` may live in either `.env` or `.env.droplet`.** The CLI loads both files locally and explicitly injects `SHARED_NETWORK='<value>'` into the remote `docker compose` command env via `shared_network_compose_env()`, so Compose's `${SHARED_NETWORK:?...}` interpolation succeeds regardless of which file carries the value. Shell-env precedence beats the droplet's `.env`, so the CLI's injection also self-corrects when the two files disagree. `.env` is still the recommended location since it's the only file scp'd to the droplet — putting it there means a manual `docker compose up` (bypassing the CLI) also works.
 - **The CLI is the network owner.** Before running `docker compose up`, `cli/core/__init__.py::ensure_shared_network` runs `docker network inspect <name> >/dev/null 2>&1 || docker network create <name>` on the droplet. This is idempotent — safe to call on every deploy/sync — and removes any ordering dependency between projects (relayport and ibkr_bridge can deploy in either order).
 - **Running `docker compose up` manually on the droplet bypasses the CLI's overlay assembly** and falls back to the base `name: ${SHARED_NETWORK:-}` only. This re-introduces the "network was not created for project X" warning. Always go through `make sync` / `make deploy` for production operations.
 
