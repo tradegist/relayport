@@ -236,6 +236,13 @@
       "title": "WebhookPayloadTrades",
       "type": "object"
     },
+    "WebhookPayload": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/WebhookPayloadTrades"
+        }
+      ]
+    },
     "RunPollResponse": {
       "additionalProperties": false,
       "properties": {
@@ -275,6 +282,9 @@
   },
   "anyOf": [
     {
+      "$ref": "#/$defs/WebhookPayload"
+    },
+    {
       "$ref": "#/$defs/WebhookPayloadTrades"
     },
     {
@@ -282,6 +292,9 @@
     },
     {
       "$ref": "#/$defs/HealthResponse"
+    },
+    {
+      "$ref": "#/$defs/RelayName"
     }
   ]
 }

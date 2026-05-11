@@ -2,6 +2,12 @@
 
 PROJECT = relayport
 PYTHON ?= .venv/bin/python3
+# Pin tool versions so `make types` is deterministic across machines/CI.
+# Bumping these is an explicit, reviewable change.
+JSON2TS_VERSION = 15.0.4
+TYPESCRIPT_VERSION = 5.6.3
+JSON2TS = npx --yes -p json-schema-to-typescript@$(JSON2TS_VERSION) json2ts
+TSC = npx --yes -p typescript@$(TYPESCRIPT_VERSION) tsc
 E2E_ENV = .env.test
 E2E_COMPOSE = SITE_DOMAIN=unused API_TOKEN=test-token docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
 E2E_COMPOSE_DOWN = SITE_DOMAIN=unused API_TOKEN=test-token docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
@@ -113,13 +119,13 @@ ibkr-flex-refresh: ## Refresh IBKR Flex fixture (fetch + auto-detect AF/TC + san
 
 types: ## Regenerate TypeScript + Python types from Pydantic models
 	PYTHONPATH=services $(PYTHON) schema_gen.py shared > types/typescript/shared/types.schema.json
-	npx --yes json-schema-to-typescript types/typescript/shared/types.schema.json > types/typescript/shared/types.d.ts
+	$(JSON2TS) types/typescript/shared/types.schema.json > types/typescript/shared/types.d.ts
 	PYTHONPATH=services $(PYTHON) schema_gen.py relay_core.relay_models > types/typescript/relay_api/types.schema.json
-	npx --yes json-schema-to-typescript types/typescript/relay_api/types.schema.json > types/typescript/relay_api/types.d.ts
+	$(JSON2TS) types/typescript/relay_api/types.schema.json > types/typescript/relay_api/types.d.ts
 	@echo "Generated types/typescript/shared/types.d.ts + types/typescript/relay_api/types.d.ts"
+	$(PYTHON) gen_ts_barrels.py
 	$(PYTHON) gen_python_types.py
 	$(PYTHON) -m ruff check types/python/relayport_types/ --fix --quiet
-	$(MAKE) typecheck
 
 test: ## Run unit tests
 	PYTHONPATH=.:services:services/relay_core:services/debug $(PYTHON) -m pytest -v
@@ -132,10 +138,12 @@ typecheck: ## Run mypy strict type checking
 	MYPYPATH=services/debug $(PYTHON) -m mypy services/debug/
 	$(PYTHON) -m mypy schema_gen.py
 	$(PYTHON) -m mypy gen_python_types.py
+	$(PYTHON) -m mypy gen_ts_barrels.py
 	$(PYTHON) -m mypy types/python/relayport_types/
+	$(TSC) --noEmit -p types/typescript/
 
 lint: ## Run ruff linter (use FIX=1 to auto-fix)
-	$(PYTHON) -m ruff check services/shared/ services/relay_core/ services/relays/ services/debug/ cli/ schema_gen.py gen_python_types.py types/python/relayport_types/ $(if $(FIX),--fix)
+	$(PYTHON) -m ruff check services/shared/ services/relay_core/ services/relays/ services/debug/ cli/ schema_gen.py gen_python_types.py gen_ts_barrels.py types/python/relayport_types/ $(if $(FIX),--fix)
 	@if grep -rn '__all__' services/ types/ cli/ --include='*.py'; then echo "ERROR: __all__ is banned — use explicit re-exports"; exit 1; fi
 
 local-up: ## Start full stack locally (no TLS, direct port access)

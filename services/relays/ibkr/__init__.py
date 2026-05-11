@@ -12,7 +12,7 @@ from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo
 
 import aiohttp
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from relay_core import (
     BaseNotifier,
@@ -35,13 +35,18 @@ from shared import (
     parse_timezone,
 )
 
-from .bridge_models import WsContract, WsEnvelope
+from .bridge_models import WsContract, WsEnvelope, WsFillEnvelope
 from .flex_fetch import RedactTokenFilter, fetch_flex_report
 from .flex_parser import parse_fills
 from .timestamps import bridge_to_iso, flex_date_to_iso
 from .utilities import normalize_asset_class
 
 log = logging.getLogger("relays.ibkr")
+
+# WsEnvelope is a discriminated union (TypeAlias), so we need a TypeAdapter
+# to validate raw dicts against it. Pydantic routes the dict to the right
+# concrete branch based on its ``type`` field.
+_WS_ENVELOPE_ADAPTER: TypeAdapter[WsEnvelope] = TypeAdapter(WsEnvelope)
 
 
 # ── Env var getters (IBKR-specific) ─────────────────────────────────
@@ -217,21 +222,15 @@ _SIDE_MAP: dict[str, BuySell] = {
 }
 
 
-def _map_fill(envelope: WsEnvelope, tz: ZoneInfo) -> Fill:
-    """Map a WsEnvelope with fill data to a relay Fill model.
+def _map_fill(envelope: WsFillEnvelope, tz: ZoneInfo) -> Fill:
+    """Map a WsFillEnvelope to a relay Fill model.
 
     Raises ``ValueError`` describing why the fill was skipped if:
-    - The envelope has no fill data.
     - The execution side is not ``"BOT"`` or ``"SLD"``.
     - The execution time cannot be parsed.
 
     *tz* is the IANA timezone to interpret IBKR's naive timestamps in.
     """
-    if envelope.fill is None:
-        raise ValueError(
-            f"WsEnvelope seq={envelope.seq} type={envelope.type!r} has no fill data"
-        )
-
     ex = envelope.fill.execution
     contract = envelope.fill.contract
     cr = envelope.fill.commissionReport
@@ -387,7 +386,7 @@ def _on_message_factory(
         event_type = data.get("type")
 
         try:
-            envelope = WsEnvelope.model_validate(data)
+            envelope = _WS_ENVELOPE_ADAPTER.validate_python(data)
         except ValidationError as exc:
             sanitized = "; ".join(
                 f"{'.'.join(str(loc) for loc in e['loc'])}: {e['msg']}"
@@ -395,6 +394,17 @@ def _on_message_factory(
             )
             log.error("Failed to validate IBKR WsEnvelope (type=%r): %s", event_type, sanitized)
             return [OnMessageResult(error=f"Invalid IBKR envelope (type={event_type!r})")]
+
+        # _event_filter has already discarded status envelopes, so by the
+        # time we reach the on_message handler we should always be on the
+        # fill branch. Defensive check keeps the type narrowing explicit.
+        if not isinstance(envelope, WsFillEnvelope):
+            log.warning(
+                "Status envelope reached on_message (type=%r) — _event_filter"
+                " should have filtered it out",
+                event_type,
+            )
+            return []
 
         try:
             fill = _map_fill(envelope, tz)

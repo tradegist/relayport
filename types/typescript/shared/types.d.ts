@@ -5,12 +5,13 @@
  * and run json-schema-to-typescript to regenerate this file.
  */
 
-export type TypesSchema = Trade | Fill;
+export type TypesSchema = Trade | Fill | AssetClass | FxRateSource | OrderType | RelayName | Source;
 export type AssetClass = "crypto" | "equity" | "forex" | "future" | "option" | "other";
 export type BuySell = "buy" | "sell";
 export type OrderType = "limit" | "market" | "stop" | "stop_limit" | "trailing_stop";
 export type Source = "commissionReportEvent" | "execDetailsEvent" | "flex" | "rest_poll" | "ws_execution";
 export type FxRateSource = "historical" | "latest";
+export type RelayName = "ibkr" | "kraken";
 
 /**
  * Aggregated trade (one or more fills for the same order).

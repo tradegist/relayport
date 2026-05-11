@@ -323,6 +323,21 @@
     },
     {
       "$ref": "#/$defs/Fill"
+    },
+    {
+      "$ref": "#/$defs/AssetClass"
+    },
+    {
+      "$ref": "#/$defs/FxRateSource"
+    },
+    {
+      "$ref": "#/$defs/OrderType"
+    },
+    {
+      "$ref": "#/$defs/RelayName"
+    },
+    {
+      "$ref": "#/$defs/Source"
     }
   ]
 }

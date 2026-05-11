@@ -5,7 +5,8 @@
  * and run json-schema-to-typescript to regenerate this file.
  */
 
-export type TypesSchema = WebhookPayloadTrades | RunPollResponse | HealthResponse;
+export type TypesSchema = WebhookPayload | WebhookPayloadTrades | RunPollResponse | HealthResponse | RelayName;
+export type WebhookPayload = WebhookPayloadTrades;
 export type RelayName = "ibkr" | "kraken";
 export type BuySell = "buy" | "sell";
 
