@@ -22,6 +22,15 @@ jobs:
       - name: Install dependencies
         run: make deps PYTHON=python3 PIP=pip
 
+      - name: Verify generated types are in sync with source
+        run: |
+          make types PYTHON=python3
+          if ! git diff --quiet; then
+            echo "::error::Generated types are out of sync with the Pydantic source. Run 'make types' locally and commit the result."
+            git --no-pager diff
+            exit 1
+          fi
+
       - name: Run linter
         run: make lint PYTHON=python3
 

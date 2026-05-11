@@ -11,11 +11,13 @@ RelayPort is a **relay between broker accounts** that provides clear, common int
 ## Code Quality (MANDATORY)
 
 - **Always apply best practices by default.** Do not ask the user whether to follow a best practice — just do it. Use idiomatic Python naming, file organization, and patterns. When there is a clearly better approach (naming, structure, error handling), use it directly and explain why.
+- **NEVER use deprecated APIs.** If the standard library, a Pydantic version, or any third-party package marks an API as deprecated, do not call it — find the replacement and use it. Examples: `asyncio.get_event_loop()` → `asyncio.get_running_loop()`; `datetime.utcnow()` → `datetime.now(UTC)`; Pydantic v1 `parse_obj` / `dict()` → v2 `model_validate` / `model_dump`. If a deprecation warning lands during code review, that's a regression — fix the call, don't suppress the warning. When introducing a new dependency or pattern, scan the docs for "deprecated" before relying on anything.
 - **No unused imports.** After writing or editing any Python file, verify every `import` is actually used in the file. Remove any that are not. This applies to new files and edits to existing files alike.
 - **No `__all__`.** All imports are explicit (`from module import X`). `__all__` only controls star-imports, which we never use.
 - **No `assert` for runtime guards.** `assert` is stripped under `python -O`, turning invariant checks into silent `None`/`AttributeError`. Use `if ... raise RuntimeError(...)` (or `die()`) for any check that must hold at runtime.
 - **Makefile must mirror CLI arguments.** When adding a new parameter to a `cli/` command, always add the corresponding `$(if $(VAR),--flag $(VAR))` to the Makefile target so `make <target> VAR=value` works. **CLI parameters that are optional in the Makefile must be named flags (`--currency`, `--exchange`), never positional args.** When the Makefile uses `$(if $(VAR),...)`, omitting `VAR` omits the entire argument — if the CLI parameter is positional, downstream args shift into the wrong position and get silently misparsed.
 - **Update README.md when changing public interfaces.** When adding or modifying CLI commands, Makefile targets, API endpoints, or env vars, always update the README to reflect the change.
+- **Verify Markdown table integrity after every edit.** When inserting or rewriting a row inside a `|`-delimited table, count the column dividers on the changed row(s) AND the header / separator rows — they must all match. Two specific failure modes have already shipped: (1) a bare `|` inside a cell (e.g. `HH:MM AM|PM`) is parsed as a column delimiter and splits the row across two cells; either escape with `\|` or rewrite (e.g. `HH:MM AM/PM`); (2) a separator row gets an extra `| ----- |` segment from a prior bad merge, mismatching the body. Quick sanity check: `awk -F'\|' 'NR>=START && NR<=END { print NR": "NF" cells" }' README.md` — every row in a table must report the same `NF`. Apply the same diligence to any markdown file with tables (`README.md`, `CLAUDE.md`, copilot-instructions, etc.).
 - **Run `make lint` after every code change.** Ruff enforces unused imports (F401), import ordering (I001), unused variables, common pitfalls (bugbear), and modern Python idioms. If ruff fails, fix before committing. Use `make lint FIX=1` to auto-fix safe issues (import sorting, etc.).
 - **Register new modules in `pyproject.toml`.** When adding a new Python service, package, or standalone module under `services/` or `types/python/`, immediately add it to `pyproject.toml`: (1) `tool.pytest.ini_options.testpaths` (if it has tests), (2) `tool.ruff.src`, (3) `tool.ruff.lint.isort.known-first-party`, and (4) the mypy invocation in the Makefile. Also add it to the ruff and mypy paths in the Makefile `lint:` and `typecheck:` targets. Missing any of these causes silent miscategorisation (isort), missed tests (pytest), or unchecked code (mypy). **Exception: `cli/` is already covered as a whole directory** — the Makefile runs `mypy cli/` and ruff already includes `cli/`, so any new module added under `cli/` is automatically in scope with no Makefile or `pyproject.toml` changes required.
 - **Centralise env var reads into typed getter functions.** Each env var must be read in exactly one place — a getter function in the module that owns it (e.g. `_get_flex_token()` in `relays/ibkr/__init__.py`). The getter applies `.strip()` and any type conversion (`int()`, boolean parsing). All other code — including other modules, `main.py` entrypoints, and route handlers — imports and calls the getter. Never call `os.environ.get()` inline except inside a getter. This eliminates duplicated reads, inconsistent `.strip()`, and scattered default values.
@@ -39,7 +41,7 @@ RelayPort is a **relay between broker accounts** that provides clear, common int
 ## Type Safety (MANDATORY)
 
 - **Python >= 3.11 is required.** The project uses `X | None` union syntax natively (no `from __future__ import annotations`). Docker images use `python:3.11-slim`. Local dev uses a `.venv` created from the latest Homebrew Python.
-- **Run `make typecheck` before copying ANY Python file to the droplet.** This is non-negotiable. If mypy fails, do NOT push the code.
+- **Run `make typecheck` before copying ANY Python file to the droplet.** This is non-negotiable. If mypy fails, do NOT push the code. `make typecheck` also runs `tsc --noEmit` on `types/typescript/` so a broken or removed export in the generated `.d.ts` files fails the build via the barrel's re-exports.
 - **Run `make test` before assuming work is done and before copying ANY file to the droplet.** If tests fail, fix them first. Never deploy untested code.
 - **Run `make test` and `make typecheck` after every code change**, even refactors. Do not wait until the end — verify immediately.
 - **Run E2E tests after modifying any E2E test OR infrastructure file.** Infrastructure files include `docker-compose*.yml`, `Dockerfile`, `Caddyfile`, and anything under `infra/`. E2E tests require the Docker stack — `make test` (unit tests) does not run them. Never assume an E2E test passes without actually running the stack. The E2E workflow is:
@@ -100,6 +102,7 @@ RelayPort is a **relay between broker accounts** that provides clear, common int
 - **Poller engine `to_thread` pattern: create connections inside the worker thread.** Do NOT create `sqlite3.Connection` on the main (event-loop) thread and pass it into `asyncio.to_thread(poll_once, conn, ...)` — even with `check_same_thread=False`, this is cross-thread use and unsafe. Instead, `poll_once()` creates thread-local connections internally (via `init_dedup_db()` / `init_meta_db()`), closing them in a `finally` block. The caller (`_poll_loop`, `handle_poll`) passes only non-DB arguments. This ensures every `to_thread` call uses connections that were both created and closed on the same worker thread.
 - **Financial operations require extra scrutiny.** Any code path that places orders, moves money, or modifies account state must be reviewed for: race conditions, double-execution, partial failure (what if it crashes between two steps?), and idempotency.
 - **Use `asyncio.get_running_loop()`, never `asyncio.get_event_loop()`.** `get_event_loop()` is deprecated since Python 3.10 for contexts without a running loop and emits `DeprecationWarning` in 3.12+. Code that calls `loop.call_later()`, `loop.create_task()`, etc. always runs on the event-loop thread, so `get_running_loop()` is correct, explicit, and raises `RuntimeError` immediately if accidentally called off-loop.
+- **Schedule background tasks via `asyncio.get_running_loop().create_task(coro)`, not `asyncio.ensure_future(coro)`.** `ensure_future` falls back to `get_event_loop()` when no loop is provided, which can attach the task to a stale or unintended loop. Every place we schedule fire-and-forget work runs on the loop already, so `get_running_loop().create_task(...)` is deterministic and explicit. Retain the returned `Task` in a tracking set with `task.add_done_callback(set.discard)` to prevent garbage collection mid-run.
 
 ## Local Development
 
@@ -569,19 +572,19 @@ export { BrokerRelay, RelayApi };
 - **Structure:**
   ```
   types/typescript/
-    index.d.ts                 # Barrel: exports BrokerRelay, RelayApi namespaces
+    index.d.ts                 # Top-level barrel (hand-maintained; namespace map)
     package.json               # @tradegist/relayport-types
     shared/
-      index.d.ts               # Re-exports: BuySell, Fill, Trade
-      types.d.ts               # Generated from services/shared/models.py
-      types.schema.json         # Intermediate JSON Schema
+      index.d.ts               # Auto-generated barrel (every public type re-exported)
+      types.d.ts               # Auto-generated from services/shared/models.py
+      types.schema.json        # Intermediate JSON Schema
     relay_api/
-      index.d.ts               # Re-exports: WebhookPayloadTrades, WebhookPayload, RunPollResponse, HealthResponse
-      types.d.ts               # Generated from services/relay_core/relay_models.py (via relay_core.relay_models key)
-      types.schema.json         # Intermediate JSON Schema
+      index.d.ts               # Auto-generated barrel (every public type re-exported)
+      types.d.ts               # Auto-generated from services/relay_core/relay_models.py
+      types.schema.json        # Intermediate JSON Schema
   ```
 - **Usage:** `import { BrokerRelay, RelayApi } from "@tradegist/relayport-types"`
-- `schema_gen.py` owns the `SCHEMA_MODELS` dict (keyed by importable module path, e.g. `"shared"`, `"relay_core.relay_models"`). **To export a new model to TypeScript, add it to the relevant entry in `schema_gen.py:SCHEMA_MODELS` and update the corresponding `types/typescript/*/index.d.ts` re-exports.** The Python types package is auto-generated by `gen_python_types.py`.
+- `schema_gen.py` owns the `SCHEMA_MODELS` dict (keyed by importable module path, e.g. `"shared"`, `"relay_core.relay_models"`). **To export a new model to TypeScript, add it to the relevant entry in `schema_gen.py:SCHEMA_MODELS` and run `make types` — that's the only required step.** Entries may be `BaseModel` subclasses **or** discriminated-union `TypeAlias` values; Pydantic's `TypeAdapter` handles both. Class aliases like `WebhookPayload = WebhookPayloadTrades` produce `export type WebhookPayload = WebhookPayloadTrades` in TypeScript via an `allOf: [$ref]` schema entry. The TypeScript module barrels (`types/typescript/*/index.d.ts`) are auto-generated by `gen_ts_barrels.py`; the Python package files are auto-generated by `gen_python_types.py`. **Do not hand-edit generated files** — they carry an `AUTO-GENERATED` header.
 
 ## Python Types Package
 
@@ -606,7 +609,7 @@ export { BrokerRelay, RelayApi };
   from relayport_types import WebhookPayload, WebhookPayloadTrades  # notifier contracts
   from relayport_types.notifier.models import WebhookPayloadTrades  # direct path
   ```
-- **Auto-generated** by `gen_python_types.py` — each source file is copied verbatim with one import-depth rewrite. Run `make types` to regenerate. Do not edit generated files manually.
+- **Auto-generated** by `gen_python_types.py` — each source file is copied verbatim with one import-depth rewrite, and the top-level `__init__.py` barrel is built by AST-walking each source for top-level public class/literal/alias definitions. Run `make types` to regenerate. Do not edit generated files manually.
 - **Covered by `make lint` and `make typecheck`** — `types/python/relayport_types/` is included in both targets. Generated code must pass ruff and mypy like any other Python module.
 
 ## Code Style
@@ -739,7 +742,8 @@ infra/                     # Infrastructure backbone (no business logic)
 types/                     # Type packages (TypeScript + Python)
   typescript/              # @tradegist/relayport-types (BrokerRelay + RelayApi namespaces)
   python/                  # relayport-types PyPI package
-schema_gen.py              # JSON Schema generator (Pydantic → TS types)
+schema_gen.py              # JSON Schema generator (Pydantic → JSON Schema)
+gen_ts_barrels.py          # TS barrel generator (parses types.d.ts → index.d.ts)
 gen_python_types.py        # Python types generator (mirrors relay_core structure → types/python/relayport_types/)
 terraform/                 # Infrastructure as code (DigitalOcean)
 ```

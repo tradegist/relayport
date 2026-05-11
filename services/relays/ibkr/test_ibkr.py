@@ -3,7 +3,7 @@
 import json
 import os
 import unittest
-from typing import Any, cast
+from typing import Any, Literal
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
@@ -28,10 +28,9 @@ from shared import BuySell
 from .bridge_models import (
     WsCommissionReport,
     WsContract,
-    WsEnvelope,
-    WsEventType,
     WsExecution,
     WsFill,
+    WsFillEnvelope,
 )
 
 _TEST_TZ = ZoneInfo("UTC")
@@ -92,29 +91,30 @@ _DEFAULT_COMMISSION = WsCommissionReport(
 
 
 def _make_envelope(
-    event_type: str = "commissionReportEvent",
+    event_type: Literal[
+        "execDetailsEvent", "commissionReportEvent",
+    ] = "commissionReportEvent",
     seq: int = 1,
     exec_id: str = "0001",
     side: str = "BOT",
-    has_fill: bool = True,
-) -> WsEnvelope:
-    fill: WsFill | None = None
-    if has_fill:
-        fill = WsFill(
-            contract=_DEFAULT_CONTRACT,
-            execution=_DEFAULT_EXECUTION.model_copy(
-                update={"execId": exec_id, "side": side},
-            ),
-            commissionReport=_DEFAULT_COMMISSION.model_copy(
-                update={"execId": exec_id},
-            ),
-            time="20260411-10:30:00",
-        )
-    return WsEnvelope(
-        type=cast(WsEventType, event_type),
+    source: Literal["live", "reconciled"] = "live",
+) -> WsFillEnvelope:
+    fill = WsFill(
+        contract=_DEFAULT_CONTRACT,
+        execution=_DEFAULT_EXECUTION.model_copy(
+            update={"execId": exec_id, "side": side},
+        ),
+        commissionReport=_DEFAULT_COMMISSION.model_copy(
+            update={"execId": exec_id},
+        ),
+        time="20260411-10:30:00",
+    )
+    return WsFillEnvelope(
+        type=event_type,
         seq=seq,
         timestamp="2026-04-11T10:30:00+00:00",
         fill=fill,
+        source=source,
     )
 
 
@@ -281,10 +281,6 @@ class TestMapFill(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown execution side"):
             _map_fill(_make_envelope(side="UNKNOWN"), _TEST_TZ)
 
-    def test_no_fill_raises(self) -> None:
-        with self.assertRaisesRegex(ValueError, "has no fill data"):
-            _map_fill(_make_envelope(has_fill=False), _TEST_TZ)
-
     def test_empty_exec_id_raises(self) -> None:
         with self.assertRaisesRegex(ValueError, "Empty execId"):
             _map_fill(_make_envelope(exec_id=""), _TEST_TZ)
@@ -310,7 +306,6 @@ class TestMapFill(unittest.TestCase):
 
     def test_bad_timestamp_raises(self) -> None:
         bad_envelope = _make_envelope()
-        assert bad_envelope.fill is not None
         bad_envelope.fill.execution.time = "not-a-timestamp"
         with self.assertRaisesRegex(ValueError, "Bad execution time"):
             _map_fill(bad_envelope, _TEST_TZ)
@@ -348,9 +343,8 @@ def _option_contract(**overrides: Any) -> WsContract:
     return base.model_copy(update=overrides) if overrides else base
 
 
-def _envelope_with_contract(contract: WsContract) -> WsEnvelope:
+def _envelope_with_contract(contract: WsContract) -> WsFillEnvelope:
     envelope = _make_envelope()
-    assert envelope.fill is not None
     envelope.fill.contract = contract
     return envelope
 

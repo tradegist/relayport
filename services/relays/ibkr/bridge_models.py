@@ -14,7 +14,7 @@ a pip dependency.
 !! The same change must be kept in sync in ibkr_bridge's source file.
 """
 
-from typing import Literal
+from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,6 +24,16 @@ WsEventType = Literal[
     "connected",
     "disconnected",
 ]
+
+# Provenance of a fill event. Only present on ``WsFillEnvelope`` —
+# ``WsStatusEnvelope`` (connected / disconnected) has no ``source`` field
+# at all; consumers should not expect the key on status messages.
+# - ``live`` — emitted by ib_async's push callbacks (execDetailsEvent /
+#   commissionReportEvent). Only fires for fills the bridge's IBKR user
+#   is authorised to see in real time (typically same-user orders).
+# - ``reconciled`` — emitted by the positionEvent → reqExecutions path
+#   to surface fills from other users on the same account.
+WsEventSource = Literal["live", "reconciled"]
 
 
 class WsComboLeg(BaseModel):
@@ -128,12 +138,40 @@ class WsFill(BaseModel):
     time: str
 
 
-class WsEnvelope(BaseModel):
-    """Top-level WebSocket message wrapper."""
+class WsStatusEnvelope(BaseModel):
+    """Connection status event — emitted on (re)connect / disconnect."""
 
     model_config = ConfigDict(extra="allow")
 
-    type: WsEventType
+    type: Literal["connected", "disconnected"]
     seq: int
     timestamp: str
-    fill: WsFill | None = None
+
+
+class WsFillEnvelope(BaseModel):
+    """Execution fill event — every fill the bridge surfaces.
+
+    ``fill`` and ``source`` are required: every emitted fill carries a
+    full payload and a provenance label (``"live"`` or ``"reconciled"``).
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["execDetailsEvent", "commissionReportEvent"]
+    seq: int
+    timestamp: str
+    fill: WsFill
+    source: WsEventSource
+
+
+# Discriminated union over the ``type`` field. Pydantic uses the
+# discriminator to route validation to the correct concrete branch.
+# Consumed by ``relays/ibkr/__init__.py`` via
+# ``_WS_ENVELOPE_ADAPTER = TypeAdapter(WsEnvelope)`` — that adapter
+# validates raw dicts arriving on the bridge WS stream. Because
+# ``WsEnvelope`` is a ``TypeAlias`` (not a class), the legacy
+# ``WsEnvelope.model_validate(...)`` call does NOT work.
+WsEnvelope: TypeAlias = Annotated[
+    WsStatusEnvelope | WsFillEnvelope,
+    Field(discriminator="type"),
+]
