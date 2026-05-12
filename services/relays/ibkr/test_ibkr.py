@@ -142,6 +142,18 @@ class TestEnvVarGetters(unittest.TestCase):
             os.environ.pop("IBKR_POLL_INTERVAL", None)
             self.assertEqual(get_poll_interval("ibkr"), 120)
 
+    def test_poll_interval_zero_raises_with_var_name(self) -> None:
+        with patch.dict(os.environ, {"IBKR_POLL_INTERVAL": "0"}), \
+             self.assertRaises(SystemExit) as cm:
+            get_poll_interval("ibkr")
+        self.assertIn("IBKR_POLL_INTERVAL", str(cm.exception))
+
+    def test_poll_interval_negative_raises_with_var_name(self) -> None:
+        with patch.dict(os.environ, {"IBKR_POLL_INTERVAL": "-30"}), \
+             self.assertRaises(SystemExit) as cm:
+            get_poll_interval("ibkr")
+        self.assertIn("IBKR_POLL_INTERVAL", str(cm.exception))
+
     def test_bridge_ws_url(self) -> None:
         self.assertEqual(
             _get_bridge_ws_url(), "ws://bridge:5000/ibkr/ws/events",

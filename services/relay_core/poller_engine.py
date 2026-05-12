@@ -51,9 +51,16 @@ class PollerConfig:
 
 
 def get_poll_interval(relay_name: RelayName) -> int:
-    """Read {RELAY}_POLL_INTERVAL, falling back to POLL_INTERVAL."""
+    """Read {RELAY}_POLL_INTERVAL, falling back to POLL_INTERVAL.
+
+    Must be positive — a value of 0 would busy-loop the poll engine, and
+    negative values would feed bogus modifiers like ``-(-5) seconds`` into
+    SQLite ``datetime()`` calls in the order-level dedup query.
+    """
     prefix = f"{relay_name.upper()}_"
-    _, val = get_env_int("POLL_INTERVAL", prefix, default="600")
+    var_name, val = get_env_int("POLL_INTERVAL", prefix, default="600")
+    if val <= 0:
+        raise SystemExit(f"Invalid {var_name}={val} — must be > 0")
     return val
 
 
