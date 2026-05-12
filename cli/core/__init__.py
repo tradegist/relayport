@@ -70,6 +70,17 @@ class CoreConfig:
     If set, deploy validates that all ``handle`` directives in
     ``infra/caddy/sites/*.caddy`` start with one of these prefixes."""
 
+    test_env_strip: list[str] = field(default_factory=list)
+    """Env var names to remove from the subprocess environment when
+    ``_run_checks`` invokes ``make typecheck`` / ``lint`` / ``test`` / ``e2e``.
+
+    The CLI's ``load_env()`` populates ``os.environ`` from ``.env`` before
+    running pre-deploy checks, which means any subprocess started during
+    that phase inherits real production credentials. List names that would
+    cause real external IO if a test bug accidentally reached the
+    real code path (Resend keys, webhook URLs, API tokens, etc.). Tests
+    that legitimately need these values should mock the IO instead."""
+
     pre_sync_hook: Callable[[], None] | None = None
     """Optional callback run before sync (e.g. validate poller-2 env)."""
 
