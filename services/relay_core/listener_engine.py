@@ -16,7 +16,10 @@ from typing import Any
 import aiohttp
 
 from relay_core.context import get_relay
-from relay_core.dedup import get_processed_ids, mark_processed_batch
+from relay_core.dedup import (
+    get_processed_ids,
+    mark_processed_batch_with_orders,
+)
 from relay_core.dedup import init_db as _init_dedup_db
 from relay_core.env import get_env, get_env_int
 from relay_core.fx import enrich_if_enabled
@@ -47,11 +50,18 @@ class OnMessageResult:
     *error*: human-readable reason why *fill* is None — included in the
              webhook payload's ``errors`` field so consumers know a fill
              was dropped and why.  Ignored when *fill* is set.
+    *order_complete*: True when this fill closes its order (broker reports
+             the order as fully filled). The debounce buffer flushes the
+             owning orderId immediately on this signal instead of waiting
+             for the quiet-window timer to expire. Relays that cannot
+             detect completion leave this False and the timer handles
+             flushing.
     """
 
     fill: Fill | None = None
     mark: bool = True
     error: str | None = None
+    order_complete: bool = False
 
 
 # ── Listener configuration ───────────────────────────────────────────
@@ -187,11 +197,18 @@ def _send_and_mark(
             relay_name=relay_name,
         )
 
-        # Mark processed AFTER notify (relay-prefixed keys)
+        # Mark processed AFTER notify (relay-prefixed keys + orderId).
+        # The orderId lets the poller suppress duplicate webhooks for
+        # multi-match fills where the broker issues a different
+        # consolidated identifier on its REST path.
         if trades:
-            prefixed_new = [f"{relay_name}:{eid}" for t in trades for eid in t.execIds]
-            mark_processed_batch(conn, prefixed_new)
-            log.info("Marked %d fill(s) as processed", len(prefixed_new))
+            items = [
+                (f"{relay_name}:{eid}", t.orderId)
+                for t in trades
+                for eid in t.execIds
+            ]
+            mark_processed_batch_with_orders(conn, items)
+            log.info("Marked %d fill(s) as processed", len(items))
     finally:
         conn.close()
 
@@ -238,7 +255,18 @@ def _send_no_mark(
 # ── Debounce buffer ──────────────────────────────────────────────────
 
 class DebounceBuffer:
-    """Buffer fills and flush after a quiet window.
+    """Buffer fills per orderId and flush each after a quiet window.
+
+    Each orderId has its own timer that resets on every new fill for
+    that order. A fill arriving on order B never delays a flush for
+    order A. When the broker signals that an order is fully filled
+    (``order_complete=True``), that order's buffer is flushed
+    immediately and its timer is cancelled.
+
+    Parse errors are not associated with any particular orderId. They
+    accumulate in a flat list and are emitted with whichever order
+    flushes next; if no fills are pending they are flushed on the
+    next call to :meth:`flush`.
 
     Public so adapters can reference the type, but created internally
     by ``start_listener``.
@@ -253,40 +281,62 @@ class DebounceBuffer:
         self._relay_name = relay_name
         self._debounce_s = debounce_ms / 1000.0
         self._db_path = db_path
-        self._buffer: list[Fill] = []
+        self._buffers: dict[str, list[Fill]] = {}
+        self._flush_tasks: dict[str, asyncio.Task[None]] = {}
+        self._flushing: set[str] = set()
         self._parse_errors: list[str] = []
-        self._flush_task: asyncio.Task[None] | None = None
-        self._flushing = False
 
-    async def add(self, fill: Fill) -> None:
-        """Add a fill and (re)start the debounce timer."""
-        self._buffer.append(fill)
-        # Only cancel the pending sleep — never cancel an in-progress flush.
+    async def add(self, fill: Fill, order_complete: bool = False) -> None:
+        """Add a fill to its orderId bucket.
+
+        If ``order_complete`` is True the buffer for that orderId is
+        flushed immediately and its timer cancelled. Otherwise a fresh
+        quiet-window timer is started (cancelling any pending one for
+        the same orderId).
+        """
+        order_id = fill.orderId
+        self._buffers.setdefault(order_id, []).append(fill)
+
+        # Cancel the orderId's pending timer (if any) — either we are
+        # about to start a fresh one or we are about to flush immediately.
+        existing = self._flush_tasks.get(order_id)
         if (
-            self._flush_task is not None
-            and not self._flush_task.done()
-            and not self._flushing
+            existing is not None
+            and not existing.done()
+            and order_id not in self._flushing
         ):
-            self._flush_task.cancel()
-        self._flush_task = asyncio.create_task(self._delayed_flush())
+            existing.cancel()
+
+        if order_complete:
+            self._flush_tasks.pop(order_id, None)
+            await self._flush_order(order_id)
+            return
+
+        self._flush_tasks[order_id] = asyncio.create_task(
+            self._delayed_flush(order_id),
+        )
 
     def extend_errors(self, errors: list[str]) -> None:
         """Accumulate parse errors to be flushed with the next batch of fills."""
         self._parse_errors.extend(errors)
 
-    async def _delayed_flush(self) -> None:
+    async def _delayed_flush(self, order_id: str) -> None:
         await asyncio.sleep(self._debounce_s)
-        await self.flush()
+        await self._flush_order(order_id)
 
-    async def flush(self) -> None:
-        """Flush all buffered fills and errors — safe to call even if empty."""
-        if not self._buffer and not self._parse_errors:
-            return
-        self._flushing = True
-        fills = self._buffer.copy()
+    async def _flush_order(self, order_id: str) -> None:
+        """Flush a single orderId's buffer.
+
+        Errors accumulated in ``_parse_errors`` ride along with this
+        flush — they belong to no particular order so we attach them
+        opportunistically.
+        """
+        fills = self._buffers.pop(order_id, [])
         parse_errors = self._parse_errors.copy()
-        self._buffer.clear()
         self._parse_errors.clear()
+        if not fills and not parse_errors:
+            return
+        self._flushing.add(order_id)
         try:
             await asyncio.to_thread(
                 _send_and_mark, self._relay_name, fills,
@@ -294,18 +344,53 @@ class DebounceBuffer:
             )
         except asyncio.CancelledError:
             log.warning(
-                "Flush cancelled — restoring %d fill(s) to buffer", len(fills),
+                "Flush cancelled (orderId=%s) — restoring %d fill(s) to buffer",
+                order_id, len(fills),
             )
-            self._buffer = fills + self._buffer
+            self._buffers.setdefault(order_id, [])
+            self._buffers[order_id] = fills + self._buffers[order_id]
             self._parse_errors = parse_errors + self._parse_errors
             raise
         except Exception:
-            log.exception("Failed to dispatch %d buffered fill(s)", len(fills))
-            # Re-add to front so they are retried on next flush
-            self._buffer = fills + self._buffer
+            log.exception(
+                "Failed to dispatch %d buffered fill(s) for orderId=%s",
+                len(fills), order_id,
+            )
+            self._buffers.setdefault(order_id, [])
+            self._buffers[order_id] = fills + self._buffers[order_id]
             self._parse_errors = parse_errors + self._parse_errors
         finally:
-            self._flushing = False
+            self._flushing.discard(order_id)
+
+    async def flush(self) -> None:
+        """Flush every pending orderId — safe to call when empty.
+
+        Used on listener shutdown / reconnect to drain the buffers. A
+        snapshot of the keys is taken first so newly-added fills during
+        the loop do not affect iteration.
+        """
+        order_ids = list(self._buffers.keys())
+        for order_id in order_ids:
+            timer = self._flush_tasks.pop(order_id, None)
+            if (
+                timer is not None
+                and not timer.done()
+                and order_id not in self._flushing
+            ):
+                timer.cancel()
+            await self._flush_order(order_id)
+        # Drain orphan parse errors (no fills pending).
+        if self._parse_errors:
+            errors = self._parse_errors.copy()
+            self._parse_errors.clear()
+            try:
+                await asyncio.to_thread(
+                    _send_and_mark, self._relay_name, [],
+                    self._db_path, errors,
+                )
+            except Exception:
+                log.exception("Failed to dispatch %d parse error(s)", len(errors))
+                self._parse_errors = errors + self._parse_errors
 
 
 # ── Event handler ────────────────────────────────────────────────────
@@ -336,7 +421,7 @@ async def _handle_event(
 
     results: list[OnMessageResult] = await config.on_message(data)
 
-    mark_fills: list[Fill] = []
+    mark_fills: list[tuple[Fill, bool]] = []
     no_mark_fills: list[Fill] = []
     parse_errors: list[str] = []
 
@@ -352,7 +437,7 @@ async def _handle_event(
                 "[%s] Fill: %s %s execId=%s fee=%s",
                 relay_name, fill.side.value, fill.symbol, fill.execId, fill.fee,
             )
-            mark_fills.append(fill)
+            mark_fills.append((fill, result.order_complete))
         else:
             log.info(
                 "[%s] Fill (no-mark): %s %s execId=%s",
@@ -362,14 +447,15 @@ async def _handle_event(
 
     if mark_fills:
         if debounce_buf is not None:
-            for fill in mark_fills:
-                await debounce_buf.add(fill)
+            for fill, order_complete in mark_fills:
+                await debounce_buf.add(fill, order_complete=order_complete)
             if parse_errors:
                 debounce_buf.extend_errors(parse_errors)
         else:
             try:
                 await asyncio.to_thread(
-                    _send_and_mark, relay_name, mark_fills, db_path, parse_errors,
+                    _send_and_mark, relay_name,
+                    [f for f, _ in mark_fills], db_path, parse_errors,
                 )
             except Exception:
                 log.exception(

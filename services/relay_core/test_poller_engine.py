@@ -8,7 +8,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from relay_core.context import get_relay
-from relay_core.dedup import get_processed_ids, mark_processed_batch
+from relay_core.dedup import (
+    get_processed_ids,
+    mark_processed_batch,
+    mark_processed_batch_with_orders,
+)
 from relay_core.notifier.models import WebhookPayloadTrades
 from relay_core.poller_engine import (
     PollerConfig,
@@ -54,6 +58,7 @@ def dedup_db() -> sqlite3.Connection:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS processed_fills (
             exec_id TEXT PRIMARY KEY,
+            order_id TEXT,
             processed_at TEXT DEFAULT (datetime('now'))
         )
     """)
@@ -558,6 +563,99 @@ class TestPollOnce:
         assert get_last_poll_ts(meta_db, "ibkr", poller_index=0) == to_epoch("2025-04-03T12:00:00")
         # Index 1 watermark now reflects what it processed
         assert get_last_poll_ts(meta_db, "ibkr", poller_index=1) == to_epoch("2025-04-03T10:00:00")
+
+
+# ═════════════════════════════════════════════════════════════════════
+#  Order-level dedup (multi-match cross-path)
+# ═════════════════════════════════════════════════════════════════════
+
+class TestOrderLevelDedup:
+    """Fills whose orderId was processed by the listener recently are skipped.
+
+    Models the Kraken multi-match case: the listener emitted per-match
+    exec_ids and stored the orderId. Later the REST poller returns a
+    consolidated trade under a brand-new ``txid`` that doesn't match any
+    listener exec_id — the order-level check must catch it.
+    """
+
+    @patch("relay_core.poller_engine.notify")
+    def test_skips_fill_whose_order_was_recently_marked_by_listener(
+        self, mock_notify: MagicMock,
+        dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
+    ) -> None:
+        # Listener pre-marked the order with two per-match exec_ids.
+        mark_processed_batch_with_orders(
+            dedup_db,
+            [("ibkr:WS_FILL_A", "ORDER_X"), ("ibkr:WS_FILL_B", "ORDER_X")],
+        )
+        # REST returns a different consolidated execId for the same order.
+        rest_fill = _make_fill(execId="REST_TXID", orderId="ORDER_X")
+        cfg = _MockPollerConfig(parse=lambda _: ([rest_fill], []))
+        _set_poller(cfg)
+
+        result = poll_once("ibkr", dedup_conn=dedup_db, meta_conn=meta_db)
+
+        assert result == []
+        mock_notify.assert_not_called()
+        # The REST execId is NOT marked — listener stays the sole owner.
+        assert "ibkr:REST_TXID" not in get_processed_ids(
+            dedup_db, {"ibkr:REST_TXID"},
+        )
+
+    @patch("relay_core.poller_engine.notify")
+    def test_allows_fill_for_order_never_marked(
+        self, mock_notify: MagicMock,
+        dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
+    ) -> None:
+        fill = _make_fill(execId="TX", orderId="ORDER_NEW")
+        cfg = _MockPollerConfig(parse=lambda _: ([fill], []))
+        _set_poller(cfg)
+
+        result = poll_once("ibkr", dedup_conn=dedup_db, meta_conn=meta_db)
+
+        assert len(result) == 1
+        mock_notify.assert_called_once()
+
+    @patch("relay_core.poller_engine.notify")
+    def test_order_id_isolated_by_relay(
+        self, mock_notify: MagicMock,
+        dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
+    ) -> None:
+        """A kraken-relay orderId must not suppress an ibkr poll."""
+        mark_processed_batch_with_orders(
+            dedup_db, [("kraken:OTHER", "ORDER_X")],
+        )
+        fill = _make_fill(execId="IBKR_TX", orderId="ORDER_X")
+        cfg = _MockPollerConfig(parse=lambda _: ([fill], []))
+        _set_poller(cfg)
+
+        result = poll_once("ibkr", dedup_conn=dedup_db, meta_conn=meta_db)
+
+        assert len(result) == 1
+        mock_notify.assert_called_once()
+
+    @patch("relay_core.poller_engine.notify")
+    def test_window_scales_with_poll_interval(
+        self, mock_notify: MagicMock,
+        dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
+    ) -> None:
+        """Stale listener marks (outside 2x interval) do not block."""
+        # Backdate the listener mark past the window: interval=60 -> window=120s.
+        dedup_db.execute(
+            "INSERT INTO processed_fills (exec_id, order_id, processed_at) "
+            "VALUES (?, ?, datetime('now', '-1 hour'))",
+            ("ibkr:STALE", "ORDER_STALE"),
+        )
+        dedup_db.commit()
+
+        fill = _make_fill(execId="FRESH_TX", orderId="ORDER_STALE")
+        cfg = _MockPollerConfig(parse=lambda _: ([fill], []), interval=60)
+        _set_poller(cfg)
+
+        result = poll_once("ibkr", dedup_conn=dedup_db, meta_conn=meta_db)
+
+        assert len(result) == 1
+        mock_notify.assert_called_once()
 
 
 # ═════════════════════════════════════════════════════════════════════

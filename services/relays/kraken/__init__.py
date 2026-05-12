@@ -286,7 +286,28 @@ async def _on_message(data: dict[str, Any]) -> list[OnMessageResult]:
         for err in errors:
             log.warning("Kraken WS parse error: %s", err)
 
-    return [OnMessageResult(fill=fill, mark=True) for fill in fills]
+    # Kraken stamps each execution event with the order's lifecycle state.
+    # When ``order_status == "filled"`` arrives on a trade event, the order
+    # is fully done — surface that to the engine so the debounce buffer
+    # flushes this orderId immediately instead of waiting for the timer.
+    completed_exec_ids: set[str] = set()
+    raw_data = msg.get("data")
+    if isinstance(raw_data, list):
+        for item in raw_data:
+            if (
+                isinstance(item, dict)
+                and item.get("order_status") == "filled"
+                and isinstance(item.get("exec_id"), str)
+            ):
+                completed_exec_ids.add(item["exec_id"])
+
+    return [
+        OnMessageResult(
+            fill=fill, mark=True,
+            order_complete=fill.execId in completed_exec_ids,
+        )
+        for fill in fills
+    ]
 
 
 def _build_connect(client: KrakenClient) -> Callable[[aiohttp.ClientSession], Awaitable[aiohttp.ClientWebSocketResponse]]:

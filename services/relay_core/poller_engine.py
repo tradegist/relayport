@@ -12,7 +12,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from relay_core.context import get_relay
-from relay_core.dedup import get_processed_ids, mark_processed_batch, prune
+from relay_core.dedup import (
+    get_processed_ids,
+    get_recently_processed_order_ids,
+    mark_processed_batch,
+    prune,
+)
 from relay_core.dedup import init_db as _init_dedup_db
 from relay_core.env import get_env, get_env_int
 from relay_core.fx import enrich_if_enabled
@@ -244,6 +249,32 @@ def poll_once(
         already_seen_prefixed = get_processed_ids(dedup_conn, prefixed_candidates)
         already_seen = _strip_prefix(relay_name, already_seen_prefixed)
         new_fills = [f for f in candidates if f.execId not in already_seen]
+
+        # Order-level dedup. Catches the case where the broker emits a
+        # different identifier on the REST path than the WS path for the
+        # same fill (e.g. Kraken multi-match orders: WS sends per-match
+        # exec_ids; REST returns one consolidated txid that matches none
+        # of them). The listener writes the orderId alongside its
+        # exec_ids; here we drop any candidate whose orderId was
+        # processed recently by the listener.
+        if new_fills:
+            order_ids = {f.orderId for f in new_fills}
+            window = 2 * config.interval
+            recently_done = get_recently_processed_order_ids(
+                dedup_conn, relay_name, order_ids, within_seconds=window,
+            )
+            if recently_done:
+                skipped = [f for f in new_fills if f.orderId in recently_done]
+                new_fills = [
+                    f for f in new_fills if f.orderId not in recently_done
+                ]
+                for f in skipped:
+                    relay_log.info(
+                        "  Order-dedup: %s %s orderId=%s "
+                        "(listener already notified within %ds)",
+                        f.side, f.symbol, f.orderId, window,
+                    )
+
         relay_log.info("%d new fill(s) after dedup", len(new_fills))
 
         if not new_fills:

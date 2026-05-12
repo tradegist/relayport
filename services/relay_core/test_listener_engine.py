@@ -13,7 +13,11 @@ import aiohttp
 
 from relay_core import ListenerConfig, OnMessageResult
 from relay_core.context import get_relay
-from relay_core.dedup import get_processed_ids, init_db, mark_processed_batch
+from relay_core.dedup import (
+    get_processed_ids,
+    init_db,
+    mark_processed_batch,
+)
 from relay_core.listener_engine import (
     DebounceBuffer,
     _handle_event,
@@ -72,10 +76,11 @@ def _make_fill(
     price: float = 150.25,
     volume: float = 100.0,
     fee: float = 1.05,
+    order_id: str = "12345",
 ) -> Fill:
     return Fill(
         execId=exec_id,
-        orderId="12345",
+        orderId=order_id,
         symbol=symbol,
         assetClass="equity",
         side=side,
@@ -128,7 +133,7 @@ class TestNamespaceHelpers(unittest.TestCase):
 class TestSendAndMark(unittest.TestCase):
     """Test the dedup + aggregate + notify + mark pipeline."""
 
-    @patch("relay_core.listener_engine.mark_processed_batch")
+    @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
     @patch("relay_core.listener_engine.get_processed_ids", return_value=set())
     @patch("relay_core.listener_engine._init_dedup_db")
@@ -147,13 +152,13 @@ class TestSendAndMark(unittest.TestCase):
 
         mock_notify.assert_called_once()
         mock_mark.assert_called_once()
-        # Verify relay-prefixed exec IDs
+        # Verify relay-prefixed exec IDs paired with the orderId
         mark_args = mock_mark.call_args[0]
         self.assertEqual(mark_args[0], mock_conn)
-        self.assertEqual(mark_args[1], ["ibkr:0001"])
+        self.assertEqual(mark_args[1], [("ibkr:0001", "12345")])
         mock_conn.close.assert_called_once()
 
-    @patch("relay_core.listener_engine.mark_processed_batch")
+    @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
     @patch("relay_core.listener_engine.get_processed_ids", return_value=set())
     @patch("relay_core.listener_engine._init_dedup_db")
@@ -174,7 +179,7 @@ class TestSendAndMark(unittest.TestCase):
         get_ids_args = mock_get_ids.call_args[0]
         self.assertEqual(get_ids_args[1], {"ibkr:X1"})
 
-    @patch("relay_core.listener_engine.mark_processed_batch")
+    @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
     @patch("relay_core.listener_engine.get_processed_ids")
     @patch("relay_core.listener_engine._init_dedup_db")
@@ -196,7 +201,7 @@ class TestSendAndMark(unittest.TestCase):
         mock_mark.assert_not_called()
         mock_conn.close.assert_called_once()
 
-    @patch("relay_core.listener_engine.mark_processed_batch")
+    @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
     @patch("relay_core.listener_engine.get_processed_ids", return_value=set())
     @patch("relay_core.listener_engine._init_dedup_db")
@@ -218,7 +223,7 @@ class TestSendAndMark(unittest.TestCase):
 
         mock_conn.close.assert_called_once()
 
-    @patch("relay_core.listener_engine.mark_processed_batch")
+    @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
     @patch("relay_core.listener_engine.get_processed_ids", return_value=set())
     @patch("relay_core.listener_engine._init_dedup_db")
@@ -240,7 +245,7 @@ class TestSendAndMark(unittest.TestCase):
         payload = mock_notify.call_args[0][1]
         self.assertIn("bad timestamp", payload.errors)
 
-    @patch("relay_core.listener_engine.mark_processed_batch")
+    @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
     @patch("relay_core.listener_engine.get_processed_ids", return_value=set())
     @patch("relay_core.listener_engine._init_dedup_db")
@@ -263,7 +268,7 @@ class TestSendAndMark(unittest.TestCase):
         self.assertEqual(payload.data, [])
         mock_mark.assert_not_called()
 
-    @patch("relay_core.listener_engine.mark_processed_batch")
+    @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
     @patch("relay_core.listener_engine.get_processed_ids")
     @patch("relay_core.listener_engine._init_dedup_db")
@@ -453,7 +458,7 @@ class TestDispatchOrdering(unittest.TestCase):
             raw={},
         )
 
-    @patch("relay_core.listener_engine.mark_processed_batch")
+    @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
     @patch("relay_core.listener_engine.get_processed_ids", return_value=set())
     @patch("relay_core.listener_engine._init_dedup_db")
@@ -631,9 +636,15 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
             "ibkr", {"type": "x"},
             debounce_buf=buf, db_path="/tmp/test.db",
         )
-        # Fill should be in buffer, not dispatched directly
-        self.assertEqual(len(buf._buffer), 1)
+        # Fill should be in its orderId bucket, not dispatched directly
+        self.assertEqual(buf._buffers[fill.orderId], [fill])
         mock_send.assert_not_called()
+        # Cancel the pending timer task so the test exits cleanly.
+        timer = buf._flush_tasks.get(fill.orderId)
+        if timer is not None and not timer.done():
+            timer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await timer
 
     async def test_fill_none_skips_dispatch(self) -> None:
         """If on_message returns fill=None, nothing is dispatched."""
@@ -729,10 +740,11 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
             debounce_buf=buf, db_path="/tmp/test.db",
         )
 
-        # mark=True fills buffered, not dispatched directly
-        self.assertEqual(len(buf._buffer), 2)
-        self.assertEqual(buf._buffer[0].execId, "A")
-        self.assertEqual(buf._buffer[1].execId, "C")
+        # mark=True fills buffered in their (shared) orderId bucket
+        order_id = fill_a.orderId
+        self.assertEqual(
+            [f.execId for f in buf._buffers[order_id]], ["A", "C"],
+        )
         mock_send_mark.assert_not_called()
 
         # mark=False fill still dispatched via _send_no_mark
@@ -740,6 +752,13 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         no_mark_fills = mock_send_no_mark.call_args[0][1]
         self.assertEqual(len(no_mark_fills), 1)
         self.assertEqual(no_mark_fills[0].execId, "B")
+
+        # Cleanup pending timer
+        timer = buf._flush_tasks.get(order_id)
+        if timer is not None and not timer.done():
+            timer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await timer
 
     async def test_non_dict_string_skipped(self) -> None:
         """A JSON string (not a dict) is silently skipped."""
@@ -982,10 +1001,15 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
             debounce_buf=buf, db_path="/tmp/test.db",
         )
 
-        self.assertEqual(len(buf._buffer), 1)
-        self.assertEqual(buf._buffer[0].execId, fill.execId)
+        self.assertEqual(buf._buffers[fill.orderId], [fill])
         self.assertEqual(buf._parse_errors, ["bad timestamp"])
         mock_send.assert_not_called()
+        # Cleanup pending timer
+        timer = buf._flush_tasks.get(fill.orderId)
+        if timer is not None and not timer.done():
+            timer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await timer
 
     @patch("relay_core.listener_engine._send_and_mark")
     async def test_error_only_result_not_accumulated_in_debounce_buf(
@@ -1008,7 +1032,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
             debounce_buf=buf, db_path="/tmp/test.db",
         )
 
-        self.assertEqual(len(buf._buffer), 0)
+        self.assertEqual(buf._buffers, {})
         self.assertEqual(buf._parse_errors, [])
         mock_send.assert_not_called()
 
@@ -1041,7 +1065,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
 
 
 class TestDebounceBuffer(unittest.IsolatedAsyncioTestCase):
-    """Test the debounce buffer batching behavior."""
+    """Test the per-orderId debounce buffer batching behavior."""
 
     @patch("relay_core.listener_engine._send_and_mark")
     async def test_flush_dispatches_buffered_fills(
@@ -1053,14 +1077,14 @@ class TestDebounceBuffer(unittest.IsolatedAsyncioTestCase):
         )
         fill = _make_fill(exec_id="A001")
         await buf.add(fill)
-        self.assertEqual(len(buf._buffer), 1)
+        self.assertEqual(buf._buffers[fill.orderId], [fill])
 
         await buf.flush()
         mock_send.assert_called_once()
         # Verify relay_name passed to _send_and_mark
         call_args = mock_send.call_args[0]
         self.assertEqual(call_args[0], "ibkr")
-        self.assertEqual(len(buf._buffer), 0)
+        self.assertEqual(buf._buffers, {})
 
     @patch("relay_core.listener_engine._send_and_mark")
     async def test_flush_noop_when_empty(
@@ -1086,6 +1110,79 @@ class TestDebounceBuffer(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.15)
         mock_send.assert_called_once()
 
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_order_complete_flushes_immediately(
+        self, mock_send: MagicMock,
+    ) -> None:
+        """A fill with order_complete=True bypasses the debounce window."""
+        buf = DebounceBuffer(
+            relay_name="ibkr", debounce_ms=60_000,  # ~never if we wait
+            db_path="/tmp/test.db",
+        )
+        fill = _make_fill(exec_id="DONE")
+        await buf.add(fill, order_complete=True)
+
+        # No sleep — the order should have flushed synchronously inside add().
+        mock_send.assert_called_once()
+        dispatched = mock_send.call_args[0][1]
+        self.assertEqual([f.execId for f in dispatched], ["DONE"])
+        self.assertEqual(buf._buffers, {})
+        self.assertNotIn(fill.orderId, buf._flush_tasks)
+
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_order_complete_flushes_accumulated_fills(
+        self, mock_send: MagicMock,
+    ) -> None:
+        """order_complete on the last fill flushes every fill buffered for that order."""
+        buf = DebounceBuffer(
+            relay_name="ibkr", debounce_ms=60_000,
+            db_path="/tmp/test.db",
+        )
+        first = _make_fill(exec_id="P1")
+        second = _make_fill(exec_id="P2")
+        last = _make_fill(exec_id="DONE")
+
+        await buf.add(first)
+        await buf.add(second)
+        mock_send.assert_not_called()
+
+        await buf.add(last, order_complete=True)
+        mock_send.assert_called_once()
+        dispatched = mock_send.call_args[0][1]
+        self.assertEqual(
+            [f.execId for f in dispatched], ["P1", "P2", "DONE"],
+        )
+
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_orders_have_independent_timers(
+        self, mock_send: MagicMock,
+    ) -> None:
+        """A fill on order B does not reset order A's pending flush task."""
+        buf = DebounceBuffer(
+            relay_name="ibkr", debounce_ms=10_000,
+            db_path="/tmp/test.db",
+        )
+        fill_a = _make_fill(exec_id="A", order_id="ORDER_A")
+        fill_b = _make_fill(exec_id="B", order_id="ORDER_B")
+
+        await buf.add(fill_a)
+        task_a = buf._flush_tasks["ORDER_A"]
+
+        await buf.add(fill_b)
+        task_b = buf._flush_tasks["ORDER_B"]
+
+        # Adding a fill for ORDER_B must NOT touch ORDER_A's timer.
+        self.assertIsNot(task_a, task_b)
+        self.assertFalse(task_a.done())
+        self.assertFalse(task_b.done())
+        mock_send.assert_not_called()
+
+        # Cleanup
+        for task in (task_a, task_b):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
     @patch(
         "relay_core.listener_engine._send_and_mark",
         side_effect=RuntimeError("webhook down"),
@@ -1100,14 +1197,13 @@ class TestDebounceBuffer(unittest.IsolatedAsyncioTestCase):
         )
         fill = _make_fill(exec_id="ERR1")
         await buf.add(fill)
-        self.assertEqual(len(buf._buffer), 1)
+        self.assertEqual(buf._buffers[fill.orderId], [fill])
 
         # flush() catches Exception — should not raise
         await buf.flush()
         mock_send.assert_called_once()
         # Fill must be restored
-        self.assertEqual(len(buf._buffer), 1)
-        self.assertEqual(buf._buffer[0].execId, "ERR1")
+        self.assertEqual([f.execId for f in buf._buffers[fill.orderId]], ["ERR1"])
 
     async def test_flush_restores_fills_on_cancellation(self) -> None:
         """Fills are re-added when flush is cancelled during to_thread."""
@@ -1131,16 +1227,15 @@ class TestDebounceBuffer(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await task
 
-        self.assertEqual(len(buf._buffer), 1)
-        self.assertEqual(buf._buffer[0].execId, "CAN1")
+        self.assertEqual([f.execId for f in buf._buffers[fill.orderId]], ["CAN1"])
 
     @patch("relay_core.listener_engine._send_and_mark")
-    async def test_timer_resets_on_subsequent_add(
+    async def test_timer_resets_on_subsequent_add_same_order(
         self, mock_send: MagicMock,
     ) -> None:
-        """Adding a fill before the debounce window expires cancels the pending
-        flush task and starts a new one — verified via task identity so the
-        assertion does not depend on wall-clock sleep precision.
+        """Adding a fill to the same orderId before its window expires cancels
+        that order's pending timer and starts a new one — verified via task
+        identity so the assertion does not depend on wall-clock sleep precision.
         """
         buf = DebounceBuffer(
             relay_name="ibkr", debounce_ms=10_000,
@@ -1148,14 +1243,14 @@ class TestDebounceBuffer(unittest.IsolatedAsyncioTestCase):
         )
         fill1 = _make_fill(exec_id="A1")
         fill2 = _make_fill(exec_id="A2")
+        order_id = fill1.orderId
+        self.assertEqual(fill2.orderId, order_id)
 
         await buf.add(fill1)
-        first_task = buf._flush_task
-        assert first_task is not None
+        first_task = buf._flush_tasks[order_id]
 
         await buf.add(fill2)
-        second_task = buf._flush_task
-        assert second_task is not None
+        second_task = buf._flush_tasks[order_id]
 
         # The second add must have replaced and cancelled the first task.
         self.assertIsNot(first_task, second_task)
@@ -1179,9 +1274,9 @@ class TestDebounceBuffer(unittest.IsolatedAsyncioTestCase):
     async def test_add_during_flush_preserves_new_fill(self) -> None:
         """A fill added while a flush is in progress is preserved for the next flush.
 
-        The in-progress flush has already cleared the buffer and snapshotted
-        its fills, so the newly-added fill must NOT be lost: it should sit in
-        the buffer waiting for its own debounce cycle.
+        The in-progress flush has already popped the order's buffer and
+        snapshotted its fills, so the newly-added fill must NOT be lost: it
+        should sit in the buffer waiting for its own debounce cycle.
         """
         flush_started = asyncio.Event()
         flush_can_complete = asyncio.Event()
@@ -1196,40 +1291,44 @@ class TestDebounceBuffer(unittest.IsolatedAsyncioTestCase):
         )
         first = _make_fill(exec_id="FIRST")
         second = _make_fill(exec_id="SECOND")
+        order_id = first.orderId
         await buf.add(first)
 
         with patch("asyncio.to_thread", side_effect=slow_to_thread):
             flush_task = asyncio.create_task(buf.flush())
             await flush_started.wait()
 
-            # Buffer has been snapshotted and cleared; flush is in-flight
-            self.assertEqual(len(buf._buffer), 0)
-            self.assertTrue(buf._flushing)
+            # Order's buffer has been popped; flush is in-flight
+            self.assertNotIn(order_id, buf._buffers)
+            self.assertIn(order_id, buf._flushing)
 
-            # Add a new fill while the flush is mid-flight
+            # Add a new fill for the same order while the flush is mid-flight
             await buf.add(second)
-            self.assertEqual(len(buf._buffer), 1)
-            self.assertEqual(buf._buffer[0].execId, "SECOND")
+            self.assertEqual(
+                [f.execId for f in buf._buffers[order_id]], ["SECOND"],
+            )
 
             flush_can_complete.set()
             await flush_task
 
         # FIRST was dispatched; SECOND remains buffered for its own cycle
-        self.assertEqual(len(buf._buffer), 1)
-        self.assertEqual(buf._buffer[0].execId, "SECOND")
-        self.assertFalse(buf._flushing)
+        self.assertEqual(
+            [f.execId for f in buf._buffers[order_id]], ["SECOND"],
+        )
+        self.assertNotIn(order_id, buf._flushing)
 
         # Cleanup the pending _delayed_flush task scheduled by the second add()
-        if buf._flush_task is not None and not buf._flush_task.done():
-            buf._flush_task.cancel()
+        timer = buf._flush_tasks.get(order_id)
+        if timer is not None and not timer.done():
+            timer.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
-                await buf._flush_task
+                await timer
 
     @patch("relay_core.listener_engine._send_and_mark")
     async def test_extend_errors_flushed_with_fills(
         self, mock_send: MagicMock,
     ) -> None:
-        """Errors accumulated via extend_errors are passed to _send_and_mark on flush."""
+        """Errors accumulated via extend_errors ride along with the next order flush."""
         buf = DebounceBuffer(relay_name="ibkr", debounce_ms=5000, db_path="/tmp/test.db")
         fill = _make_fill(exec_id="E001")
         await buf.add(fill)
@@ -1273,8 +1372,7 @@ class TestDebounceBuffer(unittest.IsolatedAsyncioTestCase):
 
         await buf.flush()
 
-        self.assertEqual(len(buf._buffer), 1)
-        self.assertEqual(buf._buffer[0].execId, "ERR2")
+        self.assertEqual([f.execId for f in buf._buffers[fill.orderId]], ["ERR2"])
         self.assertEqual(buf._parse_errors, ["bad timestamp"])
 
     @patch("relay_core.listener_engine._send_and_mark")
