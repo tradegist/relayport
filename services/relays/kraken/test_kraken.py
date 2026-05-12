@@ -429,6 +429,97 @@ class TestOnMessage(unittest.IsolatedAsyncioTestCase):
         results = await _on_message(msg)
         self.assertEqual(results, [])
 
+    async def test_partially_filled_does_not_set_order_complete(self) -> None:
+        """``order_status != "filled"`` leaves order_complete False."""
+        msg = {
+            "channel": "executions",
+            "data": [{
+                "exec_type": "trade",
+                "exec_id": "EXEC-PARTIAL",
+                "order_id": "ORD-1",
+                "symbol": "BTC/USD",
+                "side": "buy",
+                "order_type": "limit",
+                "last_price": 65000.0,
+                "last_qty": 0.1,
+                "cost": 6500.0,
+                "fees": [{"asset": "USD", "qty": 6.5}],
+                "timestamp": "2026-04-12T10:00:00Z",
+                "order_status": "partially_filled",
+            }],
+        }
+        results = await _on_message(msg)
+        self.assertEqual(len(results), 1)
+        self.assertFalse(results[0].order_complete)
+
+    async def test_filled_sets_order_complete(self) -> None:
+        """``order_status == "filled"`` flips order_complete to True."""
+        msg = {
+            "channel": "executions",
+            "data": [{
+                "exec_type": "trade",
+                "exec_id": "EXEC-DONE",
+                "order_id": "ORD-1",
+                "symbol": "BTC/USD",
+                "side": "buy",
+                "order_type": "limit",
+                "last_price": 65000.0,
+                "last_qty": 0.1,
+                "cost": 6500.0,
+                "fees": [{"asset": "USD", "qty": 6.5}],
+                "timestamp": "2026-04-12T10:00:00Z",
+                "order_status": "filled",
+            }],
+        }
+        results = await _on_message(msg)
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0].order_complete)
+
+    async def test_filled_propagates_per_exec_id(self) -> None:
+        """In a multi-item message, only the filled item carries order_complete."""
+        msg = {
+            "channel": "executions",
+            "data": [
+                {
+                    "exec_type": "trade",
+                    "exec_id": "EXEC-PARTIAL",
+                    "order_id": "ORD-1",
+                    "symbol": "BTC/USD",
+                    "side": "buy",
+                    "order_type": "limit",
+                    "last_price": 65000.0,
+                    "last_qty": 0.05,
+                    "cost": 3250.0,
+                    "fees": [{"asset": "USD", "qty": 3.25}],
+                    "timestamp": "2026-04-12T10:00:00Z",
+                    "order_status": "partially_filled",
+                },
+                {
+                    "exec_type": "trade",
+                    "exec_id": "EXEC-DONE",
+                    "order_id": "ORD-1",
+                    "symbol": "BTC/USD",
+                    "side": "buy",
+                    "order_type": "limit",
+                    "last_price": 65000.0,
+                    "last_qty": 0.05,
+                    "cost": 3250.0,
+                    "fees": [{"asset": "USD", "qty": 3.25}],
+                    "timestamp": "2026-04-12T10:00:01Z",
+                    "order_status": "filled",
+                },
+            ],
+        }
+        results = await _on_message(msg)
+        completion_by_exec = {
+            r.fill.execId: r.order_complete
+            for r in results
+            if r.fill is not None
+        }
+        self.assertEqual(
+            completion_by_exec, {"EXEC-PARTIAL": False, "EXEC-DONE": True},
+        )
+
 
 # ── build_relay integration tests ─────────────────────────────────────────────
 

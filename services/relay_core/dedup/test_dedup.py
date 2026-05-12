@@ -1,13 +1,20 @@
 """Tests for dedup module."""
 
 import sqlite3
+import tempfile
 import unittest
+import unittest.mock
+from pathlib import Path
+from typing import Any
 
 from relay_core.dedup import (
     get_processed_ids,
+    get_recently_processed_order_ids,
+    init_db,
     is_processed,
     mark_processed,
     mark_processed_batch,
+    mark_processed_batch_with_orders,
     prune,
 )
 
@@ -18,6 +25,7 @@ class TestDedup(unittest.TestCase):
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS processed_fills ("
             "  exec_id TEXT PRIMARY KEY,"
+            "  order_id TEXT,"
             "  processed_at TEXT DEFAULT (datetime('now'))"
             ")"
         )
@@ -80,3 +88,246 @@ class TestDedup(unittest.TestCase):
         mark_processed(self.conn, "TX001")
         deleted = prune(self.conn, days=30)
         assert deleted == 0
+
+
+class TestMarkProcessedBatchWithOrders(unittest.TestCase):
+    """``mark_processed_batch_with_orders`` stores both columns."""
+
+    def setUp(self) -> None:
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS processed_fills ("
+            "  exec_id TEXT PRIMARY KEY,"
+            "  order_id TEXT,"
+            "  processed_at TEXT DEFAULT (datetime('now'))"
+            ")"
+        )
+        self.conn.commit()
+
+    def tearDown(self) -> None:
+        self.conn.close()
+
+    def test_records_exec_and_order(self) -> None:
+        mark_processed_batch_with_orders(
+            self.conn, [("kraken:E1", "O1"), ("kraken:E2", "O1")],
+        )
+        rows = self.conn.execute(
+            "SELECT exec_id, order_id FROM processed_fills ORDER BY exec_id",
+        ).fetchall()
+        assert rows == [("kraken:E1", "O1"), ("kraken:E2", "O1")]
+
+    def test_is_idempotent(self) -> None:
+        mark_processed_batch_with_orders(self.conn, [("kraken:E1", "O1")])
+        mark_processed_batch_with_orders(self.conn, [("kraken:E1", "O1")])
+        count = self.conn.execute(
+            "SELECT COUNT(*) FROM processed_fills",
+        ).fetchone()
+        assert count is not None
+        assert count[0] == 1
+
+
+class TestGetRecentlyProcessedOrderIds(unittest.TestCase):
+    """``get_recently_processed_order_ids`` honours relay prefix + time window."""
+
+    def setUp(self) -> None:
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS processed_fills ("
+            "  exec_id TEXT PRIMARY KEY,"
+            "  order_id TEXT,"
+            "  processed_at TEXT DEFAULT (datetime('now'))"
+            ")"
+        )
+        self.conn.commit()
+
+    def tearDown(self) -> None:
+        self.conn.close()
+
+    def test_returns_orders_processed_in_window(self) -> None:
+        mark_processed_batch_with_orders(
+            self.conn, [("kraken:E1", "ORDER_A")],
+        )
+        result = get_recently_processed_order_ids(
+            self.conn, "kraken", {"ORDER_A", "ORDER_B"}, within_seconds=120,
+        )
+        assert result == {"ORDER_A"}
+
+    def test_excludes_orders_outside_window(self) -> None:
+        self.conn.execute(
+            "INSERT INTO processed_fills (exec_id, order_id, processed_at) "
+            "VALUES ('kraken:OLD', 'ORDER_OLD', datetime('now', '-1 hour'))",
+        )
+        self.conn.commit()
+        result = get_recently_processed_order_ids(
+            self.conn, "kraken", {"ORDER_OLD"}, within_seconds=120,
+        )
+        assert result == set()
+
+    def test_isolated_by_relay_prefix(self) -> None:
+        mark_processed_batch_with_orders(
+            self.conn, [("ibkr:E1", "ORDER_X")],
+        )
+        result = get_recently_processed_order_ids(
+            self.conn, "kraken", {"ORDER_X"}, within_seconds=120,
+        )
+        assert result == set()
+
+    def test_ignores_rows_with_null_order_id(self) -> None:
+        # Poller-marked rows leave order_id NULL — they must never match.
+        mark_processed_batch(self.conn, ["kraken:POLLER_ONLY"])
+        result = get_recently_processed_order_ids(
+            self.conn, "kraken", {"ANY"}, within_seconds=120,
+        )
+        assert result == set()
+
+    def test_empty_input_returns_empty(self) -> None:
+        result = get_recently_processed_order_ids(
+            self.conn, "kraken", set(), within_seconds=120,
+        )
+        assert result == set()
+
+
+class TestInitDbMigration(unittest.TestCase):
+    """``init_db`` adds the ``order_id`` column in-place on existing DBs."""
+
+    def test_migrates_legacy_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "legacy.db"
+            # Simulate a pre-migration database.
+            conn = sqlite3.connect(str(db))
+            conn.execute(
+                "CREATE TABLE processed_fills ("
+                "  exec_id TEXT PRIMARY KEY,"
+                "  processed_at TEXT DEFAULT (datetime('now'))"
+                ")"
+            )
+            conn.execute("INSERT INTO processed_fills (exec_id) VALUES ('LEGACY')")
+            conn.commit()
+            conn.close()
+
+            # init_db should add the column without losing the row.
+            migrated = init_db(db)
+            try:
+                cols = [
+                    row[1]
+                    for row in migrated.execute(
+                        "PRAGMA table_info(processed_fills)",
+                    )
+                ]
+                assert "order_id" in cols
+                rows = migrated.execute(
+                    "SELECT exec_id, order_id FROM processed_fills",
+                ).fetchall()
+                assert rows == [("LEGACY", None)]
+            finally:
+                migrated.close()
+
+    def test_idempotent_on_already_migrated_db(self) -> None:
+        # Calling init_db twice on the same file must not raise.
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "fresh.db"
+            init_db(db).close()
+            # Second call should detect that order_id already exists
+            # and skip the ALTER entirely.
+            init_db(db).close()
+
+    def test_concurrent_migration_race_does_not_raise(self) -> None:
+        """If two processes pass the PRAGMA check at the same time, only
+        one of them wins the writer-lock race — the loser must not crash
+        startup. Simulated here by routing init_db through a Connection
+        subclass that fails every ALTER TABLE, mimicking the loser
+        finding the column already committed.
+        """
+        class _RaceLosingConnection(sqlite3.Connection):
+            def execute(
+                self, sql: str, *args: Any,
+            ) -> sqlite3.Cursor:
+                if "ALTER TABLE" in sql:
+                    raise sqlite3.OperationalError(
+                        "duplicate column name: order_id",
+                    )
+                return super().execute(sql, *args)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "legacy.db"
+            # Build a legacy-schema database that lacks order_id.
+            legacy = sqlite3.connect(str(db))
+            legacy.execute(
+                "CREATE TABLE processed_fills ("
+                "  exec_id TEXT PRIMARY KEY,"
+                "  processed_at TEXT DEFAULT (datetime('now'))"
+                ")"
+            )
+            legacy.commit()
+            legacy.close()
+
+            real_connect = sqlite3.connect
+
+            def racing_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+                kwargs["factory"] = _RaceLosingConnection
+                conn: sqlite3.Connection = real_connect(*args, **kwargs)
+                return conn
+
+            with unittest.mock.patch("sqlite3.connect", side_effect=racing_connect):
+                # Must not raise — the loser's ALTER is swallowed.
+                init_db(db).close()
+
+    def test_skips_alter_when_column_already_present(self) -> None:
+        """Steady-state init_db must not issue ALTER TABLE — the listener
+        opens a fresh connection per flush and a DDL-attempt-per-flush
+        would briefly contend for the writer lock for no reason.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "fresh.db"
+            # First init creates the table with the column already present.
+            init_db(db).close()
+
+            # Spy on every SQL statement the second init runs.
+            statements: list[str] = []
+            real_connect = sqlite3.connect
+
+            def spying_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+                conn: sqlite3.Connection = real_connect(*args, **kwargs)
+                conn.set_trace_callback(statements.append)
+                return conn
+
+            with unittest.mock.patch("sqlite3.connect", side_effect=spying_connect):
+                init_db(db).close()
+
+            assert any("PRAGMA table_info" in s for s in statements)
+            assert not any("ALTER TABLE" in s for s in statements)
+
+
+class TestRecentlyProcessedTimeBoundary(unittest.TestCase):
+    """Boundary behaviour around the ``within_seconds`` window."""
+
+    def test_just_inside_window(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                "CREATE TABLE processed_fills ("
+                "  exec_id TEXT PRIMARY KEY,"
+                "  order_id TEXT,"
+                "  processed_at TEXT DEFAULT (datetime('now'))"
+                ")"
+            )
+            # Insert with an explicit 5-seconds-ago timestamp so the
+            # window boundary can be probed without wall-clock sleeping.
+            # (SQLite's default datetime('now') is 1-second precision, so
+            # without an explicit value the same-second case is ambiguous.)
+            conn.execute(
+                "INSERT INTO processed_fills (exec_id, order_id, processed_at) "
+                "VALUES (?, ?, datetime('now', '-5 seconds'))",
+                ("kraken:E", "ORDER_RECENT"),
+            )
+            conn.commit()
+            # Within 10 s — row is 5 s old, must match.
+            assert get_recently_processed_order_ids(
+                conn, "kraken", {"ORDER_RECENT"}, within_seconds=10,
+            ) == {"ORDER_RECENT"}
+            # Within 0 s — row is 5 s old, must not match.
+            assert get_recently_processed_order_ids(
+                conn, "kraken", {"ORDER_RECENT"}, within_seconds=0,
+            ) == set()
+        finally:
+            conn.close()

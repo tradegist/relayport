@@ -103,6 +103,25 @@ RelayPort is a **relay between broker accounts** that provides clear, common int
 - **Financial operations require extra scrutiny.** Any code path that places orders, moves money, or modifies account state must be reviewed for: race conditions, double-execution, partial failure (what if it crashes between two steps?), and idempotency.
 - **Use `asyncio.get_running_loop()`, never `asyncio.get_event_loop()`.** `get_event_loop()` is deprecated since Python 3.10 for contexts without a running loop and emits `DeprecationWarning` in 3.12+. Code that calls `loop.call_later()`, `loop.create_task()`, etc. always runs on the event-loop thread, so `get_running_loop()` is correct, explicit, and raises `RuntimeError` immediately if accidentally called off-loop.
 - **Schedule background tasks via `asyncio.get_running_loop().create_task(coro)`, not `asyncio.ensure_future(coro)`.** `ensure_future` falls back to `get_event_loop()` when no loop is provided, which can attach the task to a stale or unintended loop. Every place we schedule fire-and-forget work runs on the loop already, so `get_running_loop().create_task(...)` is deterministic and explicit. Retain the returned `Task` in a tracking set with `task.add_done_callback(set.discard)` to prevent garbage collection mid-run.
+- **Tasks stored in a dict keyed by external IDs must clean up on completion.** When a `dict[ID, asyncio.Task]` tracks per-key work (per-orderId debounce timers, per-symbol throttles, per-account state machines) it leaks completed `Task` references forever if entries are never removed. ID streams that don't repeat — e.g. Kraken `orderId`s, each used exactly once — make this leak unbounded over the lifetime of the process. Always wire `task.add_done_callback(cleanup)` and have `cleanup(task)` pop the entry, but **only when the dict slot still points at the finishing task**: a cancelled task whose slot has already been replaced must not evict its replacement. Pattern:
+
+  ```python
+  task = asyncio.create_task(...)
+  task.add_done_callback(functools.partial(self._cleanup_task, key))
+  self._tasks[key] = task
+
+  def _cleanup_task(self, key: str, task: asyncio.Task) -> None:
+      if self._tasks.get(key) is task:
+          self._tasks.pop(key, None)
+  ```
+
+- **SQLite schema migrations must be PRAGMA-gated AND race-safe.** `init_db` runs on every connection open — including the listener's per-flush connection, called many times per second under active trading. A bare `ALTER TABLE ... ADD COLUMN` in `init_db` attempts DDL on every connection: SQLite parses the statement, looks up the table, raises `OperationalError("duplicate column name")`, and the wrapping suppress catches it — but it briefly contends for the writer lock every time for no reason. The correct shape is **two layers**: (1) gate the DDL behind a cheap read-only `PRAGMA table_info(<table>)` check so the steady-state path is read-only; (2) wrap the `ALTER TABLE` itself in `contextlib.suppress(sqlite3.OperationalError)` to handle the concurrent-migration race on first deploy, where two threads (e.g. listener + poller) can both observe the missing column before either commits, and the writer-lock loser raises `duplicate column name`. The PRAGMA gate keeps the suppress dormant in steady state; the suppress handles the one-time race. Pattern:
+  ```python
+  cols = {row[1] for row in conn.execute("PRAGMA table_info(processed_fills)")}
+  if "order_id" not in cols:
+      with contextlib.suppress(sqlite3.OperationalError):
+          conn.execute("ALTER TABLE processed_fills ADD COLUMN order_id TEXT")
+  ```
 
 ## Local Development
 
@@ -184,9 +203,13 @@ Use the existing `ibkr` and `kraken` relays as reference implementations. IBKR d
      - `interval: int` — poll interval in seconds.
    - `listener_config`: a `ListenerConfig` or `None` (can be None if poller-only). Needs:
      - `connect: Callable[[aiohttp.ClientSession], Awaitable[aiohttp.ClientWebSocketResponse]]` — async callback that connects, authenticates, subscribes, and returns a ready-to-read websocket. The engine handles reconnection with exponential backoff; this callback is called on each reconnect.
-     - `on_message: Callable[[dict], Awaitable[list[OnMessageResult]]]` — parses a WS JSON dict into a list of `OnMessageResult`. Each result has `fill` (or None to skip) and `mark` (True for dedup+notify+mark pipeline, False for fire-and-forget).
+     - `on_message: Callable[[dict], Awaitable[list[OnMessageResult]]]` — parses a WS JSON dict into a list of `OnMessageResult`. Each result has four fields:
+       - `fill: Fill | None` — the parsed fill, or `None` to skip.
+       - `mark: bool` — `True` routes through the dedup+notify+mark pipeline; `False` is fire-and-forget (no dedup, no mark) for preliminary events.
+       - `error: str | None` — human-readable reason a fill was dropped (`fill=None`). Surfaced in the webhook payload's `errors` field.
+       - `order_complete: bool` — set to `True` on the fill event that closes its order. The debounce buffer flushes that orderId immediately instead of waiting for the quiet-window timer to expire. Leave `False` if the broker does not expose a per-order lifecycle signal — the timer still flushes correctly. Kraken sets this from `order_status == "filled"`; IBKR (via `commissionReportEvent`) does not currently use it.
      - `event_filter: Callable[[dict], bool]` — return True for events that should reach `on_message`, False to skip (heartbeats, subscription acks, etc.).
-     - `debounce_ms: int` — optional debounce buffer (0 = disabled).
+     - `debounce_ms: int` — optional debounce buffer (0 = disabled). The buffer is **per-orderId**: each orderId has its own quiet-window timer and fills for one order never delay another order's flush.
 
 4. **Environment variables** — follow the prefix convention:
    - Use `{RELAY}_` prefix for all relay-specific vars (e.g. `KRAKEN_API_KEY`).
@@ -207,14 +230,19 @@ Use the existing `ibkr` and `kraken` relays as reference implementations. IBKR d
    - `strike: float` — strike price.
    - `expiryDate: str` — expiry in ISO `YYYY-MM-DD` form. Use `flex_date_to_iso()` (or a broker-equivalent) to convert compact dates.
    - `type: Literal["call", "put"]` — derived from the broker's put/call indicator.
-   For IBKR: `Fill.symbol = contract.localSymbol` with spaces stripped (OCC ticker, e.g. `"AVGO260620C00200000"`) and `option.rootSymbol = contract.symbol` (underlying, e.g. `"AVGO"`). IBKR pads the underlying to 6 characters with spaces in the OCC format — always `.replace(" ", "")` so the symbol is URL-friendly.
-   **Never emit a fill with `assetClass == "option"` when option metadata is missing or invalid** — skip the row and surface a parse error instead. An incomplete `option` object is worse than a missing fill.
+     For IBKR: `Fill.symbol = contract.localSymbol` with spaces stripped (OCC ticker, e.g. `"AVGO260620C00200000"`) and `option.rootSymbol = contract.symbol` (underlying, e.g. `"AVGO"`). IBKR pads the underlying to 6 characters with spaces in the OCC format — always `.replace(" ", "")` so the symbol is URL-friendly.
+     **Never emit a fill with `assetClass == "option"` when option metadata is missing or invalid** — skip the row and surface a parse error instead. An incomplete `option` object is worse than a missing fill.
 
 8. **Write tests** — colocate unit tests next to the source files (e.g. `test_<name>.py`). If you added a `timestamps.py`, add a `test_timestamps.py` with positive + negative cases (the point of the helper is to reject typos that `datetime.fromisoformat` would silently accept).
 
-9. **Update README** — add the relay's env vars, webhook payload examples, and any broker-specific setup instructions.
+9. **Understand the listener/poller dedup interaction** — when both `LISTENER_ENABLED` and `POLLER_ENABLED` are true for the same relay, the same fill can reach the consumer through both paths. The engine reconciles this in two layers:
+   - **exec_id dedup** (always on): the listener writes each fill's `execId` to the shared SQLite dedup DB. The poller skips fills whose `execId` is already there. Works perfectly when the broker uses the **same identifier** on the WS and REST paths (e.g. IBKR: same `execId` on `commissionReportEvent` and Flex XML).
+   - **order-level dedup** (always on, listener-side write): the listener also stores the `orderId` alongside each `execId`. The poller drops candidates whose `orderId` was processed by the listener within `2 × POLL_INTERVAL`. This catches the case where the broker emits a **different identifier on REST than on WS** (e.g. Kraken multi-match: WS sends per-match `exec_id`s; REST returns a single consolidated `txid` matching none of them).
+     When designing a new relay, verify experimentally whether the broker reuses identifiers across paths. If it does not (Kraken-style), the order-level dedup will suppress the poller's fee-bearing webhook for that order — document the fee trade-off in the README. If your broker's listener does not reliably include fees in real time, consider recommending poller-only mode (with a shorter `{RELAY}_POLL_INTERVAL`) as the fee-accurate option.
 
-10. **Verify** — `make test`, `make typecheck`, `make lint` must all pass.
+10. **Update README** — add the relay's env vars, webhook payload examples, and any broker-specific setup instructions. If the listener does not reliably include fees, document the listener vs. poller trade-off explicitly (see the Kraken section as a template).
+
+11. **Verify** — `make test`, `make typecheck`, `make lint` must all pass.
 
 ### Env file flow
 
@@ -350,6 +378,11 @@ The E2E conftest (`services/relay_core/tests/e2e/conftest.py`) uses a **two-tier
 
 - **Avoid reading env vars at module level in production code.** Module-level `os.environ` reads (e.g. `DEBUG_PATH = os.environ.get(...)`) bake values at import time, forcing tests to set env vars before imports — a fragile anti-pattern. Defer env reads to a factory function (e.g. `create_app()`) or constructor so tests can set env vars normally in `setUpModule()` and get fresh reads on each call.
 - **No cross-test dependencies.** Every test must be self-contained — it must not rely on state created by a previous test. Pytest does not guarantee execution order, and tests may run selectively or in parallel. If a test needs preconditions, create them within the test itself or via an explicit fixture.
+- **Avoid `time.sleep()` in unit tests.** Wall-clock sleeps make `make test` slower for every developer and every CI run, and they cluster: one 1.1 s sleep is barely noticeable, twenty of them is a 22 s tax. Find a way to control time instead:
+  - **Time-based DB queries** (e.g. SQLite `processed_at` boundary checks against a "within N seconds" window): insert rows with an explicit relative timestamp like `datetime('now', '-5 seconds')` rather than the default `datetime('now')` plus a sleep to disambiguate.
+  - **Time-based logic in app code**: extract the clock behind a function (`_now()` / `time.monotonic()` wrapper) and mock it in the test, or pass an injectable clock as an argument.
+  - **Async timer/debounce code**: prefer asserting on task identity / state immediately rather than waiting for the timer to fire. When a real timer-fire path must be exercised, use the smallest possible interval (e.g. `debounce_ms=20`) and an `await asyncio.sleep(0.10)` is acceptable — but the test should still finish in well under a second.
+  - **The only acceptable use of `time.sleep()` in tests** is when an external system genuinely requires wall-clock progression and there is no clock-injection seam (e.g. waiting for a Docker container's `HEALTHCHECK` to converge in an E2E test). Inside a unit test, this is essentially never the case.
 - **E2E conftest fixtures must use `yield` with a context manager.** Never `return httpx.Client(...)` — the client is never closed and leaks sockets. Use `with httpx.Client(...) as client: yield client` instead. Scope to `session` (one client per test run).
 
 ## Relay Core Structure
@@ -384,8 +417,9 @@ services/relay_core/
 
 - **`services/relay_core/main.py`** reads `RELAYS`, loads adapters via the registry, initialises the relay context (`init_relays()`), starts the HTTP API, then spawns a poll loop per `PollerConfig` and a WS listener per relay (if configured). When `RELAYS` is empty, the API server starts alone (for health checks).
 - **`services/relay_core/context.py`** provides the relay context singleton. `init_relays(relays)` is called once at startup by `amain()`, then `get_relay(name)` and `get_relays()` are available anywhere to access relay config (notifiers, retry config, poller/listener configs) without parameter threading. `_reset()` is exposed for test teardown. Uses `TYPE_CHECKING` guard for `BrokerRelay` import to avoid circular import with `__init__.py`.
-- **`services/relay_core/poller_engine.py`** provides `poll_once(relay_name, poller_index)` — the generic polling function. Resolves `PollerConfig`, notifiers, and retry config from the relay context. Handles dedup, aggregation, notify, and mark. Broker-specific logic (Flex fetch, XML parsing) lives in the relay adapter.
-- **`services/relay_core/listener_engine.py`** provides `start_listener(relay_name)` — the generic WS listener. Resolves `ListenerConfig`, notifiers, and retry config from the relay context. Calls the adapter's `connect` callback to obtain a connected websocket, dispatches events via `event_filter` and `on_message` callbacks, handles dedup + notify + mark, and auto-reconnects with exponential backoff. The `connect` callback owns the entire connection protocol (auth, subscription) — the engine only manages the message loop and reconnection.
+- **`services/relay_core/poller_engine.py`** provides `poll_once(relay_name, poller_index)` — the generic polling function. Resolves `PollerConfig`, notifiers, and retry config from the relay context. Handles two-layer dedup (exec_id + order-level within `2 × interval`), aggregation, notify, and mark. The order-level layer catches REST-side duplicates when the broker uses a different identifier on REST than on WS (Kraken multi-match). Broker-specific logic (Flex fetch, XML parsing) lives in the relay adapter.
+- **`services/relay_core/listener_engine.py`** provides `start_listener(relay_name)` — the generic WS listener. Resolves `ListenerConfig`, notifiers, and retry config from the relay context. Calls the adapter's `connect` callback to obtain a connected websocket, dispatches events via `event_filter` and `on_message` callbacks, handles dedup + notify + mark, and auto-reconnects with exponential backoff. The debounce buffer is **per-orderId**: each orderId has its own quiet-window timer (independent of other orders) and flushes immediately when a fill arrives with `OnMessageResult.order_complete=True`. On successful notify the listener writes both the `execId` and the `orderId` to the shared dedup DB so the poller can suppress REST-side duplicates. The `connect` callback owns the entire connection protocol (auth, subscription) — the engine only manages the message loop and reconnection.
+- **`services/relay_core/dedup/__init__.py`** owns the SQLite schema. `processed_fills` has three columns: `exec_id TEXT PRIMARY KEY`, `order_id TEXT` (NULL for poller-written rows; populated for listener-written rows), and `processed_at`. `init_db` performs an idempotent `ALTER TABLE` migration so existing databases gain the `order_id` column on next start. Two write paths: `mark_processed_batch` (exec_id only, used by the poller) and `mark_processed_batch_with_orders` (used by the listener). Two read paths: `get_processed_ids` (exec_id set lookup) and `get_recently_processed_order_ids` (relay-prefixed + time-windowed, ignores NULL-order_id rows so poller-only marks never block subsequent polls).
 - **`services/relay_core/relay_models.py`** is a re-export shim for the notifier payload contracts plus relay-specific API types (`RunPollResponse`, `HealthResponse`). Listed in `schema_gen.py:SCHEMA_MODELS` under key `"relay_core.relay_models"`.
 - **`services/relay_core/routes/__init__.py`** provides `GET /health` (unauthenticated) and `POST /relays/{relay_name}/poll/{poll_idx}` (authenticated, 1-based index).
 - **`services/relay_core/env.py`** provides `get_env(var, prefix, suffix, default)` and `get_env_int(var, prefix, suffix, default)` — shared helpers for reading env vars with relay-specific prefix fallback. Resolution order: `{prefix}{var}{suffix}` → `{var}{suffix}` → `default`. All relay-core env var readers (`get_poll_interval`, `get_debounce_ms`, `load_retry_config`, notifier env loading) use these helpers. When adding new env var readers, use `get_env` / `get_env_int` from `relay_core.env` instead of writing inline `os.environ.get()` with manual fallback logic.
@@ -536,11 +570,11 @@ services/relay_core/dedup/
 
 This project has **three model locations** — each owns a distinct contract layer:
 
-| File                                     | Domain                      | Contains                                                                     |
-| ---------------------------------------- | --------------------------- | ---------------------------------------------------------------------------- |
+| File                                     | Domain                      | Contains                                                                                       |
+| ---------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------- |
 | `services/shared/models.py`              | CommonFill primitives       | `Fill`, `Trade`, `OptionContract`, `BuySell`, `AssetClass`, `OrderType`, `Source`, `RelayName` |
-| `services/relay_core/notifier/models.py` | Notifier payload (outbound) | `WebhookPayloadTrades`, `WebhookPayload`                                     |
-| `services/relay_core/relay_models.py`    | Relay API (outbound)        | Re-exports notifier payload + `RunPollResponse`, `HealthResponse`            |
+| `services/relay_core/notifier/models.py` | Notifier payload (outbound) | `WebhookPayloadTrades`, `WebhookPayload`                                                       |
+| `services/relay_core/relay_models.py`    | Relay API (outbound)        | Re-exports notifier payload + `RunPollResponse`, `HealthResponse`                              |
 
 - **`services/shared/models.py`** defines the CommonFill primitives. The `__init__.py` barrel re-exports them so `from shared import Fill` keeps working.
 - **`services/relay_core/notifier/models.py`** is the authoritative home for outbound webhook payload contracts. When you want to know "what does the notifier send?", this is where to look. Add new payload variants here as new event types are introduced.

@@ -582,6 +582,23 @@ KRAKEN_LISTENER_ENABLED=true
 
 The listener connects to `wss://ws-auth.kraken.com/v2`, subscribes to the `executions` channel, and pushes fills to your webhook as they execute. No external bridge required — Kraken's native WS API is used directly.
 
+#### Order-complete early flush
+
+Kraken stamps each execution event with the order's lifecycle state. When a fill arrives carrying `order_status == "filled"`, the listener flushes that order's debounce buffer immediately instead of waiting for `KRAKEN_LISTENER_DEBOUNCE_MS` to elapse. The debounce window only matters when an order is still receiving partial fills — once the order is fully done, the trade webhook ships within milliseconds.
+
+#### Fees on the listener vs. the poller
+
+Kraken's WS v2 executions channel **does not reliably include fees in real time** — `fee_usd_equiv` is often `0` at the moment of the fill event regardless of whether the order matched a single counter-party or several, and Kraken does not document a settlement timing. The REST `TradesHistory` endpoint (used by the poller) returns the fee once the trade has settled.
+
+Practical consequences when both `KRAKEN_LISTENER_ENABLED=true` and `KRAKEN_POLLER_ENABLED=true`:
+
+- **Listener fee is best-effort.** Whether the listener's webhook carries a non-zero fee depends on Kraken's internal timing — assume it doesn't.
+- **Single-match fills** (one client order matched against a single counter-party): the WS `exec_id` equals the REST `txid`, so the poller's later attempt is silently deduped against the listener's exec_id. The consumer receives **one** webhook, from the listener, typically with `fee=0`.
+- **Multi-match fills** (one client order matched against several counter-parties): the WS emits one event per match while REST returns a single consolidated trade under a brand-new `txid` that does not match any listener exec_id. The **order-level dedup** suppresses this REST-side duplicate, so again the consumer receives **one** webhook, from the listener, typically with `fee=0`.
+- **Poller-only** (set `KRAKEN_LISTENER_ENABLED=false`): the trade arrives within `KRAKEN_POLL_INTERVAL` of the fill, always with fees. Setting `KRAKEN_POLL_INTERVAL=60` (or similar) is a reasonable middle ground when fees are critical and ~1-minute latency is acceptable.
+
+In short: enabling the listener trades fee accuracy for latency. If your consumer needs fees, run poller-only with a shorter `KRAKEN_POLL_INTERVAL`.
+
 ### Webhook payload example (Kraken)
 
 ```json
