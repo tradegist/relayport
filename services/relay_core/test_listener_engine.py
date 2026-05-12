@@ -1131,6 +1131,62 @@ class TestDebounceBuffer(unittest.IsolatedAsyncioTestCase):
         mock_send.assert_called_once()
         self.assertNotIn("ORDER_GONE", buf._flush_tasks)
 
+    async def test_fills_during_in_flight_flush_use_latest_quiet_window(
+        self,
+    ) -> None:
+        """When extra fills land for the same orderId while a flush is
+        already in-flight, each new fill must still cancel the previous
+        pending timer. Otherwise orphan timer tasks pile up AND the next
+        flush fires earlier than the latest fill's quiet window allows.
+        """
+        flush_started = asyncio.Event()
+        flush_can_complete = asyncio.Event()
+
+        async def slow_to_thread(*args: Any, **kwargs: Any) -> None:
+            flush_started.set()
+            await flush_can_complete.wait()
+
+        buf = DebounceBuffer(
+            relay_name="ibkr", debounce_ms=10_000,
+            db_path="/tmp/test.db",
+        )
+        order_id = "ORDER_X"
+        first = _make_fill(exec_id="FIRST", order_id=order_id)
+        second = _make_fill(exec_id="SECOND", order_id=order_id)
+        third = _make_fill(exec_id="THIRD", order_id=order_id)
+        await buf.add(first)
+
+        with patch("asyncio.to_thread", side_effect=slow_to_thread):
+            # Drive the first fill into _flush_order (slow to_thread blocks).
+            flush_task = asyncio.create_task(buf.flush())
+            await flush_started.wait()
+
+            # First fill is mid-flush; add a second fill and a third
+            # fill to the same order while the flush is stalled.
+            await buf.add(second)
+            timer_after_second = buf._flush_tasks[order_id]
+            await buf.add(third)
+            timer_after_third = buf._flush_tasks[order_id]
+
+            # Each new fill must replace the previous pending timer with
+            # a fresh one — orphan timers from earlier fills must be
+            # cancelled so the quiet window is measured from the latest
+            # arrival. ``cancel()`` only schedules the cancellation; the
+            # task must yield once so the CancelledError can be raised
+            # at its ``await asyncio.sleep`` point before ``cancelled()``
+            # flips True.
+            self.assertIsNot(timer_after_second, timer_after_third)
+            await asyncio.sleep(0)
+            self.assertTrue(timer_after_second.cancelled())
+
+            flush_can_complete.set()
+            await flush_task
+
+        # Cleanup
+        timer_after_third.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await timer_after_third
+
     @patch("relay_core.listener_engine._send_and_mark")
     async def test_cancelled_task_callback_does_not_evict_replacement(
         self, mock_send: MagicMock,

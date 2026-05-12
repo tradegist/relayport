@@ -298,14 +298,12 @@ class DebounceBuffer:
         order_id = fill.orderId
         self._buffers.setdefault(order_id, []).append(fill)
 
-        # Cancel the orderId's pending timer (if any) — either we are
-        # about to start a fresh one or we are about to flush immediately.
+        # Cancel the orderId's pending timer if any. ``_delayed_flush``
+        # removes its own entry from ``_flush_tasks`` before entering
+        # ``_flush_order``, so anything we find here is guaranteed to
+        # still be in its sleep phase — safe to cancel.
         existing = self._flush_tasks.get(order_id)
-        if (
-            existing is not None
-            and not existing.done()
-            and order_id not in self._flushing
-        ):
+        if existing is not None and not existing.done():
             existing.cancel()
 
         if order_complete:
@@ -337,6 +335,16 @@ class DebounceBuffer:
 
     async def _delayed_flush(self, order_id: str) -> None:
         await asyncio.sleep(self._debounce_s)
+        # Remove ourselves from the timer slot *before* starting the
+        # flush so a concurrent ``add()`` arriving mid-flush can create
+        # and cancel new timers without ever finding (and inadvertently
+        # cancelling) the in-flight task. The identity check guards
+        # against the case where ``add()`` raced ahead and already
+        # replaced us with a fresh timer between the sleep returning
+        # and this line — in that case we must not evict the new entry.
+        current = asyncio.current_task()
+        if self._flush_tasks.get(order_id) is current:
+            del self._flush_tasks[order_id]
         await self._flush_order(order_id)
 
     async def _flush_order(self, order_id: str) -> None:
