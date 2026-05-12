@@ -1111,6 +1111,54 @@ class TestDebounceBuffer(unittest.IsolatedAsyncioTestCase):
         mock_send.assert_called_once()
 
     @patch("relay_core.listener_engine._send_and_mark")
+    async def test_completed_timer_entry_is_removed(
+        self, mock_send: MagicMock,
+    ) -> None:
+        """After a normal timer-driven flush, ``_flush_tasks`` must not
+        retain the finished Task — otherwise long-lived listeners with
+        many unique orderIds (the Kraken case) leak references forever.
+        """
+        buf = DebounceBuffer(
+            relay_name="ibkr", debounce_ms=20,
+            db_path="/tmp/test.db",
+        )
+        fill = _make_fill(exec_id="LEAK_PROBE", order_id="ORDER_GONE")
+        await buf.add(fill)
+        self.assertIn("ORDER_GONE", buf._flush_tasks)
+
+        # Wait for the timer to fire and the done-callback to run.
+        await asyncio.sleep(0.10)
+        mock_send.assert_called_once()
+        self.assertNotIn("ORDER_GONE", buf._flush_tasks)
+
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_cancelled_task_callback_does_not_evict_replacement(
+        self, mock_send: MagicMock,
+    ) -> None:
+        """Replacing a pending timer via ``add()`` cancels the old task;
+        its done-callback must not pop the freshly-installed replacement.
+        """
+        buf = DebounceBuffer(
+            relay_name="ibkr", debounce_ms=10_000,
+            db_path="/tmp/test.db",
+        )
+        fill1 = _make_fill(exec_id="A1", order_id="ORDER_X")
+        fill2 = _make_fill(exec_id="A2", order_id="ORDER_X")
+
+        await buf.add(fill1)
+        await buf.add(fill2)
+        replacement = buf._flush_tasks["ORDER_X"]
+        # Yield so the cancelled task's done-callback runs.
+        await asyncio.sleep(0)
+        # The replacement must still be there.
+        self.assertIs(buf._flush_tasks.get("ORDER_X"), replacement)
+
+        # Cleanup
+        replacement.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await replacement
+
+    @patch("relay_core.listener_engine._send_and_mark")
     async def test_order_complete_flushes_immediately(
         self, mock_send: MagicMock,
     ) -> None:

@@ -11,7 +11,6 @@ consolidated ``txid`` for multi-match orders that does not match the
 per-match ``exec_id`` emitted via the WebSocket).
 """
 
-import contextlib
 import logging
 import sqlite3
 from pathlib import Path
@@ -34,10 +33,14 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
         "  processed_at TEXT DEFAULT (datetime('now'))"
         ")"
     )
-    # Idempotent migration for databases created before order_id existed.
-    # SQLite raises OperationalError("duplicate column name") when the
-    # column is already present — safe to swallow.
-    with contextlib.suppress(sqlite3.OperationalError):
+    # Migrate databases created before order_id existed. ``init_db`` is
+    # called on every connection open (one per listener flush), so we
+    # check the schema with a cheap read-only PRAGMA before attempting
+    # the DDL — otherwise the post-migration steady state would issue
+    # an aborting ALTER on every connection, briefly contending for the
+    # writer lock for no reason.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(processed_fills)")}
+    if "order_id" not in cols:
         conn.execute("ALTER TABLE processed_fills ADD COLUMN order_id TEXT")
     conn.commit()
     return conn

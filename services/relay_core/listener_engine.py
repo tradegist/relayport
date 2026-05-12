@@ -7,6 +7,7 @@ mark-after-notify.  Zero broker knowledge.
 """
 
 import asyncio
+import functools
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -312,9 +313,23 @@ class DebounceBuffer:
             await self._flush_order(order_id)
             return
 
-        self._flush_tasks[order_id] = asyncio.create_task(
-            self._delayed_flush(order_id),
-        )
+        task = asyncio.create_task(self._delayed_flush(order_id))
+        # Drop the entry once the timer task finishes so completed
+        # orderIds don't pile up in the dict (each Kraken order has a
+        # fresh orderId, so without this every settled order would
+        # leak ~one Task reference forever).
+        task.add_done_callback(functools.partial(self._cleanup_flush_task, order_id))
+        self._flush_tasks[order_id] = task
+
+    def _cleanup_flush_task(
+        self, order_id: str, task: asyncio.Task[None],
+    ) -> None:
+        """Remove a finished timer task — but only if it is still the
+        current one for that orderId. A cancelled task whose slot has
+        already been replaced by ``add()`` must not evict the replacement.
+        """
+        if self._flush_tasks.get(order_id) is task:
+            self._flush_tasks.pop(order_id, None)
 
     def extend_errors(self, errors: list[str]) -> None:
         """Accumulate parse errors to be flushed with the next batch of fills."""

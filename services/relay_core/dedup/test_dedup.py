@@ -4,7 +4,9 @@ import sqlite3
 import tempfile
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
+from typing import Any
 
 from relay_core.dedup import (
     get_processed_ids,
@@ -226,8 +228,34 @@ class TestInitDbMigration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "fresh.db"
             init_db(db).close()
-            # Second call exercises the OperationalError swallow path.
+            # Second call should detect that order_id already exists
+            # and skip the ALTER entirely.
             init_db(db).close()
+
+    def test_skips_alter_when_column_already_present(self) -> None:
+        """Steady-state init_db must not issue ALTER TABLE — the listener
+        opens a fresh connection per flush and a DDL-attempt-per-flush
+        would briefly contend for the writer lock for no reason.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "fresh.db"
+            # First init creates the table with the column already present.
+            init_db(db).close()
+
+            # Spy on every SQL statement the second init runs.
+            statements: list[str] = []
+            real_connect = sqlite3.connect
+
+            def spying_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+                conn: sqlite3.Connection = real_connect(*args, **kwargs)
+                conn.set_trace_callback(statements.append)
+                return conn
+
+            with unittest.mock.patch("sqlite3.connect", side_effect=spying_connect):
+                init_db(db).close()
+
+            assert any("PRAGMA table_info" in s for s in statements)
+            assert not any("ALTER TABLE" in s for s in statements)
 
 
 class TestRecentlyProcessedTimeBoundary(unittest.TestCase):
