@@ -117,11 +117,19 @@ _CONFIG = CoreConfig(
     route_prefixes=["/relays", "/debug"],
     pre_sync_hook=_pre_sync_hook,
     # Env vars stripped from the subprocess env when `_run_checks` runs
-    # typecheck/lint/test/e2e. These are real production credentials that
-    # `load_env()` reads from `.env` before pre-deploy checks; if a test
-    # accidentally hits the real code path with them set, it would emit
-    # real external IO (emails, webhooks, etc.). Tests that legitimately
-    # exercise this code path must mock the IO.
+    # typecheck/lint/test/e2e. Currently scoped to the Resend / alert-email
+    # credentials that triggered the original incident — a test that hits
+    # the real `send_alert` code path is now a no-op even if `.env`
+    # contains real keys.
+    #
+    # Webhook credentials (`TARGET_WEBHOOK_URL`, `WEBHOOK_SECRET`, and
+    # per-relay prefixed variants like `IBKR_TARGET_WEBHOOK_URL`) are NOT
+    # listed here. Today every webhook unit test in `test_webhook.py`
+    # patches `notifier.webhook.httpx.post`, so a real POST is not
+    # reachable. If that ever stops being true, either enumerate the
+    # prefixed names or extend `CoreConfig.test_env_strip` to support
+    # suffix/prefix matching — a flat list of exact names can't cover
+    # arbitrary per-relay prefixes generically.
     test_env_strip=[
         "RESEND_API_KEY",
         "ALERT_REPORT_EMAIL_TO",
