@@ -103,6 +103,25 @@ RelayPort is a **relay between broker accounts** that provides clear, common int
 - **Financial operations require extra scrutiny.** Any code path that places orders, moves money, or modifies account state must be reviewed for: race conditions, double-execution, partial failure (what if it crashes between two steps?), and idempotency.
 - **Use `asyncio.get_running_loop()`, never `asyncio.get_event_loop()`.** `get_event_loop()` is deprecated since Python 3.10 for contexts without a running loop and emits `DeprecationWarning` in 3.12+. Code that calls `loop.call_later()`, `loop.create_task()`, etc. always runs on the event-loop thread, so `get_running_loop()` is correct, explicit, and raises `RuntimeError` immediately if accidentally called off-loop.
 - **Schedule background tasks via `asyncio.get_running_loop().create_task(coro)`, not `asyncio.ensure_future(coro)`.** `ensure_future` falls back to `get_event_loop()` when no loop is provided, which can attach the task to a stale or unintended loop. Every place we schedule fire-and-forget work runs on the loop already, so `get_running_loop().create_task(...)` is deterministic and explicit. Retain the returned `Task` in a tracking set with `task.add_done_callback(set.discard)` to prevent garbage collection mid-run.
+- **Tasks stored in a dict keyed by external IDs must clean up on completion.** When a `dict[ID, asyncio.Task]` tracks per-key work (per-orderId debounce timers, per-symbol throttles, per-account state machines) it leaks completed `Task` references forever if entries are never removed. ID streams that don't repeat — e.g. Kraken `orderId`s, each used exactly once — make this leak unbounded over the lifetime of the process. Always wire `task.add_done_callback(cleanup)` and have `cleanup(task)` pop the entry, but **only when the dict slot still points at the finishing task**: a cancelled task whose slot has already been replaced must not evict its replacement. Pattern:
+
+  ```python
+  task = asyncio.create_task(...)
+  task.add_done_callback(functools.partial(self._cleanup_task, key))
+  self._tasks[key] = task
+
+  def _cleanup_task(self, key: str, task: asyncio.Task) -> None:
+      if self._tasks.get(key) is task:
+          self._tasks.pop(key, None)
+  ```
+
+- **SQLite schema migrations must be PRAGMA-gated AND race-safe.** `init_db` runs on every connection open — including the listener's per-flush connection, called many times per second under active trading. A bare `ALTER TABLE ... ADD COLUMN` in `init_db` attempts DDL on every connection: SQLite parses the statement, looks up the table, raises `OperationalError("duplicate column name")`, and the wrapping suppress catches it — but it briefly contends for the writer lock every time for no reason. The correct shape is **two layers**: (1) gate the DDL behind a cheap read-only `PRAGMA table_info(<table>)` check so the steady-state path is read-only; (2) wrap the `ALTER TABLE` itself in `contextlib.suppress(sqlite3.OperationalError)` to handle the concurrent-migration race on first deploy, where two threads (e.g. listener + poller) can both observe the missing column before either commits, and the writer-lock loser raises `duplicate column name`. The PRAGMA gate keeps the suppress dormant in steady state; the suppress handles the one-time race. Pattern:
+  ```python
+  cols = {row[1] for row in conn.execute("PRAGMA table_info(processed_fills)")}
+  if "order_id" not in cols:
+      with contextlib.suppress(sqlite3.OperationalError):
+          conn.execute("ALTER TABLE processed_fills ADD COLUMN order_id TEXT")
+  ```
 
 ## Local Development
 
@@ -359,6 +378,11 @@ The E2E conftest (`services/relay_core/tests/e2e/conftest.py`) uses a **two-tier
 
 - **Avoid reading env vars at module level in production code.** Module-level `os.environ` reads (e.g. `DEBUG_PATH = os.environ.get(...)`) bake values at import time, forcing tests to set env vars before imports — a fragile anti-pattern. Defer env reads to a factory function (e.g. `create_app()`) or constructor so tests can set env vars normally in `setUpModule()` and get fresh reads on each call.
 - **No cross-test dependencies.** Every test must be self-contained — it must not rely on state created by a previous test. Pytest does not guarantee execution order, and tests may run selectively or in parallel. If a test needs preconditions, create them within the test itself or via an explicit fixture.
+- **Avoid `time.sleep()` in unit tests.** Wall-clock sleeps make `make test` slower for every developer and every CI run, and they cluster: one 1.1 s sleep is barely noticeable, twenty of them is a 22 s tax. Find a way to control time instead:
+  - **Time-based DB queries** (e.g. SQLite `processed_at` boundary checks against a "within N seconds" window): insert rows with an explicit relative timestamp like `datetime('now', '-5 seconds')` rather than the default `datetime('now')` plus a sleep to disambiguate.
+  - **Time-based logic in app code**: extract the clock behind a function (`_now()` / `time.monotonic()` wrapper) and mock it in the test, or pass an injectable clock as an argument.
+  - **Async timer/debounce code**: prefer asserting on task identity / state immediately rather than waiting for the timer to fire. When a real timer-fire path must be exercised, use the smallest possible interval (e.g. `debounce_ms=20`) and an `await asyncio.sleep(0.10)` is acceptable — but the test should still finish in well under a second.
+  - **The only acceptable use of `time.sleep()` in tests** is when an external system genuinely requires wall-clock progression and there is no clock-injection seam (e.g. waiting for a Docker container's `HEALTHCHECK` to converge in an E2E test). Inside a unit test, this is essentially never the case.
 - **E2E conftest fixtures must use `yield` with a context manager.** Never `return httpx.Client(...)` — the client is never closed and leaks sockets. Use `with httpx.Client(...) as client: yield client` instead. Scope to `session` (one client per test run).
 
 ## Relay Core Structure

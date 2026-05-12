@@ -2,7 +2,6 @@
 
 import sqlite3
 import tempfile
-import time
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -232,6 +231,47 @@ class TestInitDbMigration(unittest.TestCase):
             # and skip the ALTER entirely.
             init_db(db).close()
 
+    def test_concurrent_migration_race_does_not_raise(self) -> None:
+        """If two processes pass the PRAGMA check at the same time, only
+        one of them wins the writer-lock race — the loser must not crash
+        startup. Simulated here by routing init_db through a Connection
+        subclass that fails every ALTER TABLE, mimicking the loser
+        finding the column already committed.
+        """
+        class _RaceLosingConnection(sqlite3.Connection):
+            def execute(
+                self, sql: str, *args: Any,
+            ) -> sqlite3.Cursor:
+                if "ALTER TABLE" in sql:
+                    raise sqlite3.OperationalError(
+                        "duplicate column name: order_id",
+                    )
+                return super().execute(sql, *args)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "legacy.db"
+            # Build a legacy-schema database that lacks order_id.
+            legacy = sqlite3.connect(str(db))
+            legacy.execute(
+                "CREATE TABLE processed_fills ("
+                "  exec_id TEXT PRIMARY KEY,"
+                "  processed_at TEXT DEFAULT (datetime('now'))"
+                ")"
+            )
+            legacy.commit()
+            legacy.close()
+
+            real_connect = sqlite3.connect
+
+            def racing_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+                kwargs["factory"] = _RaceLosingConnection
+                conn: sqlite3.Connection = real_connect(*args, **kwargs)
+                return conn
+
+            with unittest.mock.patch("sqlite3.connect", side_effect=racing_connect):
+                # Must not raise — the loser's ALTER is swallowed.
+                init_db(db).close()
+
     def test_skips_alter_when_column_already_present(self) -> None:
         """Steady-state init_db must not issue ALTER TABLE — the listener
         opens a fresh connection per flush and a DDL-attempt-per-flush
@@ -271,14 +311,21 @@ class TestRecentlyProcessedTimeBoundary(unittest.TestCase):
                 "  processed_at TEXT DEFAULT (datetime('now'))"
                 ")"
             )
-            mark_processed_batch_with_orders(conn, [("kraken:E", "ORDER_RECENT")])
-            # SQLite stores second precision; sleep to disambiguate.
-            time.sleep(1.1)
-            # Within 10 s — should match.
+            # Insert with an explicit 5-seconds-ago timestamp so the
+            # window boundary can be probed without wall-clock sleeping.
+            # (SQLite's default datetime('now') is 1-second precision, so
+            # without an explicit value the same-second case is ambiguous.)
+            conn.execute(
+                "INSERT INTO processed_fills (exec_id, order_id, processed_at) "
+                "VALUES (?, ?, datetime('now', '-5 seconds'))",
+                ("kraken:E", "ORDER_RECENT"),
+            )
+            conn.commit()
+            # Within 10 s — row is 5 s old, must match.
             assert get_recently_processed_order_ids(
                 conn, "kraken", {"ORDER_RECENT"}, within_seconds=10,
             ) == {"ORDER_RECENT"}
-            # Within 0 s — should not.
+            # Within 0 s — row is 5 s old, must not match.
             assert get_recently_processed_order_ids(
                 conn, "kraken", {"ORDER_RECENT"}, within_seconds=0,
             ) == set()
