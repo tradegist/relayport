@@ -122,7 +122,9 @@ types: ## Regenerate TypeScript + Python types from Pydantic models
 	$(JSON2TS) types/typescript/shared/types.schema.json > types/typescript/shared/types.d.ts
 	PYTHONPATH=services $(PYTHON) schema_gen.py relay_core.relay_models > types/typescript/relay_api/types.schema.json
 	$(JSON2TS) types/typescript/relay_api/types.schema.json > types/typescript/relay_api/types.d.ts
-	@echo "Generated types/typescript/shared/types.d.ts + types/typescript/relay_api/types.d.ts"
+	PYTHONPATH=services $(PYTHON) schema_gen.py market_data.models.dividends > types/typescript/market_data_api/types.schema.json
+	$(JSON2TS) types/typescript/market_data_api/types.schema.json > types/typescript/market_data_api/types.d.ts
+	@echo "Generated types/typescript/shared/types.d.ts + types/typescript/relay_api/types.d.ts + types/typescript/market_data_api/types.d.ts"
 	$(PYTHON) gen_ts_barrels.py
 	$(PYTHON) gen_python_types.py
 	$(PYTHON) -m ruff check types/python/relayport_types/ --fix --quiet

@@ -28,7 +28,7 @@ import sys
 # home for cross-relay primitives (Fill, Trade, BuySell), ``relay_api``
 # is the home for relay-specific endpoint shapes — without forcing
 # schema_gen.py to emit cross-file ``$ref``s.
-TS_MODULES = ["shared", "relay_api"]
+TS_MODULES = ["shared", "relay_api", "market_data_api"]
 
 TS_BASE = pathlib.Path("types/typescript")
 
