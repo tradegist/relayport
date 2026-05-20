@@ -86,8 +86,11 @@ class TestFetchDividendInfoFromYahoo(unittest.TestCase):
         future_ex_div = 1771113600  # 2026-02-15T00:00:00Z (after frozen now 2026-01-15)
         future_payment = 1772928000  # 2026-03-08T00:00:00Z
 
+        # Chart is always fetched now so dps (per-payment) comes from last_event_amount,
+        # not from dividendRate. annual_dps comes from dividendRate=1.5.
         mock_client = _make_mock_client([
             _make_response(200, _make_summary_body(future_ex_div, future_payment, 1.5)),
+            _make_response(200, _make_chart_body(_QUARTERLY_TIMESTAMPS, 0.25)),
         ])
         with unittest.mock.patch("time.time", return_value=_FROZEN_NOW), \
              unittest.mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client):
@@ -96,11 +99,28 @@ class TestFetchDividendInfoFromYahoo(unittest.TestCase):
         self.assertEqual(result, DividendInfo(
             ex_div_date="2026-02-15",
             payment_date="2026-03-08",
-            dps=1.5,
-            annual_dps=1.5,
+            dps=0.25,       # per-payment from chart last event
+            annual_dps=1.5,  # annualised from Yahoo's dividendRate
             are_dates_estimated=False,
         ))
-        mock_client.get.assert_called_once()
+        self.assertEqual(mock_client.get.call_count, 2)
+
+    def test_happy_path_dps_is_none_when_chart_unavailable(self) -> None:
+        future_ex_div = 1771113600
+        future_payment = 1772928000
+
+        mock_client = _make_mock_client([
+            _make_response(200, _make_summary_body(future_ex_div, future_payment, 1.5)),
+            _make_response(404, ""),
+        ])
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW), \
+             unittest.mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client):
+            result = fetch_dividend_info_from_yahoo("AAPL", _MOCK_SESSION)
+
+        self.assertEqual(result.ex_div_date, "2026-02-15")
+        self.assertIsNone(result.dps)       # no chart -> no per-payment amount
+        self.assertEqual(result.annual_dps, 1.5)
+        self.assertFalse(result.are_dates_estimated)
 
     def test_estimation_path_estimates_from_chart_history(self) -> None:
         past_unix = 1760659200  # 2025-10-17, before frozen now
@@ -116,8 +136,8 @@ class TestFetchDividendInfoFromYahoo(unittest.TestCase):
         self.assertEqual(result, DividendInfo(
             ex_div_date=_ESTIMATED_EX_DIV,
             payment_date=_ESTIMATED_PAYMENT,
-            dps=0.25,
-            annual_dps=0.25,  # dividendRate=0.25 is available, so annual_dps == dps
+            dps=0.25,       # per-payment from chart last event
+            annual_dps=0.25,  # from dividendRate (also 0.25 in this fixture)
             are_dates_estimated=True,
         ))
         self.assertEqual(mock_client.get.call_count, 2)
@@ -146,8 +166,8 @@ class TestFetchDividendInfoFromYahoo(unittest.TestCase):
 
         self.assertIsNone(result.ex_div_date)
         self.assertIsNone(result.payment_date)
-        self.assertEqual(result.dps, 1.5)
-        self.assertEqual(result.annual_dps, 1.5)
+        self.assertIsNone(result.dps)        # no chart -> no per-payment amount
+        self.assertEqual(result.annual_dps, 1.5)  # dividendRate still available
         self.assertFalse(result.are_dates_estimated)
 
     def test_estimation_annual_dps_computed_from_history_when_dividend_rate_missing(self) -> None:
@@ -184,6 +204,7 @@ class TestFetchDividendInfoFromYahoo(unittest.TestCase):
             result = fetch_dividend_info_from_yahoo("AAPL", _MOCK_SESSION)
 
         self.assertIsNone(result.ex_div_date)
+        self.assertIsNone(result.dps)        # no usable dividend history -> no per-payment amount
         self.assertEqual(result.annual_dps, 1.5)
         self.assertFalse(result.are_dates_estimated)
 
@@ -203,6 +224,7 @@ class TestFetchWithRetry(unittest.TestCase):
         first_client = _make_mock_client([_make_response(401, "")])
         second_client = _make_mock_client([
             _make_response(200, _make_summary_body(future_ex_div, future_payment, 1.5)),
+            _make_response(200, _make_chart_body(_QUARTERLY_TIMESTAMPS, 0.25)),
         ])
 
         client_side_effects = [first_client, second_client]
@@ -222,8 +244,8 @@ class TestFetchWithRetry(unittest.TestCase):
         self.assertEqual(info, DividendInfo(
             ex_div_date="2026-02-15",
             payment_date="2026-03-08",
-            dps=1.5,
-            annual_dps=1.5,
+            dps=0.25,       # per-payment from chart
+            annual_dps=1.5,  # annualised from dividendRate
             are_dates_estimated=False,
         ))
 
@@ -247,7 +269,7 @@ class TestYahooClientCache(unittest.TestCase):
         cached_result = DividendInfo(
             ex_div_date="2026-02-15",
             payment_date="2026-03-08",
-            dps=1.5,
+            dps=0.25,
             annual_dps=1.5,
             are_dates_estimated=False,
         )
@@ -273,6 +295,7 @@ class TestYahooClientCache(unittest.TestCase):
 
         mock_httpx_client = _make_mock_client([
             _make_response(200, _make_summary_body(future_ex_div, future_payment, 1.5)),
+            _make_response(200, _make_chart_body(_QUARTERLY_TIMESTAMPS, 0.25)),
         ])
 
         yahoo_client = YahooClient()
@@ -293,8 +316,8 @@ class TestYahooClientCache(unittest.TestCase):
         self.assertEqual(data["AAPL"], DividendInfo(
             ex_div_date="2026-02-15",
             payment_date="2026-03-08",
-            dps=1.5,
-            annual_dps=1.5,
+            dps=0.25,       # per-payment from chart
+            annual_dps=1.5,  # annualised from dividendRate
             are_dates_estimated=False,
         ))
         self.assertEqual(errors, {})

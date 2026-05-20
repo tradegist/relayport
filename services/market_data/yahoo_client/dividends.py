@@ -33,6 +33,7 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
     qs = f"&crumb={quote(session.crumb)}"
 
     with cffi_requests.Session(impersonate=_IMPERSONATE) as client:
+        # ── 1. Summary: announced dates + annualised dividend rate ───────
         summary_res = client.get(
             f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{quote(ticker)}"
             f"?modules=calendarEvents,summaryDetail{qs}",
@@ -56,21 +57,17 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
         result = result_list[0] if result_list else None
         cal = result.get("calendarEvents") if result else None
         dps_raw = (result.get("summaryDetail") or {}).get("dividendRate") if result else None
-        dps: float | None = dps_raw.get("raw") if isinstance(dps_raw, dict) else None
+        annual_dps_from_rate: float | None = dps_raw.get("raw") if isinstance(dps_raw, dict) else None
 
         announced_ex_div_unix = (cal.get("exDividendDate") or {}).get("raw") if cal else None
         announced_payment_unix = (cal.get("dividendDate") or {}).get("raw") if cal else None
 
-        if _is_future_unix(announced_ex_div_unix) and _is_future_unix(announced_payment_unix):
-            return DividendInfo(
-                ex_div_date=_to_date_string(float(announced_ex_div_unix)),  # type: ignore[arg-type]
-                payment_date=_to_date_string(float(announced_payment_unix)),  # type: ignore[arg-type]
-                dps=dps,
-                annual_dps=dps,
-                are_dates_estimated=False,
-            )
-
-        # Yahoo has no upcoming announcement yet — estimate from historical rhythm
+        # ── 2. Chart: always fetch for per-payment dps + frequency ───────
+        # dps (per-payment) comes from the most recent historical dividend event.
+        # annual_dps comes from Yahoo's dividendRate when available; otherwise
+        # it is estimated as per_payment_dps * payments_per_year derived from
+        # the average gap between the last five events. This mirrors yfinance's
+        # own split: dividendRate (annualised) vs historical dividends (per-payment).
         chart_res = client.get(
             f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(ticker)}"
             f"?interval=1d&range=2y&events=dividends{qs}",
@@ -83,68 +80,87 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
                 status_code=401,
                 error_code="YAHOO_UNAUTHORIZED",
             )
-        if chart_res.status_code != 200:
-            return DividendInfo(
-                ex_div_date=None, payment_date=None, dps=dps, annual_dps=dps, are_dates_estimated=False
-            )
 
-        chart_json = chart_res.json()
-        chart_result_list = (chart_json.get("chart") or {}).get("result") or []
-        div_events: dict[str, dict[str, object]] | None = (
-            (chart_result_list[0] if chart_result_list else {}).get("events") or {}
-        ).get("dividends")
+        per_payment_dps: float | None = None
+        avg_gap_seconds: float | None = None
+        estimated_ex_div: float | None = None
+        payment_offset_seconds: float = 21 * 24 * 60 * 60
 
-        if not div_events:
-            return DividendInfo(
-                ex_div_date=None, payment_date=None, dps=dps, annual_dps=dps, are_dates_estimated=False
-            )
+        if chart_res.status_code == 200:
+            chart_json = chart_res.json()
+            chart_result_list = (chart_json.get("chart") or {}).get("result") or []
+            div_events: dict[str, dict[str, object]] | None = (
+                (chart_result_list[0] if chart_result_list else {}).get("events") or {}
+            ).get("dividends")
 
-        sorted_keys = sorted(div_events.keys(), key=float)
+            if div_events:
+                sorted_keys = sorted(div_events.keys(), key=float)
+                if len(sorted_keys) >= 2:
+                    gaps: list[float] = []
+                    prev: float | None = None
+                    last_key: str | None = None
+                    for key in sorted_keys[-5:]:
+                        curr = float(key)
+                        if prev is not None:
+                            gaps.append(curr - prev)
+                        prev = curr
+                        last_key = key
 
-        if len(sorted_keys) < 2:
-            return DividendInfo(
-                ex_div_date=None, payment_date=None, dps=dps, annual_dps=dps, are_dates_estimated=False
-            )
+                    if last_key is not None:
+                        avg_gap_seconds = sum(gaps) / len(gaps)
 
-        gaps: list[float] = []
-        prev: float | None = None
-        last_key: str | None = None
-        for key in sorted_keys[-5:]:
-            curr = float(key)
-            if prev is not None:
-                gaps.append(curr - prev)
-            prev = curr
-            last_key = key
+                        last_event = div_events.get(last_key) or {}
+                        last_event_amount = last_event.get("amount")
+                        per_payment_dps = (
+                            float(last_event_amount)
+                            if isinstance(last_event_amount, (int, float))
+                            else None
+                        )
 
-        avg_gap_seconds = sum(gaps) / len(gaps)
+                        now = time.time()
+                        estimated_ex_div = float(last_key)
+                        while estimated_ex_div <= now:
+                            estimated_ex_div += avg_gap_seconds
 
-        if last_key is None:
-            return DividendInfo(
-                ex_div_date=None, payment_date=None, dps=dps, annual_dps=dps, are_dates_estimated=False
-            )
+                        if (
+                            _is_future_unix(announced_payment_unix)
+                            and _is_future_unix(announced_ex_div_unix)
+                        ):
+                            payment_offset_seconds = float(announced_payment_unix) - float(announced_ex_div_unix)  # type: ignore[arg-type]
 
-        now = time.time()
-        estimated_ex_div = float(last_key)
-        while estimated_ex_div <= now:
-            estimated_ex_div += avg_gap_seconds
-
-        if _is_future_unix(announced_payment_unix) and _is_future_unix(announced_ex_div_unix):
-            payment_offset_seconds = float(announced_payment_unix) - float(announced_ex_div_unix)  # type: ignore[arg-type]
+        # ── 3. Derive annual_dps ─────────────────────────────────────────
+        if annual_dps_from_rate is not None:
+            annual_dps: float | None = annual_dps_from_rate
+        elif per_payment_dps is not None and avg_gap_seconds is not None:
+            annual_dps = per_payment_dps * (_SECONDS_PER_YEAR / avg_gap_seconds)
         else:
-            payment_offset_seconds = 21 * 24 * 60 * 60
+            annual_dps = None
 
-        last_event = div_events.get(last_key) or {}
-        last_event_amount = last_event.get("amount")
-        per_payment_dps = float(last_event_amount) if isinstance(last_event_amount, (int, float)) else None
-        annual_dps = dps if dps is not None else (
-            per_payment_dps * (_SECONDS_PER_YEAR / avg_gap_seconds) if per_payment_dps is not None else None
-        )
+        # ── 4. Return: announced dates take priority over estimated ──────
+        if _is_future_unix(announced_ex_div_unix) and _is_future_unix(announced_payment_unix):
+            return DividendInfo(
+                ex_div_date=_to_date_string(float(announced_ex_div_unix)),  # type: ignore[arg-type]
+                payment_date=_to_date_string(float(announced_payment_unix)),  # type: ignore[arg-type]
+                dps=per_payment_dps,
+                annual_dps=annual_dps,
+                are_dates_estimated=False,
+            )
+
+        if estimated_ex_div is not None:
+            return DividendInfo(
+                ex_div_date=_to_date_string(estimated_ex_div),
+                payment_date=_to_date_string(estimated_ex_div + payment_offset_seconds),
+                dps=per_payment_dps,
+                annual_dps=annual_dps,
+                are_dates_estimated=True,
+            )
+
         return DividendInfo(
-            ex_div_date=_to_date_string(estimated_ex_div),
-            payment_date=_to_date_string(estimated_ex_div + payment_offset_seconds),
-            dps=dps if dps is not None else per_payment_dps,
+            ex_div_date=None,
+            payment_date=None,
+            dps=per_payment_dps,
             annual_dps=annual_dps,
-            are_dates_estimated=True,
+            are_dates_estimated=False,
         )
 
 
