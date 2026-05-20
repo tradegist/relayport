@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 
 from market_data.yahoo_client.auth import get_yahoo_session
@@ -20,6 +21,7 @@ class YahooClient:
     def __init__(self) -> None:
         self._session: YahooSession | None = None
         self._cache: CacheStore = {}
+        self._lock = threading.Lock()
 
     def get_dividend_info(self, ticker: str) -> DividendInfo:
         """Return dividend info for one ticker, using the cache.
@@ -27,16 +29,17 @@ class YahooClient:
         Raises on fetch failure — callers that want null-on-failure should
         catch exceptions themselves (or use get_dividends_info).
         """
-        cached = get_cached(ticker, self._cache)
-        if cached is not None:
-            log.debug("Dividend cache hit for %s", ticker)
-            return cached
+        with self._lock:
+            cached = get_cached(ticker, self._cache)
+            if cached is not None:
+                log.debug("Dividend cache hit for %s", ticker)
+                return cached
 
-        if self._session is None:
-            self._session = get_yahoo_session()
-        info, self._session = fetch_with_retry(ticker, self._session)
-        set_cached(ticker, info, self._cache)
-        return info
+            if self._session is None:
+                self._session = get_yahoo_session()
+            info, self._session = fetch_with_retry(ticker, self._session)
+            set_cached(ticker, info, self._cache)
+            return info
 
     def get_dividends_info(
         self, tickers: list[str]

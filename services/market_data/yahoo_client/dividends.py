@@ -127,7 +127,10 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
                             _is_future_unix(announced_payment_unix)
                             and _is_future_unix(announced_ex_div_unix)
                         ):
-                            payment_offset_seconds = float(announced_payment_unix) - float(announced_ex_div_unix)  # type: ignore[arg-type]
+                            payment_offset_seconds = (
+                                cast(float, announced_payment_unix)
+                                - cast(float, announced_ex_div_unix)
+                            )
 
         # ── 3. Derive annual_dps ─────────────────────────────────────────
         if annual_dps_from_rate is not None:

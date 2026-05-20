@@ -574,7 +574,7 @@ services/market_data/
     dividends.py           # fetch_dividend_info_from_yahoo(), fetch_with_retry()
     types.py               # DividendInfo, YahooSession, CacheEntry Pydantic models
   Dockerfile
-  requirements.txt         # aiohttp, curl_cffi, httpx, pydantic
+  requirements.txt         # aiohttp, curl_cffi, pydantic
 ```
 
 - **`MD_API_TOKEN`** — required env var, checked at startup via `validate_api_token()`. The auth middleware rejects empty tokens with HTTP 500 (same pattern as the relay `API_TOKEN` guard).
@@ -827,7 +827,7 @@ services/                  # Business-logic services
       test_yahoo.py        # Tests for YahooAdapter
     models/
       __init__.py
-      dividends.py         # DividendsResponse, TickerDividendInfo Pydantic models
+      dividends.py         # DividendsUpcomingQuery, DividendsUpcomingItem, DividendsUpcomingResponse Pydantic models
     routes/                # HTTP API
       app.py               # create_app() — aiohttp Application factory
       dividends.py         # GET /v1/market-data/dividends/upcoming handler
@@ -838,7 +838,7 @@ services/                  # Business-logic services
       auth.py              # Session management: finance.yahoo.com cookies + crumb fetch
       cache.py             # CacheEntry + _cache_key + TTL constants
       dividends.py         # fetch_dividend_info_from_yahoo(), fetch_with_retry()
-      types.py             # YahooSession, DividendInfo dataclasses
+      types.py             # YahooSession, DividendInfo, CacheEntry Pydantic models
       test_cache.py        # Tests for cache module
       test_dividends.py    # Tests for dividends fetch + retry logic
     Dockerfile

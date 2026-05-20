@@ -148,7 +148,8 @@ curl -H "Authorization: Bearer <MD_API_TOKEN>" \
     "AAPL": {
       "ex_div_date": "2026-08-10",
       "payment_date": "2026-08-31",
-      "dps": 1.08,
+      "dps": 0.27,
+      "annual_dps": 1.08,
       "are_dates_estimated": true
     }
   },
@@ -169,19 +170,22 @@ curl -H "Authorization: Bearer <MD_API_TOKEN>" \
     "AAPL": {
       "ex_div_date": "2026-08-10",
       "payment_date": "2026-08-31",
-      "dps": 1.08,
+      "dps": 0.27,
+      "annual_dps": 1.08,
       "are_dates_estimated": true
     },
     "MSFT": {
       "ex_div_date": "2026-05-21",
       "payment_date": "2026-06-11",
-      "dps": 3.64,
+      "dps": 0.91,
+      "annual_dps": 3.64,
       "are_dates_estimated": false
     },
     "GOOG": {
       "ex_div_date": "2026-06-08",
       "payment_date": "2026-06-15",
-      "dps": 0.88,
+      "dps": 0.22,
+      "annual_dps": 0.88,
       "are_dates_estimated": false
     }
   },
@@ -196,7 +200,8 @@ curl -H "Authorization: Bearer <MD_API_TOKEN>" \
 | `data`                       | `object`         | Map of ticker → dividend info. Keys are uppercased tickers                                         |
 | `data[].ex_div_date`         | `string \| null` | Next ex-dividend date in `YYYY-MM-DD` format                                                       |
 | `data[].payment_date`        | `string \| null` | Next payment date in `YYYY-MM-DD` format                                                           |
-| `data[].dps`                 | `number \| null` | Dividend per share (annual rate)                                                                   |
+| `data[].dps`                 | `number \| null` | Dividend per share for this payment (per-payment amount, e.g. quarterly). `null` when unavailable |
+| `data[].annual_dps`          | `number \| null` | Annualised dividend per share (from Yahoo's `dividendRate`). Divide `annual_dps` by `dps` to derive payment frequency |
 | `data[].are_dates_estimated` | `boolean`        | `true` when Yahoo has not yet announced the next dates — they are estimated from historical rhythm |
 | `errors`                     | `object`         | Map of ticker → error string for any failed lookups. Successful tickers are not present here       |
 
