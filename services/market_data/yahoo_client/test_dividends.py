@@ -1,6 +1,6 @@
 import json
 import unittest
-from unittest import mock
+import unittest.mock
 
 from market_data.yahoo_client import YahooClient
 from market_data.yahoo_client.dividends import fetch_dividend_info_from_yahoo, fetch_with_retry
@@ -25,8 +25,8 @@ def _make_response(
     status_code: int,
     body: str,
     cookies: list[str] | None = None,
-) -> mock.MagicMock:
-    resp = mock.MagicMock()
+) -> unittest.mock.MagicMock:
+    resp = unittest.mock.MagicMock()
     resp.status_code = status_code
     resp.text = body
     if body:
@@ -67,10 +67,10 @@ def _make_chart_body(timestamps: list[int], amount_per_div: float = 0.25) -> str
     return json.dumps({"chart": {"result": [{"events": {"dividends": dividends}}]}})
 
 
-def _make_mock_client(responses: list[mock.MagicMock]) -> mock.MagicMock:
-    mock_client = mock.MagicMock()
-    mock_client.__enter__ = mock.Mock(return_value=mock_client)
-    mock_client.__exit__ = mock.Mock(return_value=False)
+def _make_mock_client(responses: list[unittest.mock.MagicMock]) -> unittest.mock.MagicMock:
+    mock_client = unittest.mock.MagicMock()
+    mock_client.__enter__ = unittest.mock.Mock(return_value=mock_client)
+    mock_client.__exit__ = unittest.mock.Mock(return_value=False)
     mock_client.get.side_effect = responses
     return mock_client
 
@@ -86,8 +86,8 @@ class TestFetchDividendInfoFromYahoo(unittest.TestCase):
         mock_client = _make_mock_client([
             _make_response(200, _make_summary_body(future_ex_div, future_payment, 1.5)),
         ])
-        with mock.patch("time.time", return_value=_FROZEN_NOW), \
-             mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client):
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW), \
+             unittest.mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client):
             result = fetch_dividend_info_from_yahoo("AAPL", _MOCK_SESSION)
 
         self.assertEqual(result, DividendInfo(
@@ -105,8 +105,8 @@ class TestFetchDividendInfoFromYahoo(unittest.TestCase):
             _make_response(200, _make_summary_body(past_unix, past_unix, 0.25)),
             _make_response(200, _make_chart_body(_QUARTERLY_TIMESTAMPS, 0.25)),
         ])
-        with mock.patch("time.time", return_value=_FROZEN_NOW), \
-             mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client):
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW), \
+             unittest.mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client):
             result = fetch_dividend_info_from_yahoo("AAPL", _MOCK_SESSION)
 
         self.assertEqual(result, DividendInfo(
@@ -121,8 +121,8 @@ class TestFetchDividendInfoFromYahoo(unittest.TestCase):
         from market_data.errors import YahooError
 
         mock_client = _make_mock_client([_make_response(401, "")])
-        with mock.patch("time.time", return_value=_FROZEN_NOW), \
-             mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client), \
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW), \
+             unittest.mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client), \
              self.assertRaises(YahooError) as ctx:
             fetch_dividend_info_from_yahoo("AAPL", _MOCK_SESSION)
 
@@ -135,8 +135,8 @@ class TestFetchDividendInfoFromYahoo(unittest.TestCase):
             _make_response(200, _make_summary_body(past_unix, past_unix, 1.5)),
             _make_response(404, ""),
         ])
-        with mock.patch("time.time", return_value=_FROZEN_NOW), \
-             mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client):
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW), \
+             unittest.mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client):
             result = fetch_dividend_info_from_yahoo("AAPL", _MOCK_SESSION)
 
         self.assertIsNone(result.ex_div_date)
@@ -152,8 +152,8 @@ class TestFetchDividendInfoFromYahoo(unittest.TestCase):
             _make_response(200, _make_summary_body(past_unix, past_unix, 1.5)),
             _make_response(200, empty_chart),
         ])
-        with mock.patch("time.time", return_value=_FROZEN_NOW), \
-             mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client):
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW), \
+             unittest.mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client):
             result = fetch_dividend_info_from_yahoo("AAPL", _MOCK_SESSION)
 
         self.assertIsNone(result.ex_div_date)
@@ -179,13 +179,13 @@ class TestFetchWithRetry(unittest.TestCase):
 
         client_side_effects = [first_client, second_client]
 
-        with mock.patch("time.time", return_value=_FROZEN_NOW), \
-             mock.patch("time.sleep"), \
-             mock.patch(
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW), \
+             unittest.mock.patch("time.sleep"), \
+             unittest.mock.patch(
                  "market_data.yahoo_client.dividends.get_yahoo_session",
                  return_value=fresh_session,
              ), \
-             mock.patch(
+             unittest.mock.patch(
                  "market_data.yahoo_client.dividends.cffi_requests.Session",
                  side_effect=client_side_effects,
              ):
@@ -202,8 +202,8 @@ class TestFetchWithRetry(unittest.TestCase):
         from market_data.errors import YahooError
 
         mock_client = _make_mock_client([_make_response(500, "")])
-        with mock.patch("time.time", return_value=_FROZEN_NOW), \
-             mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client), \
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW), \
+             unittest.mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client), \
              self.assertRaises(YahooError) as ctx:
             fetch_with_retry("AAPL", _MOCK_SESSION)
 
@@ -229,8 +229,8 @@ class TestYahooClientCache(unittest.TestCase):
             data=cached_result, cached_at=_FROZEN_NOW - 1
         )
 
-        with mock.patch("time.time", return_value=_FROZEN_NOW), \
-             mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session") as mock_cls:
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW), \
+             unittest.mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session") as mock_cls:
             data, errors = client.get_dividends_info(["AAPL"])
 
         self.assertEqual(data["AAPL"], cached_result)
@@ -248,13 +248,13 @@ class TestYahooClientCache(unittest.TestCase):
         yahoo_client = YahooClient()
 
         mock_session = YahooSession(cookie_string="A3=test-cookie", crumb="test-crumb-abc")
-        with mock.patch("time.time", return_value=_FROZEN_NOW), \
-             mock.patch("time.sleep"), \
-             mock.patch(
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW), \
+             unittest.mock.patch("time.sleep"), \
+             unittest.mock.patch(
                  "market_data.yahoo_client.dividends.cffi_requests.Session",
                  return_value=mock_httpx_client,
              ), \
-             mock.patch(
+             unittest.mock.patch(
                  "market_data.yahoo_client.get_yahoo_session",
                  return_value=mock_session,
              ):
@@ -274,13 +274,13 @@ class TestYahooClientCache(unittest.TestCase):
         yahoo_client = YahooClient()
 
         mock_session = YahooSession(cookie_string="A3=test-cookie", crumb="test-crumb-abc")
-        with mock.patch("time.time", return_value=_FROZEN_NOW), \
-             mock.patch("time.sleep"), \
-             mock.patch(
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW), \
+             unittest.mock.patch("time.sleep"), \
+             unittest.mock.patch(
                  "market_data.yahoo_client.dividends.cffi_requests.Session",
                  return_value=mock_httpx_client,
              ), \
-             mock.patch(
+             unittest.mock.patch(
                  "market_data.yahoo_client.get_yahoo_session",
                  return_value=mock_session,
              ):

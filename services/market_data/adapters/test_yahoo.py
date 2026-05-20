@@ -1,5 +1,5 @@
 import unittest
-from unittest import mock
+import unittest.mock
 
 from market_data.adapters.yahoo import YahooAdapter
 from market_data.yahoo_client.types import DividendInfo
@@ -21,7 +21,7 @@ _GOOG_INFO = DividendInfo(
 class TestYahooAdapterMapping(unittest.TestCase):
     def test_maps_dividend_info_to_item_keyed_by_symbol(self) -> None:
         adapter = YahooAdapter()
-        with mock.patch.object(
+        with unittest.mock.patch.object(
             adapter._client,
             "get_dividends_info",
             return_value=({"AAPL": _AAPL_INFO}, {}),
@@ -36,7 +36,7 @@ class TestYahooAdapterMapping(unittest.TestCase):
 
     def test_multiple_symbols_keyed_correctly(self) -> None:
         adapter = YahooAdapter()
-        with mock.patch.object(
+        with unittest.mock.patch.object(
             adapter._client,
             "get_dividends_info",
             return_value=({"AAPL": _AAPL_INFO, "GOOG": _GOOG_INFO}, {}),
@@ -49,7 +49,7 @@ class TestYahooAdapterMapping(unittest.TestCase):
 
     def test_errors_passed_through_from_client(self) -> None:
         adapter = YahooAdapter()
-        with mock.patch.object(
+        with unittest.mock.patch.object(
             adapter._client,
             "get_dividends_info",
             return_value=({"AAPL": _AAPL_INFO}, {"BAD": "network failure"}),
@@ -61,7 +61,7 @@ class TestYahooAdapterMapping(unittest.TestCase):
 
     def test_returns_empty_dicts_for_empty_symbols(self) -> None:
         adapter = YahooAdapter()
-        with mock.patch.object(
+        with unittest.mock.patch.object(
             adapter._client,
             "get_dividends_info",
             return_value=({}, {}),
@@ -73,7 +73,7 @@ class TestYahooAdapterMapping(unittest.TestCase):
 
     def test_no_symbol_field_on_item(self) -> None:
         adapter = YahooAdapter()
-        with mock.patch.object(
+        with unittest.mock.patch.object(
             adapter._client,
             "get_dividends_info",
             return_value=({"AAPL": _AAPL_INFO}, {}),

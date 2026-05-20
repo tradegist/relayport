@@ -1,5 +1,5 @@
 import unittest
-from unittest import mock
+import unittest.mock
 
 from market_data.yahoo_client.cache import (
     _CACHE_KEY_VERSION,
@@ -31,7 +31,7 @@ class TestGetCached(unittest.TestCase):
         cache: CacheStore = {
             _cache_key("AAPL"): CacheEntry(data=_SAMPLE, cached_at=_FROZEN_NOW - 1)
         }
-        with mock.patch("time.time", return_value=_FROZEN_NOW):
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW):
             result = get_cached("AAPL", cache)
         self.assertEqual(result, _SAMPLE)
 
@@ -39,7 +39,7 @@ class TestGetCached(unittest.TestCase):
         cache: CacheStore = {
             _cache_key("AAPL"): CacheEntry(data=_SAMPLE, cached_at=_FROZEN_NOW - _CACHE_TTL_SECONDS - 3600)
         }
-        with mock.patch("time.time", return_value=_FROZEN_NOW):
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW):
             result = get_cached("AAPL", cache)
         self.assertIsNone(result)
 
@@ -47,7 +47,7 @@ class TestGetCached(unittest.TestCase):
 class TestSetCached(unittest.TestCase):
     def test_stores_entry_with_current_timestamp(self) -> None:
         cache: CacheStore = {}
-        with mock.patch("time.time", return_value=_FROZEN_NOW):
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW):
             set_cached("AAPL", _SAMPLE, cache)
 
         key = f"dividend_info_{_CACHE_KEY_VERSION}_AAPL"

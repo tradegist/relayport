@@ -1,6 +1,6 @@
 import unittest
+import unittest.mock
 from typing import Any
-from unittest import mock
 
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -54,7 +54,7 @@ class TestDividendsUpcomingHandler(unittest.IsolatedAsyncioTestCase):
 
     async def _get(self, url: str, token: str = "test-token") -> tuple[int, Any]:
         async with TestClient(TestServer(create_app())) as client:
-            with mock.patch.dict("os.environ", _ENV):
+            with unittest.mock.patch.dict("os.environ", _ENV):
                 resp = await client.get(url, headers={"Authorization": f"Bearer {token}"})
                 body = await resp.json()
             return resp.status, body
@@ -63,7 +63,7 @@ class TestDividendsUpcomingHandler(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_token_returns_401(self) -> None:
         async with TestClient(TestServer(create_app())) as client:
-            with mock.patch.dict("os.environ", _ENV):
+            with unittest.mock.patch.dict("os.environ", _ENV):
                 resp = await client.get(
                     "/v1/market-data/dividends/upcoming?symbol=AAPL&target=yahoo"
                 )
@@ -78,7 +78,7 @@ class TestDividendsUpcomingHandler(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_md_api_token_env_returns_500(self) -> None:
         async with TestClient(TestServer(create_app())) as client:
-            with mock.patch.dict("os.environ", {"MD_API_TOKEN": ""}):
+            with unittest.mock.patch.dict("os.environ", {"MD_API_TOKEN": ""}):
                 resp = await client.get(
                     "/v1/market-data/dividends/upcoming?symbol=AAPL&target=yahoo",
                     headers={"Authorization": "Bearer whatever"},
