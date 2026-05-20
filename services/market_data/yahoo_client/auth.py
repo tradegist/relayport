@@ -19,6 +19,7 @@ Key invariants that Yahoo currently requires (as of May 2026):
 """
 import logging
 import re
+from typing import Literal
 
 from curl_cffi import requests as cffi_requests
 
@@ -28,7 +29,7 @@ from market_data.yahoo_client.types import YahooSession
 _PAGE_URL = "https://finance.yahoo.com/"
 _CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
 
-_IMPERSONATE = "chrome120"
+_IMPERSONATE: Literal["chrome120"] = "chrome120"
 
 _PAGE_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",

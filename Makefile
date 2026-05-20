@@ -22,7 +22,7 @@ help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  make %-12s %s\n", $$1, $$2}'
 
 PIP ?= $(dir $(PYTHON))pip
-REQ_FILES = -r requirements-dev.txt -r services/relay_core/requirements.txt
+REQ_FILES = -r requirements-dev.txt -r services/relay_core/requirements.txt -r services/market_data/requirements.txt -r services/debug/requirements.txt
 
 deps: ## Install Python dependencies
 	$(PIP) install $(REQ_FILES)
