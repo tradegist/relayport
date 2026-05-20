@@ -15,6 +15,12 @@ services/relays/**/__pycache__/
 services/shared/**/test_*.py
 services/shared/**/__pycache__/
 
+!services/market_data/**
+services/market_data/Dockerfile
+services/market_data/**/test_*.py
+services/market_data/**/__pycache__/
+services/market_data/.DS_Store
+
 !services/debug/**
 services/debug/Dockerfile
 services/debug/**/test_*.py

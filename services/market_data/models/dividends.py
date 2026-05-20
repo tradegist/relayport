@@ -1,0 +1,44 @@
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, field_validator
+
+Target = Literal["yahoo"]
+
+
+class DividendsUpcomingQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: list[str]
+    target: Target
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def parse_symbol(cls, v: object) -> list[str]:
+        if isinstance(v, str):
+            return [s.strip().upper() for s in v.split(",") if s.strip()]
+        if isinstance(v, list):
+            return [str(s).strip().upper() for s in v if str(s).strip()]
+        raise ValueError("symbol must be a comma-separated string or list")
+
+    @field_validator("target", mode="before")
+    @classmethod
+    def validate_target(cls, v: object) -> object:
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
+
+
+class DividendsUpcomingItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ex_div_date: str | None
+    payment_date: str | None
+    dps: float | None
+    are_dates_estimated: bool
+
+
+class DividendsUpcomingResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    data: dict[str, DividendsUpcomingItem]
+    errors: dict[str, str]

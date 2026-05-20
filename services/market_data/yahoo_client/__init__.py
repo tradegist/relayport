@@ -21,38 +21,45 @@ class YahooClient:
         self._session: YahooSession | None = None
         self._cache: CacheStore = {}
 
-    def get_dividends_info(self, tickers: list[str]) -> list[DividendInfo]:
-        results: list[DividendInfo] = []
+    def get_dividend_info(self, ticker: str) -> DividendInfo:
+        """Return dividend info for one ticker, using the cache.
+
+        Raises on fetch failure — callers that want null-on-failure should
+        catch exceptions themselves (or use get_dividends_info).
+        """
+        cached = get_cached(ticker, self._cache)
+        if cached is not None:
+            log.debug("Dividend cache hit for %s", ticker)
+            return cached
+
+        if self._session is None:
+            self._session = get_yahoo_session()
+        info, self._session = fetch_with_retry(ticker, self._session)
+        set_cached(ticker, info, self._cache)
+        return info
+
+    def get_dividends_info(
+        self, tickers: list[str]
+    ) -> tuple[dict[str, DividendInfo], dict[str, str]]:
+        """Batch fetch keyed by ticker.
+
+        Successful results go into the first dict; fetch failures go into the
+        second dict as error strings. Never raises.
+        """
+        data: dict[str, DividendInfo] = {}
+        errors: dict[str, str] = {}
 
         for i, ticker in enumerate(tickers):
-            cached = get_cached(ticker, self._cache)
-            if cached is not None:
-                log.debug("Dividend cache hit for %s", ticker)
-                results.append(cached)
-                continue
-
             try:
-                if self._session is None:
-                    self._session = get_yahoo_session()
-                info, updated_session = fetch_with_retry(ticker, self._session)
-                self._session = updated_session
-                set_cached(ticker, info, self._cache)
-                results.append(info)
-            except Exception:
+                data[ticker] = self.get_dividend_info(ticker)
+            except Exception as exc:
                 log.debug("Failed to fetch dividend info for %s", ticker, exc_info=True)
-                results.append(
-                    DividendInfo(
-                        ex_div_date=None,
-                        payment_date=None,
-                        dps=None,
-                        are_dates_estimated=False,
-                    )
-                )
+                errors[ticker] = str(exc)
 
             if i < len(tickers) - 1:
                 time.sleep(_INTER_TICKER_DELAY_SECONDS)
 
-        return results
+        return data, errors
 
     def clear_cache(self) -> None:
         clear_dividend_info_cache(self._cache)

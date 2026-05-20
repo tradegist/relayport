@@ -1,0 +1,113 @@
+{
+  "$defs": {
+    "DividendsUpcomingQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "symbol": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        }
+      },
+      "required": [
+        "symbol",
+        "target"
+      ],
+      "title": "DividendsUpcomingQuery",
+      "type": "object"
+    },
+    "DividendsUpcomingItem": {
+      "additionalProperties": false,
+      "properties": {
+        "ex_div_date": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payment_date": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dps": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "are_dates_estimated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ex_div_date",
+        "payment_date",
+        "dps",
+        "are_dates_estimated"
+      ],
+      "title": "DividendsUpcomingItem",
+      "type": "object"
+    },
+    "DividendsUpcomingResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DividendsUpcomingItem"
+          },
+          "type": "object"
+        },
+        "errors": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "data",
+        "errors"
+      ],
+      "title": "DividendsUpcomingResponse",
+      "type": "object"
+    },
+    "Target": {
+      "enum": [
+        "yahoo"
+      ],
+      "type": "string"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/DividendsUpcomingQuery"
+    },
+    {
+      "$ref": "#/$defs/DividendsUpcomingItem"
+    },
+    {
+      "$ref": "#/$defs/DividendsUpcomingResponse"
+    },
+    {
+      "$ref": "#/$defs/Target"
+    }
+  ]
+}

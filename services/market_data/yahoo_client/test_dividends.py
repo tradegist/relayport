@@ -223,7 +223,6 @@ class TestYahooClientCache(unittest.TestCase):
         )
 
         client = YahooClient()
-        # Populate cache directly to control the cached_at timestamp
         from market_data.yahoo_client.cache import _cache_key
         from market_data.yahoo_client.types import CacheEntry
         client._cache[_cache_key("AAPL")] = CacheEntry(
@@ -232,10 +231,10 @@ class TestYahooClientCache(unittest.TestCase):
 
         with mock.patch("time.time", return_value=_FROZEN_NOW), \
              mock.patch("market_data.yahoo_client.dividends.httpx.Client") as mock_cls:
-            results = client.get_dividends_info(["AAPL"])
+            data, errors = client.get_dividends_info(["AAPL"])
 
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0], cached_result)
+        self.assertEqual(data["AAPL"], cached_result)
+        self.assertEqual(errors, {})
         mock_cls.assert_not_called()
 
     def test_fetches_fresh_data_when_cache_expired(self) -> None:
@@ -259,16 +258,17 @@ class TestYahooClientCache(unittest.TestCase):
                  "market_data.yahoo_client.get_yahoo_session",
                  return_value=mock_session,
              ):
-            results = yahoo_client.get_dividends_info(["AAPL"])
+            data, errors = yahoo_client.get_dividends_info(["AAPL"])
 
-        self.assertEqual(results[0], DividendInfo(
+        self.assertEqual(data["AAPL"], DividendInfo(
             ex_div_date="2026-02-15",
             payment_date="2026-03-08",
             dps=1.5,
             are_dates_estimated=False,
         ))
+        self.assertEqual(errors, {})
 
-    def test_returns_null_dividend_on_fetch_failure(self) -> None:
+    def test_returns_error_entry_on_fetch_failure(self) -> None:
         mock_httpx_client = _make_mock_client([_make_response(500, "")])
 
         yahoo_client = YahooClient()
@@ -284,10 +284,10 @@ class TestYahooClientCache(unittest.TestCase):
                  "market_data.yahoo_client.get_yahoo_session",
                  return_value=mock_session,
              ):
-            results = yahoo_client.get_dividends_info(["AAPL"])
+            data, errors = yahoo_client.get_dividends_info(["AAPL"])
 
-        self.assertEqual(results[0], DividendInfo(
-            ex_div_date=None, payment_date=None, dps=None, are_dates_estimated=False
-        ))
+        self.assertEqual(data, {})
+        self.assertIn("AAPL", errors)
+        self.assertIsInstance(errors["AAPL"], str)
 
 
