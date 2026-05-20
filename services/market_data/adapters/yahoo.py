@@ -16,6 +16,7 @@ class YahooAdapter(MarketDataAdapter):
                 ex_div_date=info.ex_div_date,
                 payment_date=info.payment_date,
                 dps=info.dps,
+                annual_dps=info.annual_dps,
                 are_dates_estimated=info.are_dates_estimated,
             )
             for symbol, info in data_info.items()

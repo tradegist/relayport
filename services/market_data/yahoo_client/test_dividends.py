@@ -45,18 +45,21 @@ def _make_response(
 def _make_summary_body(
     ex_div_unix: int | None,
     payment_unix: int | None,
-    dps: float = 1.5,
+    dps: float | None = 1.5,
 ) -> str:
     calendar: dict[str, object] = {}
     if ex_div_unix is not None:
         calendar["exDividendDate"] = {"raw": ex_div_unix}
     if payment_unix is not None:
         calendar["dividendDate"] = {"raw": payment_unix}
+    summary: dict[str, object] = {}
+    if dps is not None:
+        summary["dividendRate"] = {"raw": dps}
     return json.dumps({
         "quoteSummary": {
             "result": [{
                 "calendarEvents": calendar,
-                "summaryDetail": {"dividendRate": {"raw": dps}},
+                "summaryDetail": summary,
             }]
         }
     })
@@ -94,6 +97,7 @@ class TestFetchDividendInfoFromYahoo(unittest.TestCase):
             ex_div_date="2026-02-15",
             payment_date="2026-03-08",
             dps=1.5,
+            annual_dps=1.5,
             are_dates_estimated=False,
         ))
         mock_client.get.assert_called_once()
@@ -113,6 +117,7 @@ class TestFetchDividendInfoFromYahoo(unittest.TestCase):
             ex_div_date=_ESTIMATED_EX_DIV,
             payment_date=_ESTIMATED_PAYMENT,
             dps=0.25,
+            annual_dps=0.25,  # dividendRate=0.25 is available, so annual_dps == dps
             are_dates_estimated=True,
         ))
         self.assertEqual(mock_client.get.call_count, 2)
@@ -142,7 +147,29 @@ class TestFetchDividendInfoFromYahoo(unittest.TestCase):
         self.assertIsNone(result.ex_div_date)
         self.assertIsNone(result.payment_date)
         self.assertEqual(result.dps, 1.5)
+        self.assertEqual(result.annual_dps, 1.5)
         self.assertFalse(result.are_dates_estimated)
+
+    def test_estimation_annual_dps_computed_from_history_when_dividend_rate_missing(self) -> None:
+        # dividendRate absent -> annual_dps estimated as per_payment * payments_per_year
+        # _QUARTERLY_TIMESTAMPS are 90 days apart -> ~4.057 payments/year
+        # amount_per_div=0.25 -> annual_dps approx 0.25 * 4.057 = 1.014
+        past_unix = 1760659200
+        _SECONDS_PER_YEAR = 365.25 * 24 * 60 * 60
+        avg_gap = 90 * 24 * 60 * 60  # 7776000 seconds
+
+        mock_client = _make_mock_client([
+            _make_response(200, _make_summary_body(past_unix, past_unix, dps=None)),
+            _make_response(200, _make_chart_body(_QUARTERLY_TIMESTAMPS, 0.25)),
+        ])
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW), \
+             unittest.mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client):
+            result = fetch_dividend_info_from_yahoo("AAPL", _MOCK_SESSION)
+
+        self.assertEqual(result.dps, 0.25)  # no dividendRate -> dps falls back to per-payment amount
+        self.assertIsNotNone(result.annual_dps)
+        self.assertAlmostEqual(result.annual_dps or 0.0, 0.25 * (_SECONDS_PER_YEAR / avg_gap), places=6)
+        self.assertTrue(result.are_dates_estimated)
 
     def test_returns_null_dates_when_no_dividend_history(self) -> None:
         past_unix = 1760659200
@@ -157,6 +184,7 @@ class TestFetchDividendInfoFromYahoo(unittest.TestCase):
             result = fetch_dividend_info_from_yahoo("AAPL", _MOCK_SESSION)
 
         self.assertIsNone(result.ex_div_date)
+        self.assertEqual(result.annual_dps, 1.5)
         self.assertFalse(result.are_dates_estimated)
 
 
@@ -195,6 +223,7 @@ class TestFetchWithRetry(unittest.TestCase):
             ex_div_date="2026-02-15",
             payment_date="2026-03-08",
             dps=1.5,
+            annual_dps=1.5,
             are_dates_estimated=False,
         ))
 
@@ -219,6 +248,7 @@ class TestYahooClientCache(unittest.TestCase):
             ex_div_date="2026-02-15",
             payment_date="2026-03-08",
             dps=1.5,
+            annual_dps=1.5,
             are_dates_estimated=False,
         )
 
@@ -264,6 +294,7 @@ class TestYahooClientCache(unittest.TestCase):
             ex_div_date="2026-02-15",
             payment_date="2026-03-08",
             dps=1.5,
+            annual_dps=1.5,
             are_dates_estimated=False,
         ))
         self.assertEqual(errors, {})

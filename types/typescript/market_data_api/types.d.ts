@@ -16,6 +16,7 @@ export interface DividendsUpcomingItem {
   ex_div_date: string | null;
   payment_date: string | null;
   dps: number | null;
+  annual_dps: number | null;
   are_dates_estimated: boolean;
 }
 export interface DividendsUpcomingResponse {

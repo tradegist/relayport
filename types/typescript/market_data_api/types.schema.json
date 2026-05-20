@@ -53,6 +53,16 @@
             }
           ]
         },
+        "annual_dps": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "are_dates_estimated": {
           "type": "boolean"
         }
@@ -61,6 +71,7 @@
         "ex_div_date",
         "payment_date",
         "dps",
+        "annual_dps",
         "are_dates_estimated"
       ],
       "title": "DividendsUpcomingItem",

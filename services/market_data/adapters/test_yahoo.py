@@ -8,12 +8,14 @@ _AAPL_INFO = DividendInfo(
     ex_div_date="2026-02-15",
     payment_date="2026-03-08",
     dps=1.5,
+    annual_dps=1.5,
     are_dates_estimated=False,
 )
 _GOOG_INFO = DividendInfo(
     ex_div_date="2026-03-01",
     payment_date="2026-03-22",
     dps=0.5,
+    annual_dps=2.0,
     are_dates_estimated=True,
 )
 

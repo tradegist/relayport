@@ -14,6 +14,7 @@ _AAPL_ITEM = DividendsUpcomingItem(
     ex_div_date="2026-02-15",
     payment_date="2026-03-08",
     dps=1.5,
+    annual_dps=1.5,
     are_dates_estimated=False,
 )
 

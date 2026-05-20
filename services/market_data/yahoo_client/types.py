@@ -7,6 +7,7 @@ class DividendInfo(BaseModel):
     ex_div_date: str | None
     payment_date: str | None
     dps: float | None
+    annual_dps: float | None
     are_dates_estimated: bool
 
 

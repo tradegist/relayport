@@ -11,6 +11,7 @@ from market_data.yahoo_client.types import DividendInfo, YahooSession
 
 _MAX_RETRIES = 3
 _RETRY_DELAY_SECONDS = 3.0
+_SECONDS_PER_YEAR = 365.25 * 24 * 60 * 60
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
                 ex_div_date=_to_date_string(float(announced_ex_div_unix)),  # type: ignore[arg-type]
                 payment_date=_to_date_string(float(announced_payment_unix)),  # type: ignore[arg-type]
                 dps=dps,
+                annual_dps=dps,
                 are_dates_estimated=False,
             )
 
@@ -83,7 +85,7 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
             )
         if chart_res.status_code != 200:
             return DividendInfo(
-                ex_div_date=None, payment_date=None, dps=dps, are_dates_estimated=False
+                ex_div_date=None, payment_date=None, dps=dps, annual_dps=dps, are_dates_estimated=False
             )
 
         chart_json = chart_res.json()
@@ -94,14 +96,14 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
 
         if not div_events:
             return DividendInfo(
-                ex_div_date=None, payment_date=None, dps=dps, are_dates_estimated=False
+                ex_div_date=None, payment_date=None, dps=dps, annual_dps=dps, are_dates_estimated=False
             )
 
         sorted_keys = sorted(div_events.keys(), key=float)
 
         if len(sorted_keys) < 2:
             return DividendInfo(
-                ex_div_date=None, payment_date=None, dps=dps, are_dates_estimated=False
+                ex_div_date=None, payment_date=None, dps=dps, annual_dps=dps, are_dates_estimated=False
             )
 
         gaps: list[float] = []
@@ -118,7 +120,7 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
 
         if last_key is None:
             return DividendInfo(
-                ex_div_date=None, payment_date=None, dps=dps, are_dates_estimated=False
+                ex_div_date=None, payment_date=None, dps=dps, annual_dps=dps, are_dates_estimated=False
             )
 
         now = time.time()
@@ -133,12 +135,15 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
 
         last_event = div_events.get(last_key) or {}
         last_event_amount = last_event.get("amount")
+        per_payment_dps = float(last_event_amount) if isinstance(last_event_amount, (int, float)) else None
+        annual_dps = dps if dps is not None else (
+            per_payment_dps * (_SECONDS_PER_YEAR / avg_gap_seconds) if per_payment_dps is not None else None
+        )
         return DividendInfo(
             ex_div_date=_to_date_string(estimated_ex_div),
             payment_date=_to_date_string(estimated_ex_div + payment_offset_seconds),
-            dps=dps if dps is not None else (
-                float(last_event_amount) if isinstance(last_event_amount, (int, float)) else None
-            ),
+            dps=dps if dps is not None else per_payment_dps,
+            annual_dps=annual_dps,
             are_dates_estimated=True,
         )
 
