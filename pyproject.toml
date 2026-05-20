@@ -18,14 +18,14 @@ disallow_untyped_defs = false
 disallow_untyped_calls = false
 
 [tool.pytest.ini_options]
-testpaths = ["services/shared", "services/debug", "services/relay_core", "services/relays"]
+testpaths = ["services/shared", "services/debug", "services/relay_core", "services/relays", "services/market_data"]
 norecursedirs = ["tests/e2e"]
 addopts = "--import-mode=importlib"
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["services/shared", "services/debug", "services/relay_core", "services/relays", "cli", "types/python"]
+src = ["services/shared", "services/debug", "services/relay_core", "services/relays", "services/market_data", "cli", "types/python"]
 
 [tool.ruff.lint]
 preview = true
@@ -61,4 +61,5 @@ ignore = [
 known-first-party = [
     "shared", "debug",
     "relay_core", "relay_models", "relays", "relayport_types",
+    "market_data",
 ]

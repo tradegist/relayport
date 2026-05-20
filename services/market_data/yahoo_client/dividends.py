@@ -1,0 +1,162 @@
+import logging
+import time
+from datetime import UTC, datetime
+from urllib.parse import quote
+
+import httpx
+
+from market_data.errors import YahooError
+from market_data.yahoo_client.auth import YAHOO_USER_AGENT, get_yahoo_session
+from market_data.yahoo_client.types import DividendInfo, YahooSession
+
+_MAX_RETRIES = 3
+_RETRY_DELAY_SECONDS = 3.0
+
+log = logging.getLogger(__name__)
+
+
+def _to_date_string(unix_seconds: float) -> str:
+    return datetime.fromtimestamp(unix_seconds, tz=UTC).strftime("%Y-%m-%d")
+
+
+def _is_future_unix(unix: object) -> bool:
+    return isinstance(unix, (int, float)) and float(unix) > time.time()
+
+
+def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> DividendInfo:
+    headers = {
+        "User-Agent": YAHOO_USER_AGENT,
+        "Cookie": session.cookie_string,
+    }
+    qs = f"&crumb={quote(session.crumb)}"
+
+    with httpx.Client(follow_redirects=True) as client:
+        summary_res = client.get(
+            f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{quote(ticker)}"
+            f"?modules=calendarEvents,summaryDetail{qs}",
+            headers=headers,
+        )
+
+        if summary_res.status_code == 401:
+            raise YahooError(
+                f"Yahoo Finance 401 for {ticker}",
+                status_code=401,
+                error_code="YAHOO_UNAUTHORIZED",
+            )
+        if summary_res.status_code != 200:
+            raise YahooError(
+                f"Yahoo Finance quoteSummary HTTP {summary_res.status_code} for {ticker}",
+                status_code=summary_res.status_code,
+            )
+
+        summary_json = summary_res.json()
+        result_list = (summary_json.get("quoteSummary") or {}).get("result") or []
+        result = result_list[0] if result_list else None
+        cal = result.get("calendarEvents") if result else None
+        dps_raw = (result.get("summaryDetail") or {}).get("dividendRate") if result else None
+        dps: float | None = dps_raw.get("raw") if isinstance(dps_raw, dict) else None
+
+        announced_ex_div_unix = (cal.get("exDividendDate") or {}).get("raw") if cal else None
+        announced_payment_unix = (cal.get("dividendDate") or {}).get("raw") if cal else None
+
+        if _is_future_unix(announced_ex_div_unix) and _is_future_unix(announced_payment_unix):
+            return DividendInfo(
+                ex_div_date=_to_date_string(float(announced_ex_div_unix)),  # type: ignore[arg-type]
+                payment_date=_to_date_string(float(announced_payment_unix)),  # type: ignore[arg-type]
+                dps=dps,
+                are_dates_estimated=False,
+            )
+
+        # Yahoo has no upcoming announcement yet — estimate from historical rhythm
+        chart_res = client.get(
+            f"https://query2.finance.yahoo.com/v8/finance/chart/{quote(ticker)}"
+            f"?interval=1d&range=2y&events=dividends{qs}",
+            headers=headers,
+        )
+
+        if chart_res.status_code == 401:
+            raise YahooError(
+                f"Yahoo Finance 401 for {ticker}",
+                status_code=401,
+                error_code="YAHOO_UNAUTHORIZED",
+            )
+        if chart_res.status_code != 200:
+            return DividendInfo(
+                ex_div_date=None, payment_date=None, dps=dps, are_dates_estimated=False
+            )
+
+        chart_json = chart_res.json()
+        chart_result_list = (chart_json.get("chart") or {}).get("result") or []
+        div_events: dict[str, dict[str, object]] | None = (
+            (chart_result_list[0] if chart_result_list else {}).get("events") or {}
+        ).get("dividends")
+
+        if not div_events:
+            return DividendInfo(
+                ex_div_date=None, payment_date=None, dps=dps, are_dates_estimated=False
+            )
+
+        sorted_keys = sorted(div_events.keys(), key=float)
+
+        if len(sorted_keys) < 2:
+            return DividendInfo(
+                ex_div_date=None, payment_date=None, dps=dps, are_dates_estimated=False
+            )
+
+        gaps: list[float] = []
+        prev: float | None = None
+        last_key: str | None = None
+        for key in sorted_keys[-5:]:
+            curr = float(key)
+            if prev is not None:
+                gaps.append(curr - prev)
+            prev = curr
+            last_key = key
+
+        avg_gap_seconds = sum(gaps) / len(gaps)
+
+        if last_key is None:
+            return DividendInfo(
+                ex_div_date=None, payment_date=None, dps=dps, are_dates_estimated=False
+            )
+
+        now = time.time()
+        estimated_ex_div = float(last_key)
+        while estimated_ex_div <= now:
+            estimated_ex_div += avg_gap_seconds
+
+        if _is_future_unix(announced_payment_unix) and _is_future_unix(announced_ex_div_unix):
+            payment_offset_seconds = float(announced_payment_unix) - float(announced_ex_div_unix)  # type: ignore[arg-type]
+        else:
+            payment_offset_seconds = 21 * 24 * 60 * 60
+
+        last_event = div_events.get(last_key) or {}
+        last_event_amount = last_event.get("amount")
+        return DividendInfo(
+            ex_div_date=_to_date_string(estimated_ex_div),
+            payment_date=_to_date_string(estimated_ex_div + payment_offset_seconds),
+            dps=dps if dps is not None else (
+                float(last_event_amount) if isinstance(last_event_amount, (int, float)) else None
+            ),
+            are_dates_estimated=True,
+        )
+
+
+def fetch_with_retry(
+    ticker: str, session: YahooSession, attempt: int = 0
+) -> tuple[DividendInfo, YahooSession]:
+    try:
+        info = fetch_dividend_info_from_yahoo(ticker, session)
+        return info, session
+    except YahooError as e:
+        if e.error_code == "YAHOO_UNAUTHORIZED" and attempt < _MAX_RETRIES:
+            log.debug(
+                "Yahoo 401 for %s — refreshing session (attempt %d/%d)",
+                ticker,
+                attempt + 1,
+                _MAX_RETRIES,
+            )
+            time.sleep(_RETRY_DELAY_SECONDS)
+            fresh_session = get_yahoo_session()
+            return fetch_with_retry(ticker, fresh_session, attempt + 1)
+        raise

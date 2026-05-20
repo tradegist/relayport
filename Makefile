@@ -136,6 +136,7 @@ typecheck: ## Run mypy strict type checking
 	MYPYPATH=services $(PYTHON) -m mypy services/relay_core/
 	MYPYPATH=services $(PYTHON) -m mypy services/relays/
 	MYPYPATH=services/debug $(PYTHON) -m mypy services/debug/
+	MYPYPATH=services $(PYTHON) -m mypy services/market_data/
 	$(PYTHON) -m mypy schema_gen.py
 	$(PYTHON) -m mypy gen_python_types.py
 	$(PYTHON) -m mypy gen_ts_barrels.py
@@ -143,7 +144,7 @@ typecheck: ## Run mypy strict type checking
 	$(TSC) --noEmit -p types/typescript/
 
 lint: ## Run ruff linter (use FIX=1 to auto-fix)
-	$(PYTHON) -m ruff check services/shared/ services/relay_core/ services/relays/ services/debug/ cli/ schema_gen.py gen_python_types.py gen_ts_barrels.py types/python/relayport_types/ $(if $(FIX),--fix)
+	$(PYTHON) -m ruff check services/shared/ services/relay_core/ services/relays/ services/debug/ services/market_data/ cli/ schema_gen.py gen_python_types.py gen_ts_barrels.py types/python/relayport_types/ $(if $(FIX),--fix)
 	@if grep -rn '__all__' services/ types/ cli/ --include='*.py'; then echo "ERROR: __all__ is banned — use explicit re-exports"; exit 1; fi
 
 local-up: ## Start full stack locally (no TLS, direct port access)
