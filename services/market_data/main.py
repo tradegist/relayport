@@ -7,6 +7,7 @@ import os
 from market_data.adapters import register
 from market_data.adapters.yahoo import YahooAdapter
 from market_data.routes.app import start_api_server
+from market_data.routes.middlewares import validate_api_token
 
 
 def configure_logging() -> None:
@@ -20,6 +21,7 @@ def configure_logging() -> None:
 
 async def amain() -> None:
     configure_logging()
+    validate_api_token()
     register("yahoo", YahooAdapter)
     await start_api_server()
     await asyncio.Event().wait()

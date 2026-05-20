@@ -1,3 +1,8 @@
+# ── Market data service ───────────────────────────────────────────────
+
+# Bearer token for /v1/market-data/* endpoints (generate with: openssl rand -hex 32)
+MD_API_TOKEN=your_md_api_token
+
 # ── Domains & API ────────────────────────────────────────────────────
 
 # DNS A record must point to droplet IP.

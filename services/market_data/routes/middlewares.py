@@ -18,6 +18,12 @@ def _get_api_token() -> str:
     return os.environ.get("MD_API_TOKEN", "").strip()
 
 
+def validate_api_token() -> None:
+    """Raise SystemExit if MD_API_TOKEN is missing — call once at startup."""
+    if not _get_api_token():
+        raise SystemExit("MD_API_TOKEN must be set")
+
+
 @web.middleware
 async def auth_middleware(
     request: web.Request,
