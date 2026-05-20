@@ -350,6 +350,7 @@ The E2E conftest (`services/relay_core/tests/e2e/conftest.py`) uses a **two-tier
 - **Unit tests are colocated** next to the source file they test: `flex_parser.py` → `test_flex_parser.py`, `registry.py` → `test_registry.py`.
 - **E2E tests live in `tests/e2e/`** within each service, since they test multiple components together rather than a single source file.
 - **`make test`** runs all unit tests. **`make e2e-run`** runs all E2E tests (requires Docker stack). **`make lint`** runs ruff. All must pass before deploying.
+- **Import `unittest.mock` as a submodule, not via `from unittest import mock`.** Always use `import unittest` and `import unittest.mock` together — never `from unittest import mock`. Reference mock objects as `unittest.mock.patch`, `unittest.mock.MagicMock`, etc. This avoids the mixed-import lint warning that fires when the same module is imported with both `import` and `from … import` in the same file.
 - **Always scope `unittest.mock.patch`.** Never call `patch.start()` at module level without a corresponding `patch.stop()` — the patched value leaks into every test module that runs afterward. Use one of these patterns instead:
   - **`setUpModule()` / `tearDownModule()`** — for module-wide patches (e.g. `API_TOKEN` that all tests in the file need).
   - **`self.addCleanup(patcher.stop)`** in `setUp()` — for class-scoped patches.
