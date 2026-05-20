@@ -3,10 +3,10 @@ import time
 from datetime import UTC, datetime
 from urllib.parse import quote
 
-import httpx
+from curl_cffi import requests as cffi_requests
 
 from market_data.errors import YahooError
-from market_data.yahoo_client.auth import YAHOO_USER_AGENT, get_yahoo_session
+from market_data.yahoo_client.auth import _IMPERSONATE, API_HEADERS, get_yahoo_session
 from market_data.yahoo_client.types import DividendInfo, YahooSession
 
 _MAX_RETRIES = 3
@@ -25,14 +25,15 @@ def _is_future_unix(unix: object) -> bool:
 
 def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> DividendInfo:
     headers = {
-        "User-Agent": YAHOO_USER_AGENT,
+        **API_HEADERS,
         "Cookie": session.cookie_string,
+        "Referer": f"https://finance.yahoo.com/quote/{quote(ticker)}",
     }
     qs = f"&crumb={quote(session.crumb)}"
 
-    with httpx.Client(follow_redirects=True) as client:
+    with cffi_requests.Session(impersonate=_IMPERSONATE) as client:
         summary_res = client.get(
-            f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{quote(ticker)}"
+            f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{quote(ticker)}"
             f"?modules=calendarEvents,summaryDetail{qs}",
             headers=headers,
         )
@@ -69,7 +70,7 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
 
         # Yahoo has no upcoming announcement yet — estimate from historical rhythm
         chart_res = client.get(
-            f"https://query2.finance.yahoo.com/v8/finance/chart/{quote(ticker)}"
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(ticker)}"
             f"?interval=1d&range=2y&events=dividends{qs}",
             headers=headers,
         )

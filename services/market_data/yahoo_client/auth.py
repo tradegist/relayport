@@ -1,27 +1,41 @@
 import logging
 import re
 
-import httpx
+from curl_cffi import requests as cffi_requests
 
 from market_data.errors import YahooError
 from market_data.yahoo_client.types import YahooSession
 
-YAHOO_USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-    " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
+_PAGE_URL = "https://finance.yahoo.com/"
+_CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
+
+# Impersonating Chrome120 ensures the TLS fingerprint (JA3/JA4) matches a real
+# browser — plain httpx has a Python fingerprint that Yahoo's WAF blocks with 429.
+_IMPERSONATE = "chrome120"
+
+_PAGE_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+}
+
+API_HEADERS = {
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Origin": "https://finance.yahoo.com",
+    "Referer": "https://finance.yahoo.com/",
+}
 
 log = logging.getLogger(__name__)
 
 
-def _handle_consent_flow(body: str, client: httpx.Client) -> None:
+def _handle_consent(session: cffi_requests.Session, body: str, page_url: str) -> None:
+    """POST agree to Yahoo GDPR consent form already loaded in `body`."""
     action_match = re.search(r'action="([^"]*collectConsent[^"]*)"', body)
     action_url = action_match.group(1).replace("&amp;", "&") if action_match else None
     if not action_url:
-        log.debug(
-            "Yahoo consent form not parseable — proceeding with current cookies",
-            extra={"body_excerpt": body[:500]},
-        )
+        log.debug("Yahoo consent form not parseable — proceeding with current cookies")
         return
 
     hidden_fields: dict[str, str] = {}
@@ -32,49 +46,49 @@ def _handle_consent_flow(body: str, client: httpx.Client) -> None:
         if name_match and value_match:
             hidden_fields[name_match.group(1)] = value_match.group(1)
 
-    client.post(
+    session.post(
         action_url,
         data={**hidden_fields, "agree": "agree"},
         headers={
-            "User-Agent": YAHOO_USER_AGENT,
+            **API_HEADERS,
             "Origin": "https://guce.yahoo.com",
-            "Referer": "https://guce.yahoo.com/",
+            "Referer": page_url,
         },
+        impersonate=_IMPERSONATE,
     )
     log.debug("Yahoo consent POST completed")
 
 
 def get_yahoo_session() -> YahooSession:
-    with httpx.Client(follow_redirects=True) as client:
-        page_res = client.get(
-            "https://finance.yahoo.com/quote/AAPL",
-            headers={
-                "User-Agent": YAHOO_USER_AGENT,
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-        )
-        body = page_res.text
-        log.debug("Yahoo Finance page fetched", extra={"status": str(page_res.status_code)})
+    """Establish a Yahoo Finance session.
 
+    1. Visit finance.yahoo.com to acquire session cookies (same as a browser).
+       Uses Chrome TLS impersonation so Yahoo's WAF accepts the request.
+    2. Handle GDPR consent redirect if present.
+    3. Fetch the crumb from query1 using those cookies.
+    """
+    with cffi_requests.Session(impersonate=_IMPERSONATE) as session:
+        page_res = session.get(_PAGE_URL, headers=_PAGE_HEADERS)
+        log.debug("Yahoo Finance page fetched: HTTP %s", page_res.status_code)
+
+        body = page_res.text
         if 'action="' in body and "collectConsent" in body:
             log.debug("Yahoo consent page detected — handling automatically")
-            _handle_consent_flow(body, client)
+            _handle_consent(session, body, str(page_res.url))
 
-        crumb_res = client.get(
-            "https://query2.finance.yahoo.com/v1/test/getcrumb",
-            headers={"User-Agent": YAHOO_USER_AGENT},
-        )
-        crumb = crumb_res.text.strip()
+        crumb_res = session.get(_CRUMB_URL, headers=API_HEADERS)
 
-        if not crumb or crumb.startswith("{"):
-            log.debug(
-                "Yahoo crumb fetch failed",
-                extra={"status": str(crumb_res.status_code), "body": crumb[:200]},
+        if crumb_res.status_code != 200:
+            raise YahooError(
+                f"Yahoo Finance crumb endpoint returned HTTP {crumb_res.status_code}"
             )
+
+        crumb = crumb_res.text.strip()
+        if not crumb or crumb.startswith("{"):
             raise YahooError("Failed to obtain a valid Yahoo Finance crumb")
 
         cookie_string = "; ".join(
-            f"{name}={value}" for name, value in client.cookies.items()
+            f"{name}={value}" for name, value in session.cookies.items()
         )
         log.debug("Yahoo Finance session established")
         return YahooSession(cookie_string=cookie_string, crumb=crumb)
