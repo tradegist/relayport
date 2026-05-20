@@ -152,10 +152,11 @@ lint: ## Run ruff linter (use FIX=1 to auto-fix)
 local-up: ## Start full stack locally (no TLS, direct port access)
 	@$(auto_debug_replicas) && $(LOCAL_COMPOSE) up -d --build
 	@echo ""
-	@echo "  Relays:   http://localhost:15001/health"
+	@echo "  Relays:      http://localhost:15001/health"
+	@echo "  Market data: http://localhost:15002/health  (token: dev-token)"
 	@if [ -f .env ]; then . ./.env; fi; \
 	if [ -n "$$(printf '%s' "$$DEBUG_WEBHOOK_PATH" | tr -d '[:space:]')" ]; then \
-		echo "  Debug:    http://localhost:15003/debug/webhook/$$DEBUG_WEBHOOK_PATH"; \
+		echo "  Debug:       http://localhost:15003/debug/webhook/$$DEBUG_WEBHOOK_PATH"; \
 	fi
 	@echo ""
 

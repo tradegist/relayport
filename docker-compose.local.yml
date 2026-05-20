@@ -11,6 +11,14 @@ services:
       - ./services/relays:/app/relays:ro
       - ./services/shared:/app/shared:ro
 
+  market_data:
+    ports:
+      - "15002:8001"
+    environment:
+      MD_API_TOKEN: dev-token
+    volumes:
+      - ./services/market_data:/app/market_data:ro
+
   debug:
     ports:
       - "15003:9000"
