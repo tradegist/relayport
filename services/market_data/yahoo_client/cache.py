@@ -15,10 +15,12 @@ def _cache_key(ticker: str) -> str:
 
 
 def get_cached(ticker: str, cache: CacheStore) -> DividendInfo | None:
-    entry = cache.get(_cache_key(ticker))
+    key = _cache_key(ticker)
+    entry = cache.get(key)
     if entry is None:
         return None
     if time.time() - entry.cached_at > _CACHE_TTL_SECONDS:
+        del cache[key]
         return None
     return entry.data
 

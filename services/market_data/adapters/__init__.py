@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from market_data.models.dividends import DividendsUpcomingItem
 
 _registry: dict[str, type["MarketDataAdapter"]] = {}
+_instances: dict[str, "MarketDataAdapter"] = {}
 
 
 class MarketDataAdapter(ABC):
@@ -15,11 +16,19 @@ class MarketDataAdapter(ABC):
 
 def register(name: str, adapter_cls: type[MarketDataAdapter]) -> None:
     _registry[name] = adapter_cls
+    _instances.pop(name, None)
 
 
 def get_adapter(name: str) -> MarketDataAdapter | None:
     cls = _registry.get(name)
-    return cls() if cls is not None else None
+    if cls is None:
+        return None
+    cached = _instances.get(name)
+    if cached is not None and type(cached) is cls:
+        return cached
+    instance = cls()
+    _instances[name] = instance
+    return instance
 
 
 def known_targets() -> list[str]:

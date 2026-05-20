@@ -1,6 +1,7 @@
 import logging
 import time
 from datetime import UTC, datetime
+from typing import cast
 from urllib.parse import quote
 
 from curl_cffi import requests as cffi_requests
@@ -139,8 +140,8 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
         # ── 4. Return: announced dates take priority over estimated ──────
         if _is_future_unix(announced_ex_div_unix) and _is_future_unix(announced_payment_unix):
             return DividendInfo(
-                ex_div_date=_to_date_string(float(announced_ex_div_unix)),  # type: ignore[arg-type]
-                payment_date=_to_date_string(float(announced_payment_unix)),  # type: ignore[arg-type]
+                ex_div_date=_to_date_string(cast(float, announced_ex_div_unix)),
+                payment_date=_to_date_string(cast(float, announced_payment_unix)),
                 dps=per_payment_dps,
                 annual_dps=annual_dps,
                 are_dates_estimated=False,

@@ -580,9 +580,9 @@ services/market_data/
 - **`MD_API_TOKEN`** — required env var, checked at startup via `validate_api_token()`. The auth middleware rejects empty tokens with HTTP 500 (same pattern as the relay `API_TOKEN` guard).
 - **Adapter pattern** — `target=yahoo` dispatches to `YahooAdapter` via the registry. New data providers (e.g. `target=alpha_vantage`) can be added by registering a new `MarketDataAdapter` subclass.
 - **`GET /v1/market-data/dividends/upcoming?symbol=AAPL,MSFT&target=yahoo`** — returns `{ data: { [ticker]: DividendsUpcomingItem }, errors: { [ticker]: str } }`. Fetch failures for individual tickers are isolated to `errors` without affecting others. HTTP status is always 200 for valid requests.
-- **Port 8001** (`MD_HTTP_PORT` env var, default 8001). Local dev: `15002:8001` (`docker-compose.local.yml`) with `MD_API_TOKEN: dev-token`. Caddy routes `/v1/market-data/*` to `market_data:8001`.
+- **Port 8001** (`MD_API_PORT` env var, default 8001). Local dev: `15002:8001` (`docker-compose.local.yml`) with `MD_API_TOKEN: dev-token`. Caddy routes `/v1/market-data/*` to `market_data:8001`.
 - **Yahoo auth is fragile.** `auth.py` reverse-engineers Yahoo's session flow. Uses `curl_cffi` with `impersonate="chrome120"` for browser-matching TLS fingerprints — plain `httpx` is blocked with HTTP 429 by Yahoo's WAF. If requests break, check `yfinance/data.py` in the [yfinance repo](https://github.com/ranaroussi/yfinance) first. The module docstring in `auth.py` documents exactly which functions to look at and which invariants currently hold.
-- **In-memory cache** — `YahooClient` caches `DividendInfo` per ticker with a TTL (default 1 hour). The cache is per-process — no shared state between container restarts.
+- **In-memory cache** — `YahooClient` caches `DividendInfo` per ticker with a TTL (default 12 hours). The cache is per-process — no shared state between container restarts.
 - **TypeScript types** — `DividendsUpcomingItem`, `DividendsUpcomingQuery`, `DividendsUpcomingResponse` are generated from `services/market_data/models/dividends.py` via `schema_gen.py` into `types/typescript/market_data_api/`. Exported as the `MarketDataApi` namespace in `types/typescript/index.d.ts`.
 
 ## Dedup Package
