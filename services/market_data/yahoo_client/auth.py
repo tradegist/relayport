@@ -1,3 +1,22 @@
+"""Yahoo Finance session management — fragile by nature.
+
+Yahoo does not offer a public API. This module reverse-engineers their
+authentication flow and WILL break whenever Yahoo changes it.
+
+If requests start returning 429 or empty crumbs, check how yfinance handles
+it first — they track Yahoo's auth changes closely and fix them quickly:
+  https://github.com/ranaroussi/yfinance/blob/main/yfinance/data.py
+  (look at YfData._get_cookie_basic, _get_crumb_basic, _get_cookie_and_crumb)
+
+Key invariants that Yahoo currently requires (as of May 2026):
+- TLS fingerprint must match a real browser (Chrome). Plain httpx/requests
+  have a Python fingerprint that Yahoo's WAF blocks with 429. We use
+  curl_cffi with impersonate="chrome120" to pass this check — the same
+  technique yfinance uses internally.
+- Session cookies (A1/A3) must be established by visiting finance.yahoo.com
+  before hitting the crumb endpoint. The crumb endpoint returns 429 without them.
+- GDPR regions may require a consent form POST before cookies are set.
+"""
 import logging
 import re
 
@@ -9,8 +28,6 @@ from market_data.yahoo_client.types import YahooSession
 _PAGE_URL = "https://finance.yahoo.com/"
 _CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
 
-# Impersonating Chrome120 ensures the TLS fingerprint (JA3/JA4) matches a real
-# browser — plain httpx has a Python fingerprint that Yahoo's WAF blocks with 429.
 _IMPERSONATE = "chrome120"
 
 _PAGE_HEADERS = {
