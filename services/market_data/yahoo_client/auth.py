@@ -19,7 +19,7 @@ Key invariants that Yahoo currently requires (as of May 2026):
 """
 import logging
 import re
-from typing import Literal
+from typing import Any, Literal
 
 from curl_cffi import requests as cffi_requests
 
@@ -48,7 +48,7 @@ API_HEADERS = {
 log = logging.getLogger(__name__)
 
 
-def _handle_consent(session: cffi_requests.Session, body: str, page_url: str) -> None:
+def _handle_consent(session: cffi_requests.Session[Any], body: str, page_url: str) -> None:
     """POST agree to Yahoo GDPR consent form already loaded in `body`."""
     action_match = re.search(r'action="([^"]*collectConsent[^"]*)"', body)
     action_url = action_match.group(1).replace("&amp;", "&") if action_match else None
