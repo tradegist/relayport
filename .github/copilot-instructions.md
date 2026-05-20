@@ -162,13 +162,14 @@ Configuration is split into three env files to separate concerns and enable scal
 
 ## Architecture
 
-Three Docker containers in a single Compose stack on a DigitalOcean droplet (debug is optional):
+Four Docker containers in a single Compose stack on a DigitalOcean droplet (debug is optional):
 
-| Service  | Role                                                                                                                                                                        |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `caddy`  | Reverse proxy with automatic HTTPS (Let's Encrypt)                                                                                                                          |
-| `relays` | Multi-relay service: loads broker adapters via the registry, runs pollers + listeners + HTTP API. Disabled when `RELAYS` is empty (API server still runs for health checks) |
-| `debug`  | Debug webhook inbox — captures webhook payloads for inspection. Disabled by default (`DEBUG_REPLICAS=0`), enabled when `DEBUG_WEBHOOK_PATH` is set                          |
+| Service       | Role                                                                                                                                                                        |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `caddy`       | Reverse proxy with automatic HTTPS (Let's Encrypt)                                                                                                                          |
+| `relays`      | Multi-relay service: loads broker adapters via the registry, runs pollers + listeners + HTTP API. Disabled when `RELAYS` is empty (API server still runs for health checks) |
+| `market_data` | Market data lookup service: REST API for dividend info via Yahoo Finance. Port 8001. Protected by its own `MD_API_TOKEN`, separate from the relay `API_TOKEN`               |
+| `debug`       | Debug webhook inbox — captures webhook payloads for inspection. Disabled by default (`DEBUG_REPLICAS=0`), enabled when `DEBUG_WEBHOOK_PATH` is set                          |
 
 ### Relay Registry Pattern
 
@@ -549,6 +550,40 @@ services/debug/
 - **Port 9000** is hardcoded (`HTTP_PORT = 9000`). In production, Caddy reverse-proxies to `debug:9000` — no host port mapping needed. Local dev uses `15003:9000` (`docker-compose.local.yml`), E2E uses `15012:9000` (`docker-compose.test.yml`).
 - **Module name**: `debug_app.py` (not `main.py`) to avoid `sys.modules` collisions when both are on `sys.path`.
 
+## Market Data Service
+
+The `services/market_data/` service is a **standalone aiohttp container** that serves market data lookups. It has its own `MD_API_TOKEN` (separate from the relay `API_TOKEN`) and its own Docker image.
+
+```
+services/market_data/
+  main.py                  # Entrypoint — registers adapters, starts API server (port 8001)
+  errors.py                # YahooError exception with status_code + error_code
+  models/
+    dividends.py           # Pydantic models: DividendsUpcomingQuery, DividendsUpcomingItem, DividendsUpcomingResponse
+  adapters/
+    __init__.py            # MarketDataAdapter ABC + registry (register, get_adapter, known_targets)
+    yahoo.py               # YahooAdapter: thin mapping layer from YahooClient → DividendsUpcomingItem
+  routes/
+    app.py                 # create_app(), start_api_server(), handle_dividends_upcoming, handle_health
+    middlewares.py         # auth_middleware + validate_api_token() (AUTH_PREFIX=/v1/market-data)
+  yahoo_client/
+    __init__.py            # YahooClient: get_dividend_info(ticker), get_dividends_info(tickers)
+    auth.py                # get_yahoo_session() — FRAGILE, see module docstring
+    cache.py               # CacheStore, get_cached(), set_cached(), clear_dividend_info_cache()
+    dividends.py           # fetch_dividend_info_from_yahoo(), fetch_with_retry()
+    types.py               # DividendInfo, YahooSession, CacheEntry Pydantic models
+  Dockerfile
+  requirements.txt         # aiohttp, curl_cffi, httpx, pydantic
+```
+
+- **`MD_API_TOKEN`** — required env var, checked at startup via `validate_api_token()`. The auth middleware rejects empty tokens with HTTP 500 (same pattern as the relay `API_TOKEN` guard).
+- **Adapter pattern** — `target=yahoo` dispatches to `YahooAdapter` via the registry. New data providers (e.g. `target=alpha_vantage`) can be added by registering a new `MarketDataAdapter` subclass.
+- **`GET /v1/market-data/dividends/upcoming?symbol=AAPL,MSFT&target=yahoo`** — returns `{ data: { [ticker]: DividendsUpcomingItem }, errors: { [ticker]: str } }`. Fetch failures for individual tickers are isolated to `errors` without affecting others. HTTP status is always 200 for valid requests.
+- **Port 8001** (`MD_HTTP_PORT` env var, default 8001). Local dev: `15002:8001` (`docker-compose.local.yml`) with `MD_API_TOKEN: dev-token`. Caddy routes `/v1/market-data/*` to `market_data:8001`.
+- **Yahoo auth is fragile.** `auth.py` reverse-engineers Yahoo's session flow. Uses `curl_cffi` with `impersonate="chrome120"` for browser-matching TLS fingerprints — plain `httpx` is blocked with HTTP 429 by Yahoo's WAF. If requests break, check `yfinance/data.py` in the [yfinance repo](https://github.com/ranaroussi/yfinance) first. The module docstring in `auth.py` documents exactly which functions to look at and which invariants currently hold.
+- **In-memory cache** — `YahooClient` caches `DividendInfo` per ticker with a TTL (default 1 hour). The cache is per-process — no shared state between container restarts.
+- **TypeScript types** — `DividendsUpcomingItem`, `DividendsUpcomingQuery`, `DividendsUpcomingResponse` are generated from `services/market_data/models/dividends.py` via `schema_gen.py` into `types/typescript/market_data_api/`. Exported as the `MarketDataApi` namespace in `types/typescript/index.d.ts`.
+
 ## Dedup Package
 
 The `services/relay_core/dedup/` package provides SQLite dedup logic used by the poller and listener engines.
@@ -588,26 +623,29 @@ This project has **three model locations** — each owns a distinct contract lay
 
 ### Namespace Convention
 
-All relay projects export TypeScript types using a two-tier namespace pattern:
+All relay projects export TypeScript types using a three-tier namespace pattern:
 
 - **`types/typescript/shared/`** → exported as `BrokerRelay`. Contains the CommonFill primitives (`Fill`, `Trade`, `BuySell`) generated via `schema_gen.py` from `services/shared/models.py`.
 - **`types/typescript/relay_api/`** → exported as `RelayApi`. Contains the notifier payload contracts (`WebhookPayloadTrades`, `WebhookPayload`) and relay API types (`RunPollResponse`, `HealthResponse`) generated via `schema_gen.py` from `services/relay_core/relay_models.py`.
+- **`types/typescript/market_data_api/`** → exported as `MarketDataApi`. Contains the market data API types (`DividendsUpcomingItem`, `DividendsUpcomingQuery`, `DividendsUpcomingResponse`) generated via `schema_gen.py` from `services/market_data/models/dividends.py`.
 
 The barrel `types/typescript/index.d.ts` ties them together:
 
 ```ts
 import * as BrokerRelay from "./shared";
 import * as RelayApi from "./relay_api";
-export { BrokerRelay, RelayApi };
+import * as MarketDataApi from "./market_data_api";
+export { BrokerRelay, RelayApi, MarketDataApi };
 ```
 
 ### Types Package
 
 - Types are published as `@tradegist/relayport-types` (npm package in `types/typescript/`, not yet published).
-- **Two namespaces**: `BrokerRelay` (CommonFill primitives) and `RelayApi` (notifier payload contracts + relay API types).
-- **`make types`** regenerates both from Pydantic models (depends on `typecheck`):
+- **Three namespaces**: `BrokerRelay` (CommonFill primitives), `RelayApi` (notifier payload contracts + relay API types), and `MarketDataApi` (market data API types).
+- **`make types`** regenerates all three from Pydantic models (depends on `typecheck`):
   - `services/shared/models.py` → `types/typescript/shared/types.d.ts`
   - `services/relay_core/relay_models.py` → `types/typescript/relay_api/types.d.ts`
+  - `services/market_data/models/dividends.py` → `types/typescript/market_data_api/types.d.ts`
   - Also generates Python type packages via `gen_python_types.py`.
 - **Structure:**
   ```
@@ -622,8 +660,12 @@ export { BrokerRelay, RelayApi };
       index.d.ts               # Auto-generated barrel (every public type re-exported)
       types.d.ts               # Auto-generated from services/relay_core/relay_models.py
       types.schema.json        # Intermediate JSON Schema
+    market_data_api/
+      index.d.ts               # Auto-generated barrel (every public type re-exported)
+      types.d.ts               # Auto-generated from services/market_data/models/dividends.py
+      types.schema.json        # Intermediate JSON Schema
   ```
-- **Usage:** `import { BrokerRelay, RelayApi } from "@tradegist/relayport-types"`
+- **Usage:** `import { BrokerRelay, RelayApi, MarketDataApi } from "@tradegist/relayport-types"`
 - `schema_gen.py` owns the `SCHEMA_MODELS` dict (keyed by importable module path, e.g. `"shared"`, `"relay_core.relay_models"`). **To export a new model to TypeScript, add it to the relevant entry in `schema_gen.py:SCHEMA_MODELS` and run `make types` — that's the only required step.** Entries may be `BaseModel` subclasses **or** discriminated-union `TypeAlias` values; Pydantic's `TypeAdapter` handles both. Class aliases like `WebhookPayload = WebhookPayloadTrades` produce `export type WebhookPayload = WebhookPayloadTrades` in TypeScript via an `allOf: [$ref]` schema entry. The TypeScript module barrels (`types/typescript/*/index.d.ts`) are auto-generated by `gen_ts_barrels.py`; the Python package files are auto-generated by `gen_python_types.py`. **Do not hand-edit generated files** — they carry an `AUTO-GENERATED` header.
 
 ## Python Types Package
@@ -712,7 +754,7 @@ env_examples/              # Env var templates (make setup copies to .<name>)
   env.droplet              # CLI-only deployment config (.env.droplet)
   env.relays               # Relay-prefixed vars (.env.relays)
   env.test                 # E2E test config (.env.test)
-docker-compose.yml             # All services (caddy, relays, debug)
+docker-compose.yml             # All services (caddy, relays, debug, market_data)
 docker-compose.shared.yml      # Shared-mode overlay (disables Caddy)
 docker-compose.shared-network.yml # Marks SHARED_NETWORK as external (CLI pre-creates it)
 docker-compose.local.yml   # Local dev override (direct port access, no TLS)
@@ -775,11 +817,37 @@ services/                  # Business-logic services
     debug_app.py           # aiohttp app: POST/GET/DELETE /debug/webhook/{path}
     Dockerfile
     requirements.txt
+  market_data/             # Market data HTTP service (dividend info via Yahoo Finance)
+    main.py                # Entrypoint — aiohttp app startup
+    errors.py              # YahooError with status_code + error_code fields
+    adapters/              # Adapter pattern: MarketDataAdapter ABC + registry
+      __init__.py          # get_adapter(target) → MarketDataAdapter; YahooAdapter wrapper
+      yahoo.py             # YahooAdapter: maps YahooClient → MarketDataAdapter interface
+      test_yahoo.py        # Tests for YahooAdapter
+    models/
+      __init__.py
+      dividends.py         # DividendsResponse, TickerDividendInfo Pydantic models
+    routes/                # HTTP API
+      app.py               # create_app() — aiohttp Application factory
+      dividends.py         # GET /v1/market-data/dividends/upcoming handler
+      middlewares.py       # Auth middleware (Bearer token, MD_API_TOKEN)
+      test_dividends.py    # Tests for dividends route handler
+    yahoo_client/          # Yahoo Finance client (curl_cffi + Chrome TLS impersonation)
+      __init__.py          # YahooClient: get_dividends_info() with in-memory cache
+      auth.py              # Session management: finance.yahoo.com cookies + crumb fetch
+      cache.py             # CacheEntry + _cache_key + TTL constants
+      dividends.py         # fetch_dividend_info_from_yahoo(), fetch_with_retry()
+      types.py             # YahooSession, DividendInfo dataclasses
+      test_cache.py        # Tests for cache module
+      test_dividends.py    # Tests for dividends fetch + retry logic
+    Dockerfile
+    requirements.txt
 infra/                     # Infrastructure backbone (no business logic)
   caddy/Caddyfile          # Reverse proxy config (uses env vars for domains)
   caddy/sites/             # Route snippets imported inside {$SITE_DOMAIN}
-    ibkr.caddy             # /relays/* routes → relays:8000
+    relayport.caddy        # /relays/* routes → relays:8000
     debug.caddy            # /debug/webhook/* → debug:9000
+    market_data.caddy      # /v1/market-data/* → market_data:8001
 types/                     # Type packages (TypeScript + Python)
   typescript/              # @tradegist/relayport-types (BrokerRelay + RelayApi namespaces)
   python/                  # relayport-types PyPI package
