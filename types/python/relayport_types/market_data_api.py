@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from market_data.utils import parse_string_list
+from .utils import parse_string_list
 
 Target = Literal["yahoo"]
 
