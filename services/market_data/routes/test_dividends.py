@@ -175,6 +175,25 @@ class TestDividendsUpcomingHandler(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(captured[0], ["AAPL", "MSFT"])
 
+    async def test_mixed_comma_and_repeated_params_split_correctly(self) -> None:
+        captured: list[list[str]] = []
+
+        class _CapturingAdapter(MarketDataAdapter):
+            def get_dividends_upcoming(
+                self, symbols: list[str]
+            ) -> tuple[dict[str, DividendsUpcomingItem], dict[str, TickerError]]:
+                captured.append(symbols)
+                return {}, {}
+
+        _registry["yahoo"] = _CapturingAdapter
+
+        # ?symbol=AAPL,MSFT&symbol=GOOG — first param contains a comma
+        await self._get(
+            "/v1/market-data/dividends/upcoming?symbol=AAPL,MSFT&symbol=GOOG&target=yahoo"
+        )
+
+        self.assertEqual(captured[0], ["AAPL", "MSFT", "GOOG"])
+
     async def test_blank_symbol_returns_422(self) -> None:
         status, _ = await self._get("/v1/market-data/dividends/upcoming?symbol=,&target=yahoo")
         self.assertEqual(status, 422)

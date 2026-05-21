@@ -6,7 +6,12 @@ def parse_string_list(v: object, *, max_count: int | None = None) -> list[str]:
     if isinstance(v, str):
         items = [s.strip().upper() for s in v.split(",") if s.strip()]
     elif isinstance(v, list):
-        items = [str(s).strip().upper() for s in v if str(s).strip()]
+        items = [
+            part.strip().upper()
+            for s in v
+            for part in str(s).split(",")
+            if part.strip()
+        ]
     else:
         raise ValueError("must be a comma-separated string or list")
     if not items:
