@@ -557,18 +557,19 @@ The `services/market_data/` service is a **standalone aiohttp container** that s
 
 ```
 services/market_data/
-  main.py                  # Entrypoint — registers adapters, starts API server (port 8001)
-  errors.py                # YahooError exception with status_code + error_code
+  main.py                  # Entrypoint — registers adapters, validates registry, starts API server (port 8001)
+  errors.py                # ErrorCode (StrEnum), AppError, UserError, YahooError + _STATUS_OVERRIDES lookup table
   models/
-    dividends.py           # Pydantic models: DividendsUpcomingQuery, DividendsUpcomingItem, DividendsUpcomingResponse
+    dividends.py           # Pydantic models: DividendsUpcomingQuery, DividendsUpcomingItem, DividendsUpcomingResponse, TickerError
   adapters/
-    __init__.py            # MarketDataAdapter ABC + registry (register, get_adapter, known_targets)
-    yahoo.py               # YahooAdapter: thin mapping layer from YahooClient → DividendsUpcomingItem
+    __init__.py            # MarketDataAdapter ABC + registry (register, get_adapter, known_targets) with singleton caching
+    yahoo.py               # YahooAdapter: maps YahooClient → DividendsUpcomingItem; converts AppError → TickerError
   routes/
-    app.py                 # create_app(), start_api_server(), handle_dividends_upcoming, handle_health
-    middlewares.py         # auth_middleware + validate_api_token() (AUTH_PREFIX=/v1/market-data)
+    app.py                 # create_app(), start_api_server(), handle_health
+    middlewares.py         # error_middleware (outermost) + auth_middleware + validate_api_token()
+    dividends.py           # GET /v1/market-data/dividends/upcoming handler
   yahoo_client/
-    __init__.py            # YahooClient: get_dividend_info(ticker), get_dividends_info(tickers)
+    __init__.py            # YahooClient: get_dividend_info(ticker), get_dividends_info(tickers); threading.Lock
     auth.py                # get_yahoo_session() — FRAGILE, see module docstring
     cache.py               # CacheStore, get_cached(), set_cached(), clear_dividend_info_cache()
     dividends.py           # fetch_dividend_info_from_yahoo(), fetch_with_retry()
@@ -578,12 +579,48 @@ services/market_data/
 ```
 
 - **`MD_API_TOKEN`** — required env var, checked at startup via `validate_api_token()`. The auth middleware rejects empty tokens with HTTP 500 (same pattern as the relay `API_TOKEN` guard).
-- **Adapter pattern** — `target=yahoo` dispatches to `YahooAdapter` via the registry. New data providers (e.g. `target=alpha_vantage`) can be added by registering a new `MarketDataAdapter` subclass.
-- **`GET /v1/market-data/dividends/upcoming?symbol=AAPL,MSFT&target=yahoo`** — returns `{ data: { [ticker]: DividendsUpcomingItem }, errors: { [ticker]: str } }`. Fetch failures for individual tickers are isolated to `errors` without affecting others. HTTP status is always 200 for valid requests.
+- **Adapter pattern** — `target=yahoo` dispatches to `YahooAdapter` via the registry. New data providers (e.g. `target=alpha_vantage`) can be added by registering a new `MarketDataAdapter` subclass. Adapter instances are **singletons** (cached by class identity in `get_adapter`), so `YahooClient`'s in-memory cache and session are shared across all requests for the lifetime of the process.
+- **`GET /v1/market-data/dividends/upcoming?symbol=AAPL,MSFT&target=yahoo`** — returns `{ data: { [ticker]: DividendsUpcomingItem }, errors: { [ticker]: TickerError } }`. Fetch failures for individual tickers are isolated to `errors` without affecting others. HTTP status is always 200 for valid requests. `TickerError` has two fields: `code` (an `ErrorCode` string) and `message` (human-readable detail).
 - **Port 8001** (`MD_API_PORT` env var, default 8001). Local dev: `15002:8001` (`docker-compose.local.yml`) with `MD_API_TOKEN: dev-token`. Caddy routes `/v1/market-data/*` to `market_data:8001`.
 - **Yahoo auth is fragile.** `auth.py` reverse-engineers Yahoo's session flow. Uses `curl_cffi` with `impersonate="chrome120"` for browser-matching TLS fingerprints — plain `httpx` is blocked with HTTP 429 by Yahoo's WAF. If requests break, check `yfinance/data.py` in the [yfinance repo](https://github.com/ranaroussi/yfinance) first. The module docstring in `auth.py` documents exactly which functions to look at and which invariants currently hold.
-- **In-memory cache** — `YahooClient` caches `DividendInfo` per ticker with a TTL (default 12 hours). The cache is per-process — no shared state between container restarts.
+- **In-memory cache** — `YahooClient` caches `DividendInfo` per ticker with a TTL (default 12 hours). The cache is per-process — no shared state between container restarts. All cache and session accesses are guarded by a `threading.Lock` because `get_dividends_info` runs in a threadpool via `run_in_executor`.
 - **TypeScript types** — `DividendsUpcomingItem`, `DividendsUpcomingQuery`, `DividendsUpcomingResponse` are generated from `services/market_data/models/dividends.py` via `schema_gen.py` into `types/typescript/market_data_api/`. Exported as the `MarketDataApi` namespace in `types/typescript/index.d.ts`.
+
+### Error handling (market data)
+
+All errors follow a two-class hierarchy defined in `errors.py`:
+
+- **`AppError(Exception)`** — server-side faults (5xx). Always has a `code: ErrorCode` and a human-readable `message`. `str(exc)` renders as `"{message} [{code}]"` — this format is used in HTTP response bodies and logs. `status_code` property derives the HTTP status from `_STATUS_OVERRIDES` (falling back to 500).
+- **`UserError(AppError)`** — client-side faults (4xx). Safe to surface to callers. Same interface, falls back to 400 when no override is defined.
+- **`YahooError(AppError)`** — Yahoo Finance errors. Kept as a distinct subclass so `fetch_with_retry` can target it for session refresh on `YAHOO_UNAUTHORIZED`.
+
+**`ErrorCode` (`StrEnum`)** is the registry of all valid codes. Every `AppError`/`UserError` must be constructed with one:
+
+| Code                 | Class        | Default HTTP status | Meaning                                               |
+| -------------------- | ------------ | ------------------- | ----------------------------------------------------- |
+| `YAHOO_UNAUTHORIZED` | `YahooError` | 503                 | Yahoo session expired and could not be refreshed      |
+| `YAHOO_ERROR`        | `YahooError` | 500                 | Other Yahoo Finance HTTP error                        |
+| `FETCH_FAILED`       | `AppError`   | 500                 | Unexpected exception during a ticker fetch            |
+| `INTERNAL_ERROR`     | `AppError`   | 500                 | Server misconfiguration (e.g. adapter not registered) |
+| `VALIDATION_ERROR`   | `UserError`  | 422                 | Request query parameter failed validation             |
+
+The `_STATUS_OVERRIDES` dict in `errors.py` only lists codes whose HTTP status differs from the class default — keep it small. Most `AppError` codes are 500; most `UserError` codes are 400; only exceptions appear in the table.
+
+**Error middleware** (`error_middleware` in `middlewares.py`) is registered **first** in `create_app` so it wraps all other handlers including auth:
+
+```python
+app = web.Application(middlewares=[error_middleware, auth_middleware])
+```
+
+It follows this precedence:
+
+1. `web.HTTPException` — re-raised (aiohttp handles natively, e.g. 404 routing errors)
+2. `AppError`/`UserError` — returns `{"error": str(exc)}` with `exc.status_code`; logs at `warning` (UserError) or `error` (AppError)
+3. Any other `Exception` — returns `{"error": "Internal server error [INTERNAL_ERROR]"}` with 500; logs at `exception` level (full traceback)
+
+**Per-ticker errors** (in the batch response) are `TickerError` objects with separate `code` and `message` fields — not composite strings. The `YahooAdapter` converts `AppError` instances (returned by `YahooClient.get_dividends_info`) into `TickerError` at the serialisation boundary. The `__str__` composite format (`"{message} [{code}]"`) is only used for HTTP-level error responses and logging, never in the structured per-ticker error dict.
+
+**Adding new error codes**: add the member to `ErrorCode`, add a row to `_STATUS_OVERRIDES` only if it needs a non-default HTTP status, then raise `AppError(..., ErrorCode.NEW_CODE)` or `UserError(..., ErrorCode.NEW_CODE)` at the call site. The middleware handles the rest automatically.
 
 ## Dedup Package
 
@@ -820,18 +857,18 @@ services/                  # Business-logic services
     requirements.txt
   market_data/             # Market data HTTP service (dividend info via Yahoo Finance)
     main.py                # Entrypoint — aiohttp app startup
-    errors.py              # YahooError with status_code + error_code fields
-    adapters/              # Adapter pattern: MarketDataAdapter ABC + registry
-      __init__.py          # get_adapter(target) → MarketDataAdapter; YahooAdapter wrapper
-      yahoo.py             # YahooAdapter: maps YahooClient → MarketDataAdapter interface
+    errors.py              # ErrorCode (StrEnum), AppError, UserError, YahooError
+    adapters/              # Adapter pattern: MarketDataAdapter ABC + registry with singleton caching
+      __init__.py          # get_adapter(target) → MarketDataAdapter (singleton); register, known_targets
+      yahoo.py             # YahooAdapter: maps YahooClient → DividendsUpcomingItem; AppError → TickerError
       test_yahoo.py        # Tests for YahooAdapter
     models/
       __init__.py
-      dividends.py         # DividendsUpcomingQuery, DividendsUpcomingItem, DividendsUpcomingResponse Pydantic models
+      dividends.py         # DividendsUpcomingQuery, DividendsUpcomingItem, DividendsUpcomingResponse, TickerError Pydantic models
     routes/                # HTTP API
-      app.py               # create_app() — aiohttp Application factory
+      app.py               # create_app() — registers error_middleware + auth_middleware
       dividends.py         # GET /v1/market-data/dividends/upcoming handler
-      middlewares.py       # Auth middleware (Bearer token, MD_API_TOKEN)
+      middlewares.py       # error_middleware (outermost) + auth_middleware (Bearer token, MD_API_TOKEN)
       test_dividends.py    # Tests for dividends route handler
     yahoo_client/          # Yahoo Finance client (curl_cffi + Chrome TLS impersonation)
       __init__.py          # YahooClient: get_dividends_info() with in-memory cache

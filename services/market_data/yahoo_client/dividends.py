@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 from curl_cffi import requests as cffi_requests
 
-from market_data.errors import YahooError
+from market_data.errors import ErrorCode, YahooError
 from market_data.yahoo_client.auth import _IMPERSONATE, API_HEADERS, get_yahoo_session
 from market_data.yahoo_client.types import DividendInfo, YahooSession
 
@@ -42,15 +42,11 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
         )
 
         if summary_res.status_code == 401:
-            raise YahooError(
-                f"Yahoo Finance 401 for {ticker}",
-                status_code=401,
-                error_code="YAHOO_UNAUTHORIZED",
-            )
+            raise YahooError(f"Yahoo Finance 401 for {ticker}", ErrorCode.YAHOO_UNAUTHORIZED)
         if summary_res.status_code != 200:
             raise YahooError(
                 f"Yahoo Finance quoteSummary HTTP {summary_res.status_code} for {ticker}",
-                status_code=summary_res.status_code,
+                ErrorCode.YAHOO_ERROR,
             )
 
         summary_json = summary_res.json()
@@ -76,11 +72,7 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
         )
 
         if chart_res.status_code == 401:
-            raise YahooError(
-                f"Yahoo Finance 401 for {ticker}",
-                status_code=401,
-                error_code="YAHOO_UNAUTHORIZED",
-            )
+            raise YahooError(f"Yahoo Finance 401 for {ticker}", ErrorCode.YAHOO_UNAUTHORIZED)
 
         per_payment_dps: float | None = None
         avg_gap_seconds: float | None = None
@@ -175,7 +167,7 @@ def fetch_with_retry(
         info = fetch_dividend_info_from_yahoo(ticker, session)
         return info, session
     except YahooError as e:
-        if e.error_code == "YAHOO_UNAUTHORIZED" and attempt < _MAX_RETRIES:
+        if e.code == ErrorCode.YAHOO_UNAUTHORIZED and attempt < _MAX_RETRIES:
             log.debug(
                 "Yahoo 401 for %s — refreshing session (attempt %d/%d)",
                 ticker,

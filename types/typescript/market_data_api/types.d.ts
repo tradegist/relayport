@@ -24,6 +24,10 @@ export interface DividendsUpcomingResponse {
     [k: string]: DividendsUpcomingItem;
   };
   errors: {
-    [k: string]: string;
+    [k: string]: TickerError;
   };
+}
+export interface TickerError {
+  code: string;
+  message: string;
 }

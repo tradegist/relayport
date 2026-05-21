@@ -195,17 +195,41 @@ curl -H "Authorization: Bearer <MD_API_TOKEN>" \
 
 **Response fields:**
 
-| Field                        | Type             | Description                                                                                        |
-| ---------------------------- | ---------------- | -------------------------------------------------------------------------------------------------- |
-| `data`                       | `object`         | Map of ticker → dividend info. Keys are uppercased tickers                                         |
-| `data[].ex_div_date`         | `string \| null` | Next ex-dividend date in `YYYY-MM-DD` format                                                       |
-| `data[].payment_date`        | `string \| null` | Next payment date in `YYYY-MM-DD` format                                                           |
-| `data[].dps`                 | `number \| null` | Dividend per share for this payment (per-payment amount, e.g. quarterly). `null` when unavailable |
+| Field                        | Type             | Description                                                                                                           |
+| ---------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `data`                       | `object`         | Map of ticker → dividend info. Keys are uppercased tickers                                                            |
+| `data[].ex_div_date`         | `string \| null` | Next ex-dividend date in `YYYY-MM-DD` format                                                                          |
+| `data[].payment_date`        | `string \| null` | Next payment date in `YYYY-MM-DD` format                                                                              |
+| `data[].dps`                 | `number \| null` | Dividend per share for this payment (per-payment amount, e.g. quarterly). `null` when unavailable                     |
 | `data[].annual_dps`          | `number \| null` | Annualised dividend per share (from Yahoo's `dividendRate`). Divide `annual_dps` by `dps` to derive payment frequency |
-| `data[].are_dates_estimated` | `boolean`        | `true` when Yahoo has not yet announced the next dates — they are estimated from historical rhythm |
-| `errors`                     | `object`         | Map of ticker → error string for any failed lookups. Successful tickers are not present here       |
+| `data[].are_dates_estimated` | `boolean`        | `true` when Yahoo has not yet announced the next dates — they are estimated from historical rhythm                    |
+| `errors`                     | `object`         | Map of ticker → `{code, message}` for any failed lookups. Successful tickers are not present here                     |
+| `errors[].code`              | `string`         | Machine-readable error code (see [Error codes](#error-codes) below)                                                   |
+| `errors[].message`           | `string`         | Human-readable detail about the failure                                                                               |
 
 Fetch failures for individual tickers are isolated — they appear in `errors` without affecting the rest of `data`. The HTTP status is always `200` as long as the request itself is valid.
+
+**Example — partial failure:**
+
+```json
+{
+  "data": {
+    "AAPL": {
+      "ex_div_date": "2026-08-10",
+      "payment_date": "2026-08-31",
+      "dps": 0.27,
+      "annual_dps": 1.08,
+      "are_dates_estimated": true
+    }
+  },
+  "errors": {
+    "BADTICKER": {
+      "code": "YAHOO_ERROR",
+      "message": "Yahoo Finance quoteSummary HTTP 404 for BADTICKER"
+    }
+  }
+}
+```
 
 ### Health check (market data)
 
@@ -214,6 +238,35 @@ GET /health
 ```
 
 Returns `{"status": "ok"}`. No auth required.
+
+### Error responses
+
+HTTP-level errors (auth failures, validation errors, server faults) return a JSON body with a single `error` field in the format `"{message} [{CODE}]"`:
+
+```json
+{ "error": "Yahoo Finance 401 for AAPL [YAHOO_UNAUTHORIZED]" }
+```
+
+**HTTP status codes:**
+
+| Status | When                                                       |
+| ------ | ---------------------------------------------------------- |
+| 401    | Missing or invalid `Authorization` header                  |
+| 422    | Missing or invalid query parameters (`symbol`, `target`)   |
+| 500    | Server misconfiguration (e.g. `MD_API_TOKEN` not set)      |
+| 503    | Yahoo Finance session could not be refreshed after retries |
+
+### Error codes
+
+The `code` field in per-ticker errors (and in HTTP-level error strings) is always one of the following:
+
+| Code                 | HTTP status | Meaning                                                                    |
+| -------------------- | ----------- | -------------------------------------------------------------------------- |
+| `YAHOO_UNAUTHORIZED` | 503         | Yahoo session expired and could not be refreshed — transient, retry later  |
+| `YAHOO_ERROR`        | 500         | Unexpected HTTP error from Yahoo Finance (e.g. 429, 404)                   |
+| `FETCH_FAILED`       | 500         | Unexpected exception during the fetch (network timeout, parse error, etc.) |
+| `INTERNAL_ERROR`     | 500         | Server misconfiguration — not caused by the request                        |
+| `VALIDATION_ERROR`   | 422         | Request query parameter failed validation                                  |
 
 ## Architecture
 

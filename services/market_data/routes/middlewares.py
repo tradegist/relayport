@@ -1,4 +1,4 @@
-"""Auth middleware — Bearer token verification for authenticated routes."""
+"""Route middlewares — error handling and Bearer token auth."""
 
 import hmac
 import logging
@@ -7,11 +7,33 @@ from collections.abc import Awaitable, Callable
 
 from aiohttp import web
 
-log = logging.getLogger("market_data.routes.auth")
+from market_data.errors import AppError, ErrorCode, UserError
+
+log = logging.getLogger(__name__)
 
 _Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 
 AUTH_PREFIX = "/v1/market-data"
+
+
+@web.middleware
+async def error_middleware(request: web.Request, handler: _Handler) -> web.StreamResponse:
+    """Catch AppError/UserError and unexpected exceptions; return structured JSON."""
+    try:
+        return await handler(request)
+    except web.HTTPException:
+        raise
+    except AppError as exc:
+        if isinstance(exc, UserError):
+            log.warning("User error on %s %s: %s", request.method, request.path, exc)
+        else:
+            log.error("App error on %s %s: %s", request.method, request.path, exc)
+        return web.json_response({"error": str(exc)}, status=exc.status_code)
+    except Exception:
+        log.exception("Unhandled exception on %s %s", request.method, request.path)
+        return web.json_response(
+            {"error": f"Internal server error [{ErrorCode.INTERNAL_ERROR}]"}, status=500
+        )
 
 
 def _get_api_token() -> str:

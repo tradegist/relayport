@@ -5,7 +5,7 @@ from typing import Any
 from aiohttp.test_utils import TestClient, TestServer
 
 from market_data.adapters import MarketDataAdapter, _registry
-from market_data.models.dividends import DividendsUpcomingItem
+from market_data.models.dividends import DividendsUpcomingItem, TickerError
 from market_data.routes.app import create_app
 
 _ENV = {"MD_API_TOKEN": "test-token"}
@@ -18,25 +18,27 @@ _AAPL_ITEM = DividendsUpcomingItem(
     are_dates_estimated=False,
 )
 
+_BAD_ERROR = TickerError(code="FETCH_FAILED", message="fetch failed")
+
 
 class _StubAdapter(MarketDataAdapter):
     def __init__(
         self,
         data: dict[str, DividendsUpcomingItem],
-        errors: dict[str, str],
+        errors: dict[str, TickerError],
     ) -> None:
         self._data = data
         self._errors = errors
 
     def get_dividends_upcoming(
         self, symbols: list[str]
-    ) -> tuple[dict[str, DividendsUpcomingItem], dict[str, str]]:
+    ) -> tuple[dict[str, DividendsUpcomingItem], dict[str, TickerError]]:
         return self._data, self._errors
 
 
 def _stub_adapter_factory(
     data: dict[str, DividendsUpcomingItem],
-    errors: dict[str, str],
+    errors: dict[str, TickerError],
 ) -> type[MarketDataAdapter]:
     class _Factory(_StubAdapter):
         def __init__(self) -> None:
@@ -132,7 +134,7 @@ class TestDividendsUpcomingHandler(unittest.IsolatedAsyncioTestCase):
         class _CapturingAdapter(MarketDataAdapter):
             def get_dividends_upcoming(
                 self, symbols: list[str]
-            ) -> tuple[dict[str, DividendsUpcomingItem], dict[str, str]]:
+            ) -> tuple[dict[str, DividendsUpcomingItem], dict[str, TickerError]]:
                 captured.append(symbols)
                 return {}, {}
 
@@ -143,14 +145,12 @@ class TestDividendsUpcomingHandler(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured[0], ["AAPL", "GOOG"])
 
     async def test_partial_error_returns_both_data_and_errors(self) -> None:
-        _registry["yahoo"] = _stub_adapter_factory(
-            {"AAPL": _AAPL_ITEM},
-            {"BAD": "fetch failed"},
-        )
+        _registry["yahoo"] = _stub_adapter_factory({"AAPL": _AAPL_ITEM}, {"BAD": _BAD_ERROR})
 
         status, body = await self._get(
             "/v1/market-data/dividends/upcoming?symbol=AAPL,BAD&target=yahoo"
         )
         self.assertEqual(status, 200)
         self.assertIn("AAPL", body["data"])
-        self.assertEqual(body["errors"], {"BAD": "fetch failed"})
+        self.assertEqual(body["errors"]["BAD"]["code"], "FETCH_FAILED")
+        self.assertEqual(body["errors"]["BAD"]["message"], "fetch failed")

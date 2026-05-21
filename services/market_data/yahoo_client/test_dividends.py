@@ -151,7 +151,7 @@ class TestFetchDividendInfoFromYahoo(unittest.TestCase):
              self.assertRaises(YahooError) as ctx:
             fetch_dividend_info_from_yahoo("AAPL", _MOCK_SESSION)
 
-        self.assertEqual(ctx.exception.error_code, "YAHOO_UNAUTHORIZED")
+        self.assertEqual(ctx.exception.code, "YAHOO_UNAUTHORIZED")
 
     def test_returns_null_dates_when_chart_unavailable(self) -> None:
         past_unix = 1760659200
@@ -258,7 +258,7 @@ class TestFetchWithRetry(unittest.TestCase):
              self.assertRaises(YahooError) as ctx:
             fetch_with_retry("AAPL", _MOCK_SESSION)
 
-        self.assertIsNone(ctx.exception.error_code)
+        self.assertEqual(ctx.exception.code, "YAHOO_ERROR")
 
 
 # ─── YahooClient cache integration ───────────────────────────────────────────
@@ -342,6 +342,8 @@ class TestYahooClientCache(unittest.TestCase):
 
         self.assertEqual(data, {})
         self.assertIn("AAPL", errors)
-        self.assertIsInstance(errors["AAPL"], str)
+        from market_data.errors import AppError
+        self.assertIsInstance(errors["AAPL"], AppError)
+        self.assertEqual(errors["AAPL"].code, "YAHOO_ERROR")
 
 

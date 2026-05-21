@@ -23,7 +23,7 @@ from typing import Any, Literal
 
 from curl_cffi import requests as cffi_requests
 
-from market_data.errors import YahooError
+from market_data.errors import ErrorCode, YahooError
 from market_data.yahoo_client.types import YahooSession
 
 _PAGE_URL = "https://finance.yahoo.com/"
@@ -98,12 +98,13 @@ def get_yahoo_session() -> YahooSession:
 
         if crumb_res.status_code != 200:
             raise YahooError(
-                f"Yahoo Finance crumb endpoint returned HTTP {crumb_res.status_code}"
+                f"Yahoo Finance crumb endpoint returned HTTP {crumb_res.status_code}",
+                ErrorCode.YAHOO_ERROR,
             )
 
         crumb = crumb_res.text.strip()
         if not crumb or crumb.startswith("{"):
-            raise YahooError("Failed to obtain a valid Yahoo Finance crumb")
+            raise YahooError("Failed to obtain a valid Yahoo Finance crumb", ErrorCode.YAHOO_ERROR)
 
         cookie_string = "; ".join(
             f"{name}={value}" for name, value in session.cookies.items()

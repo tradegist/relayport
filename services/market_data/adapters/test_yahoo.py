@@ -2,6 +2,7 @@ import unittest
 import unittest.mock
 
 from market_data.adapters.yahoo import YahooAdapter
+from market_data.errors import AppError, ErrorCode
 from market_data.yahoo_client.types import DividendInfo
 
 _AAPL_INFO = DividendInfo(
@@ -50,16 +51,19 @@ class TestYahooAdapterMapping(unittest.TestCase):
         self.assertEqual(errors, {})
 
     def test_errors_passed_through_from_client(self) -> None:
+        bad_error = AppError("Network failure for BAD", ErrorCode.FETCH_FAILED)
         adapter = YahooAdapter()
         with unittest.mock.patch.object(
             adapter._client,
             "get_dividends_info",
-            return_value=({"AAPL": _AAPL_INFO}, {"BAD": "network failure"}),
+            return_value=({"AAPL": _AAPL_INFO}, {"BAD": bad_error}),
         ):
             data, errors = adapter.get_dividends_upcoming(["AAPL", "BAD"])
 
         self.assertIn("AAPL", data)
-        self.assertEqual(errors, {"BAD": "network failure"})
+        self.assertIn("BAD", errors)
+        self.assertEqual(errors["BAD"].code, "FETCH_FAILED")
+        self.assertEqual(errors["BAD"].message, "Network failure for BAD")
 
     def test_returns_empty_dicts_for_empty_symbols(self) -> None:
         adapter = YahooAdapter()

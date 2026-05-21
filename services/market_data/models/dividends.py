@@ -38,8 +38,15 @@ class DividendsUpcomingItem(BaseModel):
     are_dates_estimated: bool
 
 
+class TickerError(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    message: str
+
+
 class DividendsUpcomingResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     data: dict[str, DividendsUpcomingItem]
-    errors: dict[str, str]
+    errors: dict[str, TickerError]

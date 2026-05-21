@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from market_data.models.dividends import DividendsUpcomingItem
+from market_data.models.dividends import DividendsUpcomingItem, TickerError
 
 _registry: dict[str, type["MarketDataAdapter"]] = {}
 _instances: dict[str, "MarketDataAdapter"] = {}
@@ -10,7 +10,7 @@ class MarketDataAdapter(ABC):
     @abstractmethod
     def get_dividends_upcoming(
         self, symbols: list[str]
-    ) -> tuple[dict[str, DividendsUpcomingItem], dict[str, str]]:
+    ) -> tuple[dict[str, DividendsUpcomingItem], dict[str, TickerError]]:
         ...
 
 

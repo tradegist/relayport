@@ -2,7 +2,7 @@ import logging
 import threading
 import time
 
-from market_data.errors import YahooError
+from market_data.errors import AppError, ErrorCode, YahooError
 from market_data.yahoo_client.auth import get_yahoo_session
 from market_data.yahoo_client.cache import (
     CacheStore,
@@ -44,23 +44,26 @@ class YahooClient:
 
     def get_dividends_info(
         self, tickers: list[str]
-    ) -> tuple[dict[str, DividendInfo], dict[str, str]]:
+    ) -> tuple[dict[str, DividendInfo], dict[str, AppError]]:
         """Batch fetch keyed by ticker.
 
         Successful results go into the first dict; fetch failures go into the
-        second dict as error strings. Never raises.
+        second dict as AppError instances. Never raises.
         """
         data: dict[str, DividendInfo] = {}
-        errors: dict[str, str] = {}
+        errors: dict[str, AppError] = {}
 
         for i, ticker in enumerate(tickers):
             try:
                 data[ticker] = self.get_dividend_info(ticker)
             except YahooError as exc:
-                errors[ticker] = exc.error_code or "YAHOO_ERROR"
+                errors[ticker] = exc
                 log.warning("Yahoo Finance error for %s: %s", ticker, exc)
             except Exception:
-                errors[ticker] = "FETCH_FAILED"
+                errors[ticker] = AppError(
+                    f"Unexpected error fetching dividend info for {ticker}",
+                    ErrorCode.FETCH_FAILED,
+                )
                 log.exception("Unexpected error fetching dividend info for %s", ticker)
 
             if i < len(tickers) - 1:

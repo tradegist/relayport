@@ -77,6 +77,23 @@
       "title": "DividendsUpcomingItem",
       "type": "object"
     },
+    "TickerError": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "TickerError",
+      "type": "object"
+    },
     "DividendsUpcomingResponse": {
       "additionalProperties": false,
       "properties": {
@@ -88,7 +105,7 @@
         },
         "errors": {
           "additionalProperties": {
-            "type": "string"
+            "$ref": "#/$defs/TickerError"
           },
           "type": "object"
         }

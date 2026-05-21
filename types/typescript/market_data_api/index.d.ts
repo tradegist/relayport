@@ -6,4 +6,5 @@ export type {
   DividendsUpcomingQuery,
   DividendsUpcomingResponse,
   Target,
+  TickerError,
 } from "./types";
