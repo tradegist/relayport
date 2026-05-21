@@ -234,10 +234,10 @@ Fetch failures for individual tickers are isolated — they appear in `errors` w
 ### Health check (market data)
 
 ```
-GET /health
+GET /v1/market-data/health
 ```
 
-Returns `{"status": "ok"}`. No auth required.
+Returns `{"status": "ok"}`. No auth required. This is the public path routed through Caddy. The bare `/health` path is also available for Docker's internal health check (direct container port only).
 
 ### Error responses
 

@@ -29,7 +29,10 @@ async def handle_health(request: web.Request) -> web.Response:
 def create_app() -> web.Application:
     """Build the aiohttp Application with all routes wired."""
     app = web.Application(middlewares=[error_middleware, auth_middleware])
+    # /health — used by Docker HEALTHCHECK (direct container port)
+    # /v1/market-data/health — public path routed through Caddy (/v1/market-data/*)
     app.router.add_get("/health", handle_health)
+    app.router.add_get(f"{AUTH_PREFIX}/health", handle_health)
     app.router.add_get(f"{AUTH_PREFIX}/dividends/upcoming", handle_dividends_upcoming)
     return app
 
