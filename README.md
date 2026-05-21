@@ -249,7 +249,7 @@ HTTP-level errors (auth failures, validation errors, server faults) return a JSO
 
 Yahoo Finance failures for individual tickers are **not** surfaced here — they appear in the per-ticker `errors` map with HTTP 200 (see above).
 
-All HTTP-level errors — including auth failures — follow this format, so every non-200 response has the same `{"error": "... [CODE]"}` shape.
+All non-200 responses — including routing errors (404, 405) — follow this format. For application errors the code is a string (e.g. `INTERNAL_ERROR`); for routing errors it is the numeric HTTP status (e.g. `404`).
 
 **HTTP status codes:**
 

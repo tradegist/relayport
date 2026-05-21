@@ -62,6 +62,16 @@ class TestDividendsUpcomingHandler(unittest.IsolatedAsyncioTestCase):
                 body = await resp.json()
             return resp.status, body
 
+    # ── Routing errors ───────────────────────────────────────────────
+
+    async def test_unknown_path_returns_json_404(self) -> None:
+        async with TestClient(TestServer(create_app())) as client:
+            with unittest.mock.patch.dict("os.environ", _ENV):
+                resp = await client.get("/no/such/path")
+                body = await resp.json()
+        self.assertEqual(resp.status, 404)
+        self.assertRegex(body["error"], r"\[404\]$")
+
     # ── Auth ──────────────────────────────────────────────────────────
 
     async def test_missing_token_returns_401(self) -> None:
