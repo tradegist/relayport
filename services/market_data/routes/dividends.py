@@ -34,10 +34,7 @@ async def handle_dividends_upcoming(request: web.Request) -> web.Response:
             ErrorCode.INTERNAL_ERROR,
         )
 
-    loop = asyncio.get_running_loop()
-    items, errors = await loop.run_in_executor(
-        None, adapter.get_dividends_upcoming, query.symbol
-    )
+    items, errors = await asyncio.to_thread(adapter.get_dividends_upcoming, query.symbol)
 
     resp = DividendsUpcomingResponse(data=items, errors=errors)
     return web.json_response(resp.model_dump())

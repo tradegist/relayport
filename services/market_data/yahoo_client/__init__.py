@@ -75,6 +75,8 @@ class YahooClient:
         errors: dict[str, AppError] = {}
 
         for i, ticker in enumerate(tickers):
+            with self._lock:
+                already_cached = get_cached(ticker, self._cache) is not None
             try:
                 data[ticker] = self.get_dividend_info(ticker)
             except YahooError as exc:
@@ -87,7 +89,7 @@ class YahooClient:
                 )
                 log.exception("Unexpected error fetching dividend info for %s", ticker)
 
-            if i < len(tickers) - 1:
+            if not already_cached and i < len(tickers) - 1:
                 time.sleep(_INTER_TICKER_DELAY_SECONDS)
 
         return data, errors
