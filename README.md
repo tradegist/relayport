@@ -195,19 +195,19 @@ curl -H "Authorization: Bearer <MD_API_TOKEN>" \
 
 **Response fields:**
 
-| Field                        | Type             | Description                                                                                                           |
-| ---------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `data`                       | `object`         | Map of ticker → dividend info. Keys are uppercased tickers                                                            |
-| `data[].ex_div_date`         | `string \| null` | Next ex-dividend date in `YYYY-MM-DD` format                                                                          |
-| `data[].payment_date`        | `string \| null` | Next payment date in `YYYY-MM-DD` format                                                                              |
-| `data[].dps`                 | `number \| null` | Dividend per share for this payment (per-payment amount, e.g. quarterly). `null` when unavailable                     |
-| `data[].annual_dps`          | `number \| null` | Annualised dividend per share (from Yahoo's `dividendRate`). Divide `annual_dps` by `dps` to derive payment frequency |
-| `data[].are_dates_estimated` | `boolean`        | `true` when Yahoo has not yet announced the next dates — they are estimated from historical rhythm                    |
-| `errors`                     | `object`         | Map of ticker → `{code, message}` for any failed lookups. Successful tickers are not present here                     |
-| `errors[].code`              | `string`         | Machine-readable error code (see [Error codes](#error-codes) below)                                                   |
-| `errors[].message`           | `string`         | Human-readable detail about the failure                                                                               |
+| Field                                | Type             | Description                                                                                                           |
+| ------------------------------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `data`                               | `object`         | Map of ticker → dividend info. Keys are uppercased tickers                                                            |
+| `data[<TICKER>].ex_div_date`         | `string \| null` | Next ex-dividend date in `YYYY-MM-DD` format                                                                          |
+| `data[<TICKER>].payment_date`        | `string \| null` | Next payment date in `YYYY-MM-DD` format                                                                              |
+| `data[<TICKER>].dps`                 | `number \| null` | Dividend per share for this payment (per-payment amount, e.g. quarterly). `null` when unavailable                     |
+| `data[<TICKER>].annual_dps`          | `number \| null` | Annualised dividend per share (from Yahoo's `dividendRate`). Divide `annual_dps` by `dps` to derive payment frequency |
+| `data[<TICKER>].are_dates_estimated` | `boolean`        | `true` when Yahoo has not yet announced the next dates — they are estimated from historical rhythm                    |
+| `errors`                             | `object`         | Map of ticker → `{code, message}` for any failed lookups. Successful tickers are not present here                     |
+| `errors[<TICKER>].code`              | `string`         | Machine-readable error code (see [Error codes](#error-codes) below)                                                   |
+| `errors[<TICKER>].message`           | `string`         | Human-readable detail about the failure                                                                               |
 
-Fetch failures for individual tickers are isolated — they appear in `errors` without affecting the rest of `data`. When the request is handled successfully, these per-ticker lookup failures are returned in a `200` response; however, request-level or server-side faults may still return non-`200` HTTP responses (for example `503`).
+Fetch failures for individual tickers are isolated — they appear in `errors` without affecting the rest of `data`. When the request is handled successfully, these per-ticker lookup failures are returned in a `200` response; however, request-level or server-side faults may still return non-`200` HTTP responses (for example `401`, `422`, or `500`).
 
 **Example — partial failure:**
 

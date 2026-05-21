@@ -1,7 +1,6 @@
 """GET /v1/market-data/dividends/upcoming — fetch upcoming dividend info."""
 
 import asyncio
-import logging
 
 from aiohttp import web
 from pydantic import ValidationError
@@ -9,8 +8,6 @@ from pydantic import ValidationError
 from market_data.adapters import get_adapter
 from market_data.errors import AppError, ErrorCode, UserError
 from market_data.models.dividends import DividendsUpcomingQuery, DividendsUpcomingResponse
-
-log = logging.getLogger(__name__)
 
 
 async def handle_dividends_upcoming(request: web.Request) -> web.Response:
