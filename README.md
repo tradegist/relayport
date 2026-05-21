@@ -118,7 +118,7 @@ Returns `{"status": "ok"}`. No auth required.
 
 ## Market Data API
 
-A separate service (`market_data`, port 8001) provides market data lookups. All endpoints require `Authorization: Bearer <MD_API_TOKEN>` (a separate token from the relay `API_TOKEN`).
+A separate service (`market_data`, port 8001) provides market data lookups. All `/v1/market-data/*` endpoints require `Authorization: Bearer <MD_API_TOKEN>` (a separate token from the relay `API_TOKEN`). The `/health` endpoint is unauthenticated.
 
 ### Upcoming dividend
 

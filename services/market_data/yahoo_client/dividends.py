@@ -10,7 +10,7 @@ from market_data.errors import ErrorCode, YahooError
 from market_data.yahoo_client.auth import _IMPERSONATE, API_HEADERS, get_yahoo_session
 from market_data.yahoo_client.types import DividendInfo, YahooSession
 
-_MAX_RETRIES = 3
+_MAX_ATTEMPTS = 4
 _RETRY_DELAY_SECONDS = 3.0
 _SECONDS_PER_YEAR = 365.25 * 24 * 60 * 60
 
@@ -162,18 +162,18 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
 
 
 def fetch_with_retry(
-    ticker: str, session: YahooSession, attempt: int = 0
+    ticker: str, session: YahooSession, attempt: int = 1
 ) -> tuple[DividendInfo, YahooSession]:
     try:
         info = fetch_dividend_info_from_yahoo(ticker, session)
         return info, session
     except YahooError as e:
-        if e.code == ErrorCode.YAHOO_UNAUTHORIZED and attempt < _MAX_RETRIES:
+        if e.code == ErrorCode.YAHOO_UNAUTHORIZED and attempt < _MAX_ATTEMPTS:
             log.debug(
                 "Yahoo 401 for %s — refreshing session (attempt %d/%d)",
                 ticker,
-                attempt + 1,
-                _MAX_RETRIES,
+                attempt,
+                _MAX_ATTEMPTS,
             )
             time.sleep(_RETRY_DELAY_SECONDS)
             fresh_session = get_yahoo_session()

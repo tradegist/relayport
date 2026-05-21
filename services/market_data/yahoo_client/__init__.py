@@ -35,12 +35,22 @@ class YahooClient:
             if cached is not None:
                 log.debug("Dividend cache hit for %s", ticker)
                 return cached
+            session = self._session
 
-            if self._session is None:
-                self._session = get_yahoo_session()
-            info, self._session = fetch_with_retry(ticker, self._session)
+        if session is None:
+            session = get_yahoo_session()
+        info, session = fetch_with_retry(ticker, session)
+
+        with self._lock:
+            # Double-check: another thread may have fetched the same ticker
+            # while we were doing the network call.
+            cached = get_cached(ticker, self._cache)
+            if cached is not None:
+                log.debug("Dividend cache hit for %s (race)", ticker)
+                return cached
+            self._session = session
             set_cached(ticker, info, self._cache)
-            return info
+        return info
 
     def get_dividends_info(
         self, tickers: list[str]
