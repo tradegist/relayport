@@ -10,7 +10,7 @@ Do not edit manually — run ``make types`` to regenerate.
 from .market_data_api import DividendsUpcomingItem as DividendsUpcomingItem
 from .market_data_api import DividendsUpcomingQuery as DividendsUpcomingQuery
 from .market_data_api import DividendsUpcomingResponse as DividendsUpcomingResponse
-from .market_data_api import Target as Target
+from .market_data_api import MarketDataTarget as MarketDataTarget
 from .market_data_api import TickerError as TickerError
 from .notifier.models import WebhookPayload as WebhookPayload
 from .notifier.models import WebhookPayloadTrades as WebhookPayloadTrades

@@ -5,12 +5,12 @@
  * and run json-schema-to-typescript to regenerate this file.
  */
 
-export type TypesSchema = DividendsUpcomingQuery | DividendsUpcomingItem | DividendsUpcomingResponse | Target;
-export type Target = "yahoo";
+export type TypesSchema = DividendsUpcomingQuery | DividendsUpcomingItem | DividendsUpcomingResponse | MarketDataTarget;
+export type MarketDataTarget = "yahoo";
 
 export interface DividendsUpcomingQuery {
   symbol: string[];
-  target: Target;
+  target: MarketDataTarget;
 }
 export interface DividendsUpcomingItem {
   ex_div_date: string | null;

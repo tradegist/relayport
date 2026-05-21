@@ -5,6 +5,6 @@ export type {
   DividendsUpcomingItem,
   DividendsUpcomingQuery,
   DividendsUpcomingResponse,
-  Target,
+  MarketDataTarget,
   TickerError,
 } from "./types";

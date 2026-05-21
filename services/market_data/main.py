@@ -7,7 +7,7 @@ from typing import get_args
 
 from market_data.adapters import known_targets, register
 from market_data.adapters.yahoo import YahooAdapter
-from market_data.models.dividends import Target
+from market_data.models.dividends import MarketDataTarget
 from market_data.routes.app import start_api_server
 from market_data.routes.middlewares import validate_api_token
 
@@ -23,7 +23,7 @@ def configure_logging() -> None:
 
 def _validate_registry() -> None:
     registered = set(known_targets())
-    missing = [t for t in get_args(Target) if t not in registered]
+    missing = [t for t in get_args(MarketDataTarget) if t not in registered]
     if missing:
         raise SystemExit(f"Adapters not registered for targets: {missing}")
 

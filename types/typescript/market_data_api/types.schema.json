@@ -10,7 +10,7 @@
           "type": "array"
         },
         "target": {
-          "$ref": "#/$defs/Target"
+          "$ref": "#/$defs/MarketDataTarget"
         }
       },
       "required": [
@@ -117,7 +117,7 @@
       "title": "DividendsUpcomingResponse",
       "type": "object"
     },
-    "Target": {
+    "MarketDataTarget": {
       "enum": [
         "yahoo"
       ],
@@ -135,7 +135,7 @@
       "$ref": "#/$defs/DividendsUpcomingResponse"
     },
     {
-      "$ref": "#/$defs/Target"
+      "$ref": "#/$defs/MarketDataTarget"
     }
   ]
 }

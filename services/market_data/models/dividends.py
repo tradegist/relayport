@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from market_data.utils import parse_string_list
 
-Target = Literal["yahoo"]
+MarketDataTarget = Literal["yahoo"]
 
 _MAX_SYMBOLS = 20
 
@@ -13,7 +13,7 @@ class DividendsUpcomingQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     symbol: list[str]
-    target: Target
+    target: MarketDataTarget
 
     @field_validator("symbol", mode="before")
     @classmethod
