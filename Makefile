@@ -9,8 +9,8 @@ TYPESCRIPT_VERSION = 5.6.3
 JSON2TS = npx --yes -p json-schema-to-typescript@$(JSON2TS_VERSION) json2ts
 TSC = npx --yes -p typescript@$(TYPESCRIPT_VERSION) tsc
 E2E_ENV = .env.test
-E2E_COMPOSE = SITE_DOMAIN=unused API_TOKEN=test-token docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
-E2E_COMPOSE_DOWN = SITE_DOMAIN=unused API_TOKEN=test-token docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
+E2E_COMPOSE = SITE_DOMAIN=unused API_TOKEN=test-token MD_API_TOKEN=md-test-token docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
+E2E_COMPOSE_DOWN = SITE_DOMAIN=unused API_TOKEN=test-token MD_API_TOKEN=md-test-token docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
 LOCAL_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.local.yml
 _RESOLVE_ENV = . ./.env 2>/dev/null; . ./.env.droplet 2>/dev/null; env="$${RELAY_ENV:-$${DEFAULT_CLI_ENV:-prod}}"; [ -n "$(ENV)" ] && env="$(ENV)";
 

@@ -58,6 +58,29 @@ services:
       retries: 10
       start_period: 3s
 
+  market_data:
+    restart: "no"
+    env_file: !override
+      - .env.test
+    environment:
+      MD_API_TOKEN: md-test-token
+    ports:
+      - "15013:8001"
+    volumes:
+      - ./services/market_data:/app/market_data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')",
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 3s
+
   # Disable production-only services
   caddy:
     profiles: ["disabled"]

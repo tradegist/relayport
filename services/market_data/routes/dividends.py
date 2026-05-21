@@ -23,7 +23,7 @@ async def handle_dividends_upcoming(request: web.Request) -> web.Response:
         query = DividendsUpcomingQuery.model_validate(query_data)
     except ValidationError as exc:
         parts = [
-            f"{'.' .join(str(p) for p in e.get('loc', ()))}: {e.get('msg', 'invalid')}"
+            f"{'.'.join(str(p) for p in e.get('loc', ()))}: {e.get('msg', 'invalid')}"
             if e.get("loc")
             else e.get("msg", "invalid")
             for e in exc.errors(include_url=False)
