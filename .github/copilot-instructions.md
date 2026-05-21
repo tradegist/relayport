@@ -279,6 +279,7 @@ Shared projects deploy snippets to `/opt/caddy-shared/sites/` on the droplet (no
 During shared deploy, snippet files are **templated** — all `{$VAR}` placeholders are replaced with literal env var values from the shared project's `.env`. This avoids requiring the host Caddy container to have the shared project's env vars.
 
 - **`sites/*.caddy`** contain `handle` blocks imported inside the `{$SITE_DOMAIN}` site definition. Each project writes one snippet. Routes must be prefixed to avoid collisions. The `debug.caddy` snippet routes `/debug/webhook/*` to the `debug` container.
+- **When adding a new Caddy snippet (`infra/caddy/sites/*.caddy`), always update `route_prefixes` in `cli/__init__.py` in the same commit.** The CLI's `_validate_site_snippet_routes` checks every `handle` directive against `route_prefixes` during shared deploy — if a new snippet's prefix isn't listed, shared deployments abort. The full checklist for a new routed service: (1) add the `.caddy` snippet, (2) add the prefix to `route_prefixes`, (3) add the token to `required_env` if the service has its own auth token, (4) add the service alias to `service_map`.
 - This structure allows multiple projects to share a single Caddy instance on the same droplet.
 
 ## Sibling Project: ibkr_bridge

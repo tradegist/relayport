@@ -106,15 +106,17 @@ _CONFIG = CoreConfig(
     required_env=[
         "DO_API_TOKEN",
         "API_TOKEN",
+        "MD_API_TOKEN",
     ],
     service_map={
         "caddy": "caddy",
         "relays": "relays",
+        "market_data": "market_data",
         "debug": "debug",
     },
     compose_env_fn=_compose_env,
     size_selector_fn=_droplet_size,
-    route_prefixes=["/relays", "/debug"],
+    route_prefixes=["/relays", "/debug", "/v1/market-data"],
     pre_sync_hook=_pre_sync_hook,
     # Env vars stripped from the subprocess env when `_run_checks` runs
     # typecheck/lint/test/e2e. Currently scoped to the Resend / alert-email
