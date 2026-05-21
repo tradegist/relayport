@@ -6,7 +6,7 @@ import logging
 from aiohttp import web
 from pydantic import ValidationError
 
-from market_data.adapters import get_adapter, known_targets
+from market_data.adapters import get_adapter
 from market_data.models.dividends import DividendsUpcomingQuery, DividendsUpcomingResponse
 
 log = logging.getLogger(__name__)
@@ -21,11 +21,8 @@ async def handle_dividends_upcoming(request: web.Request) -> web.Response:
 
     adapter = get_adapter(query.target)
     if adapter is None:
-        targets = known_targets()
-        return web.json_response(
-            {"error": f"Unknown target: {query.target!r}. Available: {targets}"},
-            status=400,
-        )
+        log.error("No adapter registered for target %r — server misconfiguration", query.target)
+        return web.json_response({"error": "Internal server error"}, status=500)
 
     try:
         loop = asyncio.get_running_loop()

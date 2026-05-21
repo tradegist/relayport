@@ -2,6 +2,7 @@ import logging
 import threading
 import time
 
+from market_data.errors import YahooError
 from market_data.yahoo_client.auth import get_yahoo_session
 from market_data.yahoo_client.cache import (
     CacheStore,
@@ -55,9 +56,12 @@ class YahooClient:
         for i, ticker in enumerate(tickers):
             try:
                 data[ticker] = self.get_dividend_info(ticker)
-            except Exception as exc:
-                log.debug("Failed to fetch dividend info for %s", ticker, exc_info=True)
-                errors[ticker] = str(exc)
+            except YahooError as exc:
+                errors[ticker] = exc.error_code or "YAHOO_ERROR"
+                log.warning("Yahoo Finance error for %s: %s", ticker, exc)
+            except Exception:
+                errors[ticker] = "FETCH_FAILED"
+                log.exception("Unexpected error fetching dividend info for %s", ticker)
 
             if i < len(tickers) - 1:
                 time.sleep(_INTER_TICKER_DELAY_SECONDS)
