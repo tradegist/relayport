@@ -133,31 +133,39 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
         else:
             annual_dps = None
 
-        # ── 4. Return: announced dates take priority over estimated ──────
-        if _is_future_unix(announced_ex_div_unix) and _is_future_unix(announced_payment_unix):
-            return DividendInfo(
-                ex_div_date=_to_date_string(cast(float, announced_ex_div_unix)),
-                payment_date=_to_date_string(cast(float, announced_payment_unix)),
-                dps=per_payment_dps,
-                annual_dps=annual_dps,
-                are_dates_estimated=False,
-            )
+        # ── 4. Return: each date selected independently ──────────────────
+        # Use the announced value when available and future; fall back to
+        # estimation or None. This ensures partial announcements (e.g. Yahoo
+        # provides ex-div but not payment date) are still surfaced accurately.
+        if _is_future_unix(announced_ex_div_unix):
+            ex_div_date = _to_date_string(cast(float, announced_ex_div_unix))
+            ex_div_unix_for_payment = cast(float, announced_ex_div_unix)
+            ex_div_estimated = False
+        elif estimated_ex_div is not None:
+            ex_div_date = _to_date_string(estimated_ex_div)
+            ex_div_unix_for_payment = estimated_ex_div
+            ex_div_estimated = True
+        else:
+            ex_div_date = None
+            ex_div_unix_for_payment = None
+            ex_div_estimated = False
 
-        if estimated_ex_div is not None:
-            return DividendInfo(
-                ex_div_date=_to_date_string(estimated_ex_div),
-                payment_date=_to_date_string(estimated_ex_div + payment_offset_seconds),
-                dps=per_payment_dps,
-                annual_dps=annual_dps,
-                are_dates_estimated=True,
-            )
+        if _is_future_unix(announced_payment_unix):
+            payment_date = _to_date_string(cast(float, announced_payment_unix))
+            payment_estimated = False
+        elif ex_div_unix_for_payment is not None:
+            payment_date = _to_date_string(ex_div_unix_for_payment + payment_offset_seconds)
+            payment_estimated = True
+        else:
+            payment_date = None
+            payment_estimated = False
 
         return DividendInfo(
-            ex_div_date=None,
-            payment_date=None,
+            ex_div_date=ex_div_date,
+            payment_date=payment_date,
             dps=per_payment_dps,
             annual_dps=annual_dps,
-            are_dates_estimated=False,
+            are_dates_estimated=ex_div_estimated or payment_estimated,
         )
 
 

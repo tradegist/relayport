@@ -153,6 +153,44 @@ class TestFetchDividendInfoFromYahoo(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, "YAHOO_UNAUTHORIZED")
 
+    def test_announced_ex_div_without_announced_payment_uses_estimated_payment(self) -> None:
+        future_ex_div = 1771113600  # 2026-02-15T00:00:00Z
+        past_payment = 1760659200   # past — not future, so should not be used
+
+        mock_client = _make_mock_client([
+            _make_response(200, _make_summary_body(future_ex_div, past_payment, 1.5)),
+            _make_response(200, _make_chart_body(_QUARTERLY_TIMESTAMPS, 0.25)),
+        ])
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW), \
+             unittest.mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client):
+            result = fetch_dividend_info_from_yahoo("AAPL", _MOCK_SESSION)
+
+        # Announced ex-div date is used directly.
+        self.assertEqual(result.ex_div_date, "2026-02-15")
+        # Payment falls back to announced_ex_div + 21-day default offset.
+        self.assertEqual(result.payment_date, "2026-03-08")
+        # are_dates_estimated is True because payment was not directly announced.
+        self.assertTrue(result.are_dates_estimated)
+
+    def test_announced_payment_without_announced_ex_div_uses_estimated_ex_div(self) -> None:
+        past_ex_div = 1760659200    # past — not future, should not be used
+        future_payment = 1772928000  # 2026-03-08T00:00:00Z
+
+        mock_client = _make_mock_client([
+            _make_response(200, _make_summary_body(past_ex_div, future_payment, 1.5)),
+            _make_response(200, _make_chart_body(_QUARTERLY_TIMESTAMPS, 0.25)),
+        ])
+        with unittest.mock.patch("time.time", return_value=_FROZEN_NOW), \
+             unittest.mock.patch("market_data.yahoo_client.dividends.cffi_requests.Session", return_value=mock_client):
+            result = fetch_dividend_info_from_yahoo("AAPL", _MOCK_SESSION)
+
+        # Ex-div falls back to estimated from history.
+        self.assertEqual(result.ex_div_date, _ESTIMATED_EX_DIV)
+        # Announced payment date is used directly.
+        self.assertEqual(result.payment_date, "2026-03-08")
+        # are_dates_estimated is True because ex-div was estimated.
+        self.assertTrue(result.are_dates_estimated)
+
     def test_returns_null_dates_when_chart_unavailable(self) -> None:
         past_unix = 1760659200
 

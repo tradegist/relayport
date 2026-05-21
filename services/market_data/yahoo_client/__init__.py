@@ -23,6 +23,7 @@ class YahooClient:
         self._session: YahooSession | None = None
         self._cache: CacheStore = {}
         self._lock = threading.Lock()
+        self._session_init_lock = threading.Lock()
 
     def get_dividend_info(self, ticker: str) -> DividendInfo:
         """Return dividend info for one ticker, using the cache.
@@ -38,7 +39,17 @@ class YahooClient:
             session = self._session
 
         if session is None:
-            session = get_yahoo_session()
+            # Serialise session bootstrap so only one thread calls get_yahoo_session().
+            # Threads that lose the race re-check self._session under _lock and reuse
+            # the result — preventing redundant session requests that risk rate limiting.
+            with self._session_init_lock:
+                with self._lock:
+                    session = self._session
+                if session is None:
+                    session = get_yahoo_session()
+                    with self._lock:
+                        self._session = session
+
         info, session = fetch_with_retry(ticker, session)
 
         with self._lock:
