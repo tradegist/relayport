@@ -559,6 +559,7 @@ The `services/market_data/` service is a **standalone aiohttp container** that s
 services/market_data/
   main.py                  # Entrypoint — registers adapters, validates registry, starts API server (port 8001)
   errors.py                # ErrorCode (StrEnum), AppError, UserError, YahooError + _STATUS_OVERRIDES lookup table
+  utils.py                 # parse_string_list() — shared query-param validator (dedup, uppercase, max count)
   models/
     dividends.py           # Pydantic models: DividendsUpcomingQuery, DividendsUpcomingItem, DividendsUpcomingResponse, TickerError
   adapters/
@@ -581,9 +582,10 @@ services/market_data/
 - **`MD_API_TOKEN`** — required env var, checked at startup via `validate_api_token()`. The auth middleware rejects empty tokens with HTTP 500 (same pattern as the relay `API_TOKEN` guard).
 - **Adapter pattern** — `target=yahoo` dispatches to `YahooAdapter` via the registry. New data providers (e.g. `target=alpha_vantage`) can be added by registering a new `MarketDataAdapter` subclass. Adapter instances are **singletons** (cached by class identity in `get_adapter`), so `YahooClient`'s in-memory cache and session are shared across all requests for the lifetime of the process.
 - **`GET /v1/market-data/dividends/upcoming?symbol=AAPL,MSFT&target=yahoo`** — returns `{ data: { [ticker]: DividendsUpcomingItem }, errors: { [ticker]: TickerError } }`. Fetch failures for individual tickers are isolated to `errors` without affecting others. HTTP status is always 200 for valid requests. `TickerError` has two fields: `code` (an `ErrorCode` string) and `message` (human-readable detail).
+- **`symbol` validation** — handled by `parse_string_list()` from `utils.py` inside the `DividendsUpcomingQuery.parse_symbol` field validator: uppercases, strips whitespace, deduplicates (order-preserving via `dict.fromkeys`), rejects blank-only input, and enforces a maximum of `_MAX_SYMBOLS = 20` tickers. Validation errors raise `ValueError`, which Pydantic wraps into a `ValidationError` caught by the route handler and re-raised as `UserError(VALIDATION_ERROR)` into the middleware. When adding a new array-of-string query param to any future endpoint, use `parse_string_list(v, max_count=N)` from `market_data.utils` — do not inline the same logic.
 - **Port 8001** (`MD_API_PORT` env var, default 8001). Local dev: `15002:8001` (`docker-compose.local.yml`) with `MD_API_TOKEN: dev-token`. Caddy routes `/v1/market-data/*` to `market_data:8001`.
 - **Yahoo auth is fragile.** `auth.py` reverse-engineers Yahoo's session flow. Uses `curl_cffi` with `impersonate="chrome120"` for browser-matching TLS fingerprints — plain `httpx` is blocked with HTTP 429 by Yahoo's WAF. If requests break, check `yfinance/data.py` in the [yfinance repo](https://github.com/ranaroussi/yfinance) first. The module docstring in `auth.py` documents exactly which functions to look at and which invariants currently hold.
-- **In-memory cache** — `YahooClient` caches `DividendInfo` per ticker with a TTL (default 12 hours). The cache is per-process — no shared state between container restarts. All cache and session accesses are guarded by a `threading.Lock` because `get_dividends_info` runs in a threadpool via `run_in_executor`.
+- **In-memory cache and thread safety** — `YahooClient` caches `DividendInfo` per ticker with a TTL (default 12 hours). The cache is per-process — no shared state between container restarts. All cache reads, writes, and clears are guarded by `self._lock` (`threading.Lock`) because `get_dividends_info` runs in a threadpool via `run_in_executor`. `get_dividend_info` uses a **double-check lock pattern**: snapshot the session under the lock, do the network call outside it, then re-acquire to double-check cache (another thread may have fetched the same ticker) before writing. `clear_cache` also acquires the lock so `clear_dividend_info_cache`'s dict iteration and deletion are protected.
 - **TypeScript types** — `DividendsUpcomingItem`, `DividendsUpcomingQuery`, `DividendsUpcomingResponse` are generated from `services/market_data/models/dividends.py` via `schema_gen.py` into `types/typescript/market_data_api/`. Exported as the `MarketDataApi` namespace in `types/typescript/index.d.ts`.
 
 ### Error handling (market data)
@@ -615,7 +617,7 @@ app = web.Application(middlewares=[error_middleware, auth_middleware])
 
 It follows this precedence:
 
-1. `web.HTTPException` — re-raised (aiohttp handles natively, e.g. 404 routing errors)
+1. `web.HTTPException` — converted to `{"error": "{reason} [{status}]"}` JSON (e.g. `"Not Found [404]"`). Every non-200 response has the same shape; aiohttp's default HTML/text format is never returned.
 2. `AppError`/`UserError` — returns `{"error": str(exc)}` with `exc.status_code`; logs at `warning` (UserError) or `error` (AppError)
 3. Any other `Exception` — returns `{"error": "Internal server error [INTERNAL_ERROR]"}` with 500; logs at `exception` level (full traceback)
 
@@ -731,6 +733,7 @@ export { BrokerRelay, RelayApi, MarketDataApi };
   from relayport_types.notifier.models import WebhookPayloadTrades  # direct path
   ```
 - **Auto-generated** by `gen_python_types.py` — each source file is copied verbatim with one import-depth rewrite, and the top-level `__init__.py` barrel is built by AST-walking each source for top-level public class/literal/alias definitions. Run `make types` to regenerate. Do not edit generated files manually.
+- **`market_data` dependency auto-detection** — `gen_python_types.py` parses `dividends.py`'s top-level `ImportFrom` nodes at generation time. Any `from market_data.X import` statement causes `services/market_data/X.py` to be automatically copied into the types package as `relayport_types/X.py`, and the import is rewritten to `from .X import`. This means adding a new internal utility import to `dividends.py` requires no manual change to the generator — `make types` handles it. Only direct sub-modules (`market_data.X`) are auto-detected; nested paths (`market_data.models.X`) are not followed and must be handled manually.
 - **Covered by `make lint` and `make typecheck`** — `types/python/relayport_types/` is included in both targets. Generated code must pass ruff and mypy like any other Python module.
 
 ## Code Style
@@ -859,6 +862,7 @@ services/                  # Business-logic services
   market_data/             # Market data HTTP service (dividend info via Yahoo Finance)
     main.py                # Entrypoint — aiohttp app startup
     errors.py              # ErrorCode (StrEnum), AppError, UserError, YahooError
+    utils.py               # parse_string_list() — shared query-param validator (dedup, uppercase, max count)
     adapters/              # Adapter pattern: MarketDataAdapter ABC + registry with singleton caching
       __init__.py          # get_adapter(target) → MarketDataAdapter (singleton); register, known_targets
       yahoo.py             # YahooAdapter: maps YahooClient → DividendsUpcomingItem; AppError → TickerError
