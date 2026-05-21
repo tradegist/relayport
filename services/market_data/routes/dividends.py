@@ -16,7 +16,11 @@ log = logging.getLogger(__name__)
 async def handle_dividends_upcoming(request: web.Request) -> web.Response:
     """GET /v1/market-data/dividends/upcoming?symbol=AAPL,GOOG&target=yahoo"""
     try:
-        query = DividendsUpcomingQuery.model_validate(dict(request.rel_url.query))
+        query_data = dict(request.rel_url.query)
+        if "symbol" in request.rel_url.query:
+            symbols = request.rel_url.query.getall("symbol")
+            query_data["symbol"] = symbols if len(symbols) > 1 else symbols[0]
+        query = DividendsUpcomingQuery.model_validate(query_data)
     except ValidationError as exc:
         return web.json_response({"error": exc.errors(include_url=False)}, status=422)
 

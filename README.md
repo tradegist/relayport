@@ -207,7 +207,7 @@ curl -H "Authorization: Bearer <MD_API_TOKEN>" \
 | `errors[].code`              | `string`         | Machine-readable error code (see [Error codes](#error-codes) below)                                                   |
 | `errors[].message`           | `string`         | Human-readable detail about the failure                                                                               |
 
-Fetch failures for individual tickers are isolated — they appear in `errors` without affecting the rest of `data`. The HTTP status is always `200` as long as the request itself is valid.
+Fetch failures for individual tickers are isolated — they appear in `errors` without affecting the rest of `data`. When the request is handled successfully, these per-ticker lookup failures are returned in a `200` response; however, request-level or server-side faults may still return non-`200` HTTP responses (for example `503`).
 
 **Example — partial failure:**
 
@@ -244,29 +244,36 @@ Returns `{"status": "ok"}`. No auth required.
 HTTP-level errors (auth failures, validation errors, server faults) return a JSON body with a single `error` field in the format `"{message} [{CODE}]"`:
 
 ```json
-{ "error": "Yahoo Finance 401 for AAPL [YAHOO_UNAUTHORIZED]" }
+{ "error": "Internal server error [INTERNAL_ERROR]" }
 ```
+
+Yahoo Finance failures for individual tickers are **not** surfaced here — they appear in the per-ticker `errors` map with HTTP 200 (see above).
 
 **HTTP status codes:**
 
-| Status | When                                                       |
-| ------ | ---------------------------------------------------------- |
-| 401    | Missing or invalid `Authorization` header                  |
-| 422    | Missing or invalid query parameters (`symbol`, `target`)   |
-| 500    | Server misconfiguration (e.g. `MD_API_TOKEN` not set)      |
-| 503    | Yahoo Finance session could not be refreshed after retries |
+| Status | When                                                     |
+| ------ | -------------------------------------------------------- |
+| 401    | Missing or invalid `Authorization` header                |
+| 422    | Missing or invalid query parameters (`symbol`, `target`) |
+| 500    | Server misconfiguration (e.g. `MD_API_TOKEN` not set)    |
 
 ### Error codes
 
 The `code` field in per-ticker errors (and in HTTP-level error strings) is always one of the following:
 
-| Code                 | HTTP status | Meaning                                                                    |
-| -------------------- | ----------- | -------------------------------------------------------------------------- |
-| `YAHOO_UNAUTHORIZED` | 503         | Yahoo session expired and could not be refreshed — transient, retry later  |
-| `YAHOO_ERROR`        | 500         | Unexpected HTTP error from Yahoo Finance (e.g. 429, 404)                   |
-| `FETCH_FAILED`       | 500         | Unexpected exception during the fetch (network timeout, parse error, etc.) |
-| `INTERNAL_ERROR`     | 500         | Server misconfiguration — not caused by the request                        |
-| `VALIDATION_ERROR`   | 422         | Request query parameter failed validation                                  |
+Codes that appear in the per-ticker `errors` map (HTTP 200 response):
+
+| Code                 | Meaning                                                                    |
+| -------------------- | -------------------------------------------------------------------------- |
+| `YAHOO_UNAUTHORIZED` | Yahoo session expired and could not be refreshed — transient, retry later  |
+| `YAHOO_ERROR`        | Unexpected HTTP error from Yahoo Finance (e.g. 429, 404)                   |
+| `FETCH_FAILED`       | Unexpected exception during the fetch (network timeout, parse error, etc.) |
+
+Codes that appear as HTTP-level errors (non-200 response):
+
+| Code             | HTTP status | Meaning                                             |
+| ---------------- | ----------- | --------------------------------------------------- |
+| `INTERNAL_ERROR` | 500         | Server misconfiguration — not caused by the request |
 
 ## Architecture
 

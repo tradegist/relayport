@@ -596,13 +596,13 @@ All errors follow a two-class hierarchy defined in `errors.py`:
 
 **`ErrorCode` (`StrEnum`)** is the registry of all valid codes. Every `AppError`/`UserError` must be constructed with one:
 
-| Code                 | Class        | Default HTTP status | Meaning                                               |
-| -------------------- | ------------ | ------------------- | ----------------------------------------------------- |
-| `YAHOO_UNAUTHORIZED` | `YahooError` | 503                 | Yahoo session expired and could not be refreshed      |
-| `YAHOO_ERROR`        | `YahooError` | 500                 | Other Yahoo Finance HTTP error                        |
-| `FETCH_FAILED`       | `AppError`   | 500                 | Unexpected exception during a ticker fetch            |
-| `INTERNAL_ERROR`     | `AppError`   | 500                 | Server misconfiguration (e.g. adapter not registered) |
-| `VALIDATION_ERROR`   | `UserError`  | 422                 | Request query parameter failed validation             |
+| Code                 | Class        | Default HTTP status | Meaning                                                                                                    |
+| -------------------- | ------------ | ------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `YAHOO_UNAUTHORIZED` | `YahooError` | 503                 | Yahoo session expired and could not be refreshed. Currently always caught per-ticker, never HTTP-level 503 |
+| `YAHOO_ERROR`        | `YahooError` | 500                 | Other Yahoo Finance HTTP error. Currently always caught per-ticker                                         |
+| `FETCH_FAILED`       | `AppError`   | 500                 | Unexpected exception during a ticker fetch. Currently always caught per-ticker                             |
+| `INTERNAL_ERROR`     | `AppError`   | 500                 | Server misconfiguration (e.g. adapter not registered) — surfaces as HTTP 500                               |
+| `VALIDATION_ERROR`   | `UserError`  | 422                 | Request query parameter failed validation                                                                  |
 
 The `_STATUS_OVERRIDES` dict in `errors.py` only lists codes whose HTTP status differs from the class default — keep it small. Most `AppError` codes are 500; most `UserError` codes are 400; only exceptions appear in the table.
 

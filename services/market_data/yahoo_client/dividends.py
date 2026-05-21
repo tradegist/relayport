@@ -88,41 +88,42 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
 
             if div_events:
                 sorted_keys = sorted(div_events.keys(), key=float)
+                last_key = sorted_keys[-1]
+
+                # Per-payment amount: available whenever there is at least one event.
+                last_event = div_events.get(last_key) or {}
+                last_event_amount = last_event.get("amount")
+                per_payment_dps = (
+                    float(last_event_amount)
+                    if isinstance(last_event_amount, (int, float))
+                    else None
+                )
+
+                # Frequency estimation requires 2+ events to compute an average gap.
                 if len(sorted_keys) >= 2:
                     gaps: list[float] = []
                     prev: float | None = None
-                    last_key: str | None = None
                     for key in sorted_keys[-5:]:
                         curr = float(key)
                         if prev is not None:
                             gaps.append(curr - prev)
                         prev = curr
-                        last_key = key
 
-                    if last_key is not None:
-                        avg_gap_seconds = sum(gaps) / len(gaps)
+                    avg_gap_seconds = sum(gaps) / len(gaps)
 
-                        last_event = div_events.get(last_key) or {}
-                        last_event_amount = last_event.get("amount")
-                        per_payment_dps = (
-                            float(last_event_amount)
-                            if isinstance(last_event_amount, (int, float))
-                            else None
+                    now = time.time()
+                    estimated_ex_div = float(last_key)
+                    while estimated_ex_div <= now:
+                        estimated_ex_div += avg_gap_seconds
+
+                    if (
+                        _is_future_unix(announced_payment_unix)
+                        and _is_future_unix(announced_ex_div_unix)
+                    ):
+                        payment_offset_seconds = (
+                            cast(float, announced_payment_unix)
+                            - cast(float, announced_ex_div_unix)
                         )
-
-                        now = time.time()
-                        estimated_ex_div = float(last_key)
-                        while estimated_ex_div <= now:
-                            estimated_ex_div += avg_gap_seconds
-
-                        if (
-                            _is_future_unix(announced_payment_unix)
-                            and _is_future_unix(announced_ex_div_unix)
-                        ):
-                            payment_offset_seconds = (
-                                cast(float, announced_payment_unix)
-                                - cast(float, announced_ex_div_unix)
-                            )
 
         # ── 3. Derive annual_dps ─────────────────────────────────────────
         if annual_dps_from_rate is not None:
