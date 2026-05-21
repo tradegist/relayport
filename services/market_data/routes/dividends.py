@@ -7,7 +7,7 @@ from aiohttp import web
 from pydantic import ValidationError
 
 from market_data.adapters import get_adapter
-from market_data.errors import AppError, ErrorCode
+from market_data.errors import AppError, ErrorCode, UserError
 from market_data.models.dividends import DividendsUpcomingQuery, DividendsUpcomingResponse
 
 log = logging.getLogger(__name__)
@@ -22,7 +22,13 @@ async def handle_dividends_upcoming(request: web.Request) -> web.Response:
             query_data["symbol"] = symbols if len(symbols) > 1 else symbols[0]
         query = DividendsUpcomingQuery.model_validate(query_data)
     except ValidationError as exc:
-        return web.json_response({"error": exc.errors(include_url=False)}, status=422)
+        parts = [
+            f"{'.' .join(str(p) for p in e.get('loc', ()))}: {e.get('msg', 'invalid')}"
+            if e.get("loc")
+            else e.get("msg", "invalid")
+            for e in exc.errors(include_url=False)
+        ]
+        raise UserError("; ".join(parts) or "Invalid request parameters", ErrorCode.VALIDATION_ERROR) from exc
 
     adapter = get_adapter(query.target)
     if adapter is None:

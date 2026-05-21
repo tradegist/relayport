@@ -602,6 +602,7 @@ All errors follow a two-class hierarchy defined in `errors.py`:
 | `YAHOO_ERROR`        | `YahooError` | 500                 | Other Yahoo Finance HTTP error. Currently always caught per-ticker                                         |
 | `FETCH_FAILED`       | `AppError`   | 500                 | Unexpected exception during a ticker fetch. Currently always caught per-ticker                             |
 | `INTERNAL_ERROR`     | `AppError`   | 500                 | Server misconfiguration (e.g. adapter not registered) — surfaces as HTTP 500                               |
+| `UNAUTHORIZED`       | `UserError`  | 401                 | Missing or invalid `Authorization` header — raised by auth middleware                                      |
 | `VALIDATION_ERROR`   | `UserError`  | 422                 | Request query parameter failed validation                                                                  |
 
 The `_STATUS_OVERRIDES` dict in `errors.py` only lists codes whose HTTP status differs from the class default — keep it small. Most `AppError` codes are 500; most `UserError` codes are 400; only exceptions appear in the table.

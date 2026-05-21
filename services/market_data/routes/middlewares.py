@@ -55,9 +55,8 @@ async def auth_middleware(
     if request.path.startswith(f"{AUTH_PREFIX}/"):
         api_token = _get_api_token()
         if not api_token:
-            log.error("MD_API_TOKEN not configured — rejecting request")
-            return web.json_response({"error": "Server misconfigured"}, status=500)
+            raise AppError("MD_API_TOKEN not configured", ErrorCode.INTERNAL_ERROR)
         auth = request.headers.get("Authorization", "")
         if not hmac.compare_digest(auth, f"Bearer {api_token}"):
-            return web.json_response({"error": "Unauthorized"}, status=401)
+            raise UserError("Unauthorized", ErrorCode.UNAUTHORIZED)
     return await handler(request)

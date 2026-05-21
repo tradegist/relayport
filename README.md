@@ -249,13 +249,15 @@ HTTP-level errors (auth failures, validation errors, server faults) return a JSO
 
 Yahoo Finance failures for individual tickers are **not** surfaced here — they appear in the per-ticker `errors` map with HTTP 200 (see above).
 
+All HTTP-level errors — including auth failures — follow this format, so every non-200 response has the same `{"error": "... [CODE]"}` shape.
+
 **HTTP status codes:**
 
-| Status | When                                                     |
-| ------ | -------------------------------------------------------- |
-| 401    | Missing or invalid `Authorization` header                |
-| 422    | Missing or invalid query parameters (`symbol`, `target`) |
-| 500    | Server misconfiguration (e.g. `MD_API_TOKEN` not set)    |
+| Status | Code               | When                                                     |
+| ------ | ------------------ | -------------------------------------------------------- |
+| 401    | `UNAUTHORIZED`     | Missing or invalid `Authorization` header                |
+| 422    | `VALIDATION_ERROR` | Missing or invalid query parameters (`symbol`, `target`) |
+| 500    | `INTERNAL_ERROR`   | Server misconfiguration (e.g. `MD_API_TOKEN` not set)    |
 
 ### Error codes
 
@@ -271,9 +273,11 @@ Codes that appear in the per-ticker `errors` map (HTTP 200 response):
 
 Codes that appear as HTTP-level errors (non-200 response):
 
-| Code             | HTTP status | Meaning                                             |
-| ---------------- | ----------- | --------------------------------------------------- |
-| `INTERNAL_ERROR` | 500         | Server misconfiguration — not caused by the request |
+| Code               | HTTP status | Meaning                                             |
+| ------------------ | ----------- | --------------------------------------------------- |
+| `UNAUTHORIZED`     | 401         | Missing or invalid `Authorization` header           |
+| `VALIDATION_ERROR` | 422         | Missing or invalid query parameters                 |
+| `INTERNAL_ERROR`   | 500         | Server misconfiguration — not caused by the request |
 
 ## Architecture
 

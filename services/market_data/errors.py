@@ -9,6 +9,7 @@ class ErrorCode(StrEnum):
     FETCH_FAILED = "FETCH_FAILED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
     # User errors
+    UNAUTHORIZED = "UNAUTHORIZED"
     VALIDATION_ERROR = "VALIDATION_ERROR"
 
 
@@ -16,6 +17,7 @@ class ErrorCode(StrEnum):
 # AppError default: 500. UserError default: 400.
 _STATUS_OVERRIDES: dict[ErrorCode, int] = {
     ErrorCode.YAHOO_UNAUTHORIZED: 503,
+    ErrorCode.UNAUTHORIZED: 401,
     ErrorCode.VALIDATION_ERROR: 422,
 }
 
