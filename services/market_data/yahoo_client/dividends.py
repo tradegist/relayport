@@ -7,7 +7,7 @@ from urllib.parse import quote
 from curl_cffi import requests as cffi_requests
 
 from market_data.errors import ErrorCode, YahooError
-from market_data.yahoo_client.auth import _IMPERSONATE, API_HEADERS, get_yahoo_session
+from market_data.yahoo_client.auth import API_HEADERS, IMPERSONATE, get_yahoo_session
 from market_data.yahoo_client.types import DividendInfo, YahooSession
 
 _MAX_ATTEMPTS = 4
@@ -33,7 +33,7 @@ def fetch_dividend_info_from_yahoo(ticker: str, session: YahooSession) -> Divide
     }
     qs = f"&crumb={quote(session.crumb)}"
 
-    with cffi_requests.Session(impersonate=_IMPERSONATE) as client:
+    with cffi_requests.Session(impersonate=IMPERSONATE) as client:
         # ── 1. Summary: announced dates + annualised dividend rate ───────
         summary_res = client.get(
             f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{quote(ticker)}"

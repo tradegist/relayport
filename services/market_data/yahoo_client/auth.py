@@ -29,7 +29,7 @@ from market_data.yahoo_client.types import YahooSession
 _PAGE_URL = "https://finance.yahoo.com/"
 _CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
 
-_IMPERSONATE: Literal["chrome120"] = "chrome120"
+IMPERSONATE: Literal["chrome120"] = "chrome120"
 
 _PAGE_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -72,7 +72,7 @@ def _handle_consent(session: cffi_requests.Session[Any], body: str, page_url: st
             "Origin": "https://guce.yahoo.com",
             "Referer": page_url,
         },
-        impersonate=_IMPERSONATE,
+        impersonate=IMPERSONATE,
     )
     log.debug("Yahoo consent POST completed")
 
@@ -85,7 +85,7 @@ def get_yahoo_session() -> YahooSession:
     2. Handle GDPR consent redirect if present.
     3. Fetch the crumb from query1 using those cookies.
     """
-    with cffi_requests.Session(impersonate=_IMPERSONATE) as session:
+    with cffi_requests.Session(impersonate=IMPERSONATE) as session:
         page_res = session.get(_PAGE_URL, headers=_PAGE_HEADERS)
         log.debug("Yahoo Finance page fetched: HTTP %s", page_res.status_code)
 
