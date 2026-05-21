@@ -82,4 +82,5 @@ class YahooClient:
         return data, errors
 
     def clear_cache(self) -> None:
-        clear_dividend_info_cache(self._cache)
+        with self._lock:
+            clear_dividend_info_cache(self._cache)

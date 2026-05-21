@@ -162,6 +162,35 @@ class TestDividendsUpcomingHandler(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(captured[0], ["AAPL", "MSFT"])
 
+    async def test_blank_symbol_returns_422(self) -> None:
+        status, _ = await self._get("/v1/market-data/dividends/upcoming?symbol=,&target=yahoo")
+        self.assertEqual(status, 422)
+
+    async def test_duplicate_symbols_deduplicated(self) -> None:
+        captured: list[list[str]] = []
+
+        class _CapturingAdapter(MarketDataAdapter):
+            def get_dividends_upcoming(
+                self, symbols: list[str]
+            ) -> tuple[dict[str, DividendsUpcomingItem], dict[str, TickerError]]:
+                captured.append(symbols)
+                return {}, {}
+
+        _registry["yahoo"] = _CapturingAdapter
+
+        await self._get(
+            "/v1/market-data/dividends/upcoming?symbol=AAPL,AAPL,MSFT&target=yahoo"
+        )
+
+        self.assertEqual(captured[0], ["AAPL", "MSFT"])
+
+    async def test_too_many_symbols_returns_422(self) -> None:
+        symbols = ",".join(f"T{i:03d}" for i in range(21))
+        status, _ = await self._get(
+            f"/v1/market-data/dividends/upcoming?symbol={symbols}&target=yahoo"
+        )
+        self.assertEqual(status, 422)
+
     async def test_partial_error_returns_both_data_and_errors(self) -> None:
         _registry["yahoo"] = _stub_adapter_factory({"AAPL": _AAPL_ITEM}, {"BAD": _BAD_ERROR})
 

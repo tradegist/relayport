@@ -2,7 +2,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from market_data.utils import parse_string_list
+
 Target = Literal["yahoo"]
+
+_MAX_SYMBOLS = 20
 
 
 class DividendsUpcomingQuery(BaseModel):
@@ -14,11 +18,7 @@ class DividendsUpcomingQuery(BaseModel):
     @field_validator("symbol", mode="before")
     @classmethod
     def parse_symbol(cls, v: object) -> list[str]:
-        if isinstance(v, str):
-            return [s.strip().upper() for s in v.split(",") if s.strip()]
-        if isinstance(v, list):
-            return [str(s).strip().upper() for s in v if str(s).strip()]
-        raise ValueError("symbol must be a comma-separated string or list")
+        return parse_string_list(v, max_count=_MAX_SYMBOLS)
 
     @field_validator("target", mode="before")
     @classmethod
