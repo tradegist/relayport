@@ -618,8 +618,9 @@ app = web.Application(middlewares=[error_middleware, auth_middleware])
 It follows this precedence:
 
 1. `web.HTTPException` — converted to `{"error": "{reason} [{status}]"}` JSON (e.g. `"Not Found [404]"`). Every non-200 response has the same shape; aiohttp's default HTML/text format is never returned.
-2. `AppError`/`UserError` — returns `{"error": str(exc)}` with `exc.status_code`; logs at `warning` (UserError) or `error` (AppError)
-3. Any other `Exception` — returns `{"error": "Internal server error [INTERNAL_ERROR]"}` with 500; logs at `exception` level (full traceback)
+2. `UserError` — returns `{"error": str(exc)}` with `exc.status_code`; logs at `warning`. Safe to surface because `UserError` is explicitly caller-facing.
+3. `AppError` (non-`UserError`) — returns `{"error": "Internal server error [INTERNAL_ERROR]"}` with `exc.status_code`; logs the full detail at `error`. The detailed message is never sent to the client to avoid leaking internal state.
+4. Any other `Exception` — returns `{"error": "Internal server error [INTERNAL_ERROR]"}` with 500; logs at `exception` level (full traceback)
 
 **Per-ticker errors** (in the batch response) are `TickerError` objects with separate `code` and `message` fields — not composite strings. The `YahooAdapter` converts `AppError` instances (returned by `YahooClient.get_dividends_info`) into `TickerError` at the serialisation boundary. The `__str__` composite format (`"{message} [{code}]"`) is only used for HTTP-level error responses and logging, never in the structured per-ticker error dict.
 

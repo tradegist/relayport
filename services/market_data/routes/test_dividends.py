@@ -4,7 +4,7 @@ from typing import Any
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from market_data.adapters import MarketDataAdapter, _registry
+from market_data.adapters import MarketDataAdapter, _instances, _registry
 from market_data.models.dividends import DividendsUpcomingItem, TickerError
 from market_data.routes.app import create_app
 
@@ -50,10 +50,13 @@ def _stub_adapter_factory(
 class TestDividendsUpcomingHandler(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._orig_registry = dict(_registry)
+        self._orig_instances = dict(_instances)
 
     def tearDown(self) -> None:
         _registry.clear()
         _registry.update(self._orig_registry)
+        _instances.clear()
+        _instances.update(self._orig_instances)
 
     async def _get(self, url: str, token: str = "test-token") -> tuple[int, Any]:
         async with TestClient(TestServer(create_app())) as client:

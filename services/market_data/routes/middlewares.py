@@ -26,9 +26,12 @@ async def error_middleware(request: web.Request, handler: _Handler) -> web.Strea
     except AppError as exc:
         if isinstance(exc, UserError):
             log.warning("User error on %s %s: %s", request.method, request.path, exc)
+            return web.json_response({"error": str(exc)}, status=exc.status_code)
         else:
             log.error("App error on %s %s: %s", request.method, request.path, exc)
-        return web.json_response({"error": str(exc)}, status=exc.status_code)
+            return web.json_response(
+                {"error": f"Internal server error [{ErrorCode.INTERNAL_ERROR}]"}, status=exc.status_code
+            )
     except Exception:
         log.exception("Unhandled exception on %s %s", request.method, request.path)
         return web.json_response(
