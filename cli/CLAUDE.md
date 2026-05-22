@@ -69,12 +69,20 @@ Controlled by `DEPLOY_MODE` in `.env.droplet` (required, validated before any de
 - **`.deployed-sha`** is the only server-side file inside the project directory. Written by `cli/sync.py` after each `--local-files` sync; excluded from rsync `--delete`. Records the deployed commit SHA.
 - **rsync exclusions:** `.git/`, `.env`, `.env.relays`, `.env.droplet`, `.env.test`, `.deployed-sha`, and everything in `.gitignore` (via `--filter ':- .gitignore'`).
 
+## Post-Deploy Sanity Check
+
+- After every `make sync LOCAL_FILES=1` and `make deploy`, the CLI invokes the local `claude` CLI as a non-interactive agent (`claude --print --permission-mode bypassPermissions --allowedTools Bash --model claude-sonnet-4-6`) to SSH into the droplet, inspect `docker compose ps` + recent logs, and print a one-line GREEN / YELLOW / RED verdict.
+- **Best-effort only.** Failures never abort the deploy. Skipped gracefully when: `claude` CLI not on PATH, network/auth/rate-limit errors (non-zero exit), or the agent hangs (120s timeout).
+- **Opt-out:** `SKIP_POST_DEPLOY_CHECK=1` env var, `--skip-post-check` CLI flag, or `make sync SKIP_POST_CHECK=1` / `make deploy SKIP_POST_CHECK=1`.
+- Plain `make sync` (without `LOCAL_FILES=1`) does not trigger the check — only file-syncing deploys do.
+
 ## Build & Deploy commands
 
 ```bash
 make deploy    # Standalone: Terraform | Shared: rsync + compose (reads .env.droplet)
 make sync      # Push .env + .env.relays to droplet + restart services
-make sync LOCAL_FILES=1  # rsync files + rebuild + restart
+make sync LOCAL_FILES=1  # rsync files + rebuild + restart + claude sanity check
+make sync SKIP_POST_CHECK=1  # skip the post-deploy claude sanity check
 make destroy   # Terraform destroy
 make pause     # Snapshot + delete droplet (save costs)
 make resume    # Restore from snapshot

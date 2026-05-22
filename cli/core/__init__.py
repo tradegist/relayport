@@ -136,7 +136,9 @@ CORE_MODULES: dict[str, str] = {
 
 def register_parsers(sub: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
     """Register core subcommands (deploy, destroy, pause, resume, sync)."""
-    sub.add_parser("deploy", help="Deploy infrastructure (Terraform + Docker)")
+    p = sub.add_parser("deploy", help="Deploy infrastructure (Terraform + Docker)")
+    p.add_argument("--skip-post-check", action="store_true",
+                   help="Skip the post-deploy `claude` sanity check")
     sub.add_parser("destroy", help="Permanently destroy all infrastructure")
     sub.add_parser("pause", help="Snapshot droplet + delete (save costs)")
     sub.add_parser("resume", help="Restore droplet from snapshot")
@@ -149,6 +151,8 @@ def register_parsers(sub: "argparse._SubParsersAction[argparse.ArgumentParser]")
                    help="Rebuild Docker images before restarting")
     p.add_argument("--skip-e2e", action="store_true",
                    help="Skip E2E tests during --local-files pre-deploy checks")
+    p.add_argument("--skip-post-check", action="store_true",
+                   help="Skip the post-deploy `claude` sanity check")
 
 
 # ── Generic helpers ─────────────────────────────────────────────────

@@ -25,9 +25,9 @@ from cli.core import (
 )
 
 
-def _deploy_standalone() -> None:
+def _deploy_standalone(skip_post_check: bool) -> None:
     """Deploy via Terraform (own droplet), then rsync files and start services."""
-    from cli.core.sync import _run_checks, _sync_local_files
+    from cli.core.sync import _post_deploy_sanity_check, _run_checks, _sync_local_files
 
     cfg = config()
 
@@ -121,6 +121,8 @@ def _deploy_standalone() -> None:
         print(f"  2. {cfg.post_deploy_message}")
     print()
 
+    _post_deploy_sanity_check(droplet_ip, skip_flag=skip_post_check)
+
 
 def _template_caddy_snippet(src: Path) -> str:
     """Pre-template a Caddy snippet by substituting {$VAR} and {$VAR:-default} placeholders.
@@ -204,9 +206,9 @@ def _deploy_caddy_snippets(droplet_ip: str) -> None:
                 "caddy reload --config /etc/caddy/Caddyfile")
 
 
-def _deploy_shared() -> None:
+def _deploy_shared(skip_post_check: bool) -> None:
     """Deploy to an existing shared droplet (no Terraform)."""
-    from cli.core.sync import _run_checks, _sync_local_files
+    from cli.core.sync import _post_deploy_sanity_check, _run_checks, _sync_local_files
 
     cfg = config()
     droplet_ip = env("DROPLET_IP")
@@ -247,6 +249,8 @@ def _deploy_shared() -> None:
     print("=" * 44)
     print()
 
+    _post_deploy_sanity_check(droplet_ip, skip_flag=skip_post_check)
+
 
 def run(args: argparse.Namespace) -> None:
     load_env()
@@ -254,6 +258,6 @@ def run(args: argparse.Namespace) -> None:
     mode = deploy_mode()
 
     if mode == "standalone":
-        _deploy_standalone()
+        _deploy_standalone(args.skip_post_check)
     else:
-        _deploy_shared()
+        _deploy_shared(args.skip_post_check)
