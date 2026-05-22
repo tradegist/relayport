@@ -138,17 +138,32 @@ def _hoist_literal_aliases(schema: dict[str, object], module: types.ModuleType) 
 
 
 def _replace_inline_enums(obj: object, aliases: dict[frozenset[str], str]) -> None:
-    """Recursively replace any matching inline string enum schema with $ref."""
+    """Recursively replace any matching inline string enum/const schema with $ref.
+
+    Handles both multi-value (``{"enum": [...], "type": "string"}``) and
+    single-value (``{"const": "val", "type": "string"}``) Literal schemas.
+    Pydantic v2 emits ``const`` for single-value Literals, so both forms
+    must be matched to produce a ``$ref`` to the named alias.
+    """
     if isinstance(obj, dict):
+        matched: frozenset[str] | None = None
+        strip_keys: tuple[str, ...] = ()
+
         enum = obj.get("enum")
         if enum and obj.get("type") == "string":
-            key = frozenset(enum)
-            alias_name = aliases.get(key)
+            matched = frozenset(enum)
+            strip_keys = ("enum", "type")
+        else:
+            const = obj.get("const")
+            if isinstance(const, str) and obj.get("type") == "string":
+                matched = frozenset({const})
+                strip_keys = ("const", "type")
+
+        if matched is not None:
+            alias_name = aliases.get(matched)
             if alias_name is not None:
                 ref = {"$ref": f"#/$defs/{alias_name}"}
-                extra = {
-                    k: v for k, v in obj.items() if k not in ("enum", "type")
-                }
+                extra = {k: v for k, v in obj.items() if k not in strip_keys}
                 obj.clear()
                 if extra:
                     # Wrap in allOf so json-schema-to-typescript
@@ -179,6 +194,11 @@ SCHEMA_MODELS: dict[str, list[str]] = {
         "WebhookPayloadTrades",
         "RunPollResponse",
         "HealthResponse",
+    ],
+    "market_data.models.dividends": [
+        "DividendsUpcomingQuery",
+        "DividendsUpcomingItem",
+        "DividendsUpcomingResponse",
     ],
 }
 

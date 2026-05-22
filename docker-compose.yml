@@ -42,6 +42,19 @@ services:
       - dedup-data:/data/dedup
       - relay-meta:/data/meta
 
+  market_data:
+    build:
+      context: .
+      dockerfile: services/market_data/Dockerfile
+    restart: always
+    env_file:
+      - .env
+    environment:
+      MD_API_TOKEN: ${MD_API_TOKEN:?Set MD_API_TOKEN in .env}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    expose:
+      - "8001"
+
   debug:
     build:
       context: .

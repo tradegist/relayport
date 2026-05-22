@@ -1,0 +1,3 @@
+aiohttp==3.13.5
+curl_cffi==0.15.0
+pydantic==2.13.3

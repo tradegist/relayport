@@ -28,6 +28,7 @@ Currently supports **IBKR** (Interactive Brokers) via the Flex Web Service and *
 
 - [Quick Start](#quick-start)
 - [API Endpoints](#api-endpoints)
+- [Market Data API](#market-data-api)
 - [Architecture](#architecture)
 - [Configuration](#configuration)
 - [Webhook Payload](#webhook-payload)
@@ -115,36 +116,201 @@ GET /health
 
 Returns `{"status": "ok"}`. No auth required.
 
+## Market Data API
+
+A separate service (`market_data`, port 8001) provides market data lookups. All `/v1/market-data/*` endpoints require `Authorization: Bearer <MD_API_TOKEN>` (a separate token from the relay `API_TOKEN`). The `/health` endpoint is unauthenticated.
+
+### Upcoming dividend
+
+```
+GET /v1/market-data/dividends/upcoming?symbol=AAPL&target=yahoo
+```
+
+Returns the next upcoming dividend for one or more comma-separated symbols. `target` selects the data provider — currently only `yahoo` is supported.
+
+**Query parameters:**
+
+| Parameter | Required | Description                                         |
+| --------- | -------- | --------------------------------------------------- |
+| `symbol`  | Yes      | Comma-separated ticker(s), case-insensitive         |
+| `target`  | Yes      | Data provider — currently only `yahoo` is supported |
+
+**Example — single symbol:**
+
+```bash
+curl -H "Authorization: Bearer <MD_API_TOKEN>" \
+  "https://trade.example.com/v1/market-data/dividends/upcoming?symbol=AAPL&target=yahoo"
+```
+
+```json
+{
+  "data": {
+    "AAPL": {
+      "ex_div_date": "2026-08-10",
+      "payment_date": "2026-08-31",
+      "dps": 0.27,
+      "annual_dps": 1.08,
+      "are_dates_estimated": true
+    }
+  },
+  "errors": {}
+}
+```
+
+**Example — multiple symbols:**
+
+```bash
+curl -H "Authorization: Bearer <MD_API_TOKEN>" \
+  "https://trade.example.com/v1/market-data/dividends/upcoming?symbol=AAPL,MSFT,GOOG&target=yahoo"
+```
+
+```json
+{
+  "data": {
+    "AAPL": {
+      "ex_div_date": "2026-08-10",
+      "payment_date": "2026-08-31",
+      "dps": 0.27,
+      "annual_dps": 1.08,
+      "are_dates_estimated": true
+    },
+    "MSFT": {
+      "ex_div_date": "2026-05-21",
+      "payment_date": "2026-06-11",
+      "dps": 0.91,
+      "annual_dps": 3.64,
+      "are_dates_estimated": false
+    },
+    "GOOG": {
+      "ex_div_date": "2026-06-08",
+      "payment_date": "2026-06-15",
+      "dps": 0.22,
+      "annual_dps": 0.88,
+      "are_dates_estimated": false
+    }
+  },
+  "errors": {}
+}
+```
+
+**Response fields:**
+
+| Field                                | Type             | Description                                                                                                           |
+| ------------------------------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `data`                               | `object`         | Map of ticker → dividend info. Keys are uppercased tickers                                                            |
+| `data[<TICKER>].ex_div_date`         | `string \| null` | Next ex-dividend date in `YYYY-MM-DD` format                                                                          |
+| `data[<TICKER>].payment_date`        | `string \| null` | Next payment date in `YYYY-MM-DD` format                                                                              |
+| `data[<TICKER>].dps`                 | `number \| null` | Dividend per share for this payment (per-payment amount, e.g. quarterly). `null` when unavailable                     |
+| `data[<TICKER>].annual_dps`          | `number \| null` | Annualised dividend per share (from Yahoo's `dividendRate`). Divide `annual_dps` by `dps` to derive payment frequency |
+| `data[<TICKER>].are_dates_estimated` | `boolean`        | `true` when Yahoo has not yet announced the next dates — they are estimated from historical rhythm                    |
+| `errors`                             | `object`         | Map of ticker → `{code, message}` for any failed lookups. Successful tickers are not present here                     |
+| `errors[<TICKER>].code`              | `string`         | Machine-readable error code (see [Error codes](#error-codes) below)                                                   |
+| `errors[<TICKER>].message`           | `string`         | Human-readable detail about the failure                                                                               |
+
+Fetch failures for individual tickers are isolated — they appear in `errors` without affecting the rest of `data`. When the request is handled successfully, these per-ticker lookup failures are returned in a `200` response; however, request-level or server-side faults may still return non-`200` HTTP responses (for example `401`, `422`, or `500`).
+
+**Example — partial failure:**
+
+```json
+{
+  "data": {
+    "AAPL": {
+      "ex_div_date": "2026-08-10",
+      "payment_date": "2026-08-31",
+      "dps": 0.27,
+      "annual_dps": 1.08,
+      "are_dates_estimated": true
+    }
+  },
+  "errors": {
+    "BADTICKER": {
+      "code": "YAHOO_ERROR",
+      "message": "Yahoo Finance quoteSummary HTTP 404 for BADTICKER"
+    }
+  }
+}
+```
+
+### Health check (market data)
+
+```
+GET /v1/market-data/health
+```
+
+Returns `{"status": "ok"}`. No auth required. This is the public path routed through Caddy. The bare `/health` path is also available for Docker's internal health check (direct container port only).
+
+### Error responses
+
+HTTP-level errors (auth failures, validation errors, server faults) return a JSON body with a single `error` field in the format `"{message} [{CODE}]"`:
+
+```json
+{ "error": "Internal server error [INTERNAL_ERROR]" }
+```
+
+Yahoo Finance failures for individual tickers are **not** surfaced here — they appear in the per-ticker `errors` map with HTTP 200 (see above).
+
+All non-200 responses — including routing errors (404, 405) — follow this format. For application errors the code is a string (e.g. `INTERNAL_ERROR`); for routing errors it is the numeric HTTP status (e.g. `404`).
+
+**HTTP status codes:**
+
+| Status | Code               | When                                                     |
+| ------ | ------------------ | -------------------------------------------------------- |
+| 401    | `UNAUTHORIZED`     | Missing or invalid `Authorization` header                |
+| 422    | `VALIDATION_ERROR` | Missing or invalid query parameters (`symbol`, `target`) |
+| 500    | `INTERNAL_ERROR`   | Server misconfiguration (e.g. `MD_API_TOKEN` not set)    |
+
+### Error codes
+
+The `code` field in per-ticker errors (and in HTTP-level error strings) is always one of the following:
+
+Codes that appear in the per-ticker `errors` map (HTTP 200 response):
+
+| Code                 | Meaning                                                                    |
+| -------------------- | -------------------------------------------------------------------------- |
+| `YAHOO_UNAUTHORIZED` | Yahoo session expired and could not be refreshed — transient, retry later  |
+| `YAHOO_ERROR`        | Unexpected HTTP error from Yahoo Finance (e.g. 429, 404)                   |
+| `FETCH_FAILED`       | Unexpected exception during the fetch (network timeout, parse error, etc.) |
+
+Codes that appear as HTTP-level errors (non-200 response):
+
+| Code               | HTTP status | Meaning                                             |
+| ------------------ | ----------- | --------------------------------------------------- |
+| `UNAUTHORIZED`     | 401         | Missing or invalid `Authorization` header           |
+| `VALIDATION_ERROR` | 422         | Missing or invalid query parameters                 |
+| `INTERNAL_ERROR`   | 500         | Server misconfiguration — not caused by the request |
+
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  DigitalOcean Droplet                                    │
-│                                                          │
-│  ┌──────────────────────────────────────────────┐        │
-│  │  caddy (reverse proxy + auto HTTPS)          │        │
-│  │  trade.example.com → relays:8000             │        │
-│  │  Ports: 80 (HTTP→redirect), 443 (HTTPS)      │        │
-│  └──────────────┬──────────────────┬────────────┘        │
-│                 │                  │                     │
-│  ┌──────────────▼───────┐  ┌───────▼─────────────────┐   │
-│  │  relays              │  │  debug (optional)       │   │
-│  │  Registry → Adapters │  │  Webhook payload inbox  │   │
-│  │  Poller engine       │  │  POST/GET/DELETE        │   │
-│  │  Listener engine     │  └─────────────────────────┘   │
-│  │  HTTP API            │                                │
-│  │  SQLite dedup        │                                │
-│  └──────────────────────┘                                │
-│                                                          │
-│  Firewall: SSH from deployer IP only                     │
-│  HTTP/HTTPS open (Caddy auto-redirects HTTP → HTTPS)     │
-└──────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│  DigitalOcean Droplet                                          │
+│                                                                │
+│  ┌────────────────────────────────────────────────────────┐    │
+│  │  caddy (reverse proxy + auto HTTPS)                    │    │
+│  │  trade.example.com → relays:8000                       │    │
+│  │  trade.example.com → market_data:8001                  │    │
+│  │  Ports: 80 (HTTP→redirect), 443 (HTTPS)                │    │
+│  └──────────┬──────────────────┬──────────────┬───────────┘    │
+│             │                  │              │                │
+│  ┌──────────▼───────┐  ┌───────▼───────┐  ┌──▼─────────────┐  │
+│  │  relays          │  │  market_data  │  │  debug         │  │
+│  │  Registry        │  │  Yahoo client │  │  (optional)    │  │
+│  │  Poller engine   │  │  Dividend API │  │  Webhook inbox │  │
+│  │  Listener engine │  │  Bearer auth  │  │  POST/GET/DEL  │  │
+│  │  HTTP API        │  └───────────────┘  └────────────────┘  │
+│  │  SQLite dedup    │                                          │
+│  └──────────────────┘                                          │
+│                                                                │
+│  Firewall: SSH from deployer IP only                           │
+│  HTTP/HTTPS open (Caddy auto-redirects HTTP → HTTPS)           │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-Three containers in a single Docker network (debug is optional):
+Four containers in a single Docker network (debug is optional):
 
-- **`caddy`** — [Caddy 2](https://caddyserver.com/) reverse proxy with automatic HTTPS via Let's Encrypt. Routes `/relays/*` to the relays service.
+- **`caddy`** — [Caddy 2](https://caddyserver.com/) reverse proxy with automatic HTTPS via Let's Encrypt. Routes `/relays/*` to the relays service and `/v1/market-data/*` to market_data.
 - **`relays`** — Multi-relay service that loads broker adapters via the registry pattern. Runs pollers (periodic Flex fetch), an optional real-time WebSocket listener, and an HTTP API. Each broker adapter is a plugin that provides fetch/parse callbacks — the generic engines handle dedup, aggregation, notification, and scheduling. **Does not hold any broker sessions** — trade normally via web/mobile.
+- **`market_data`** — Market data lookup service. Exposes a REST API for dividend information via Yahoo Finance. Protected by its own Bearer token (`MD_API_TOKEN`), separate from the relay API token.
 - **`debug`** — Optional debug webhook inbox. Captures webhook payloads for inspection during development. Enabled when `DEBUG_WEBHOOK_PATH` is set.
 
 > **Dedup guarantee.** The relay uses a SQLite dedup database so each fill is delivered at most once under normal operation. In the rare event of an internal crash between webhook delivery and dedup bookkeeping, a fill may be sent a second time. Design your webhook consumer to be idempotent (e.g. deduplicate on `execId`).
@@ -187,6 +353,7 @@ Configuration is split across three environment files. Templates are in `env_exa
 | ----------------------------------- | -------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `SITE_DOMAIN`                       | Yes      | —                       | Domain for the relay API (see [Domains & HTTPS](#domains--https))                                                              |
 | `API_TOKEN`                         | Yes      | —                       | Bearer token for `/relays/*` endpoints (`openssl rand -hex 32`)                                                                |
+| `MD_API_TOKEN`                      | Yes      | —                       | Bearer token for `/v1/market-data/*` endpoints (separate from `API_TOKEN`, `openssl rand -hex 32`)                             |
 | `RELAYS`                            | No       | —                       | Comma-separated relay adapters (e.g. `ibkr`, `ibkr,kraken`). Empty = API server only                                           |
 | `NOTIFIERS`                         | No       | —                       | Active notification backends (e.g. `webhook`). Empty = dry-run                                                                 |
 | `TARGET_WEBHOOK_URL`                | No       | —                       | Webhook endpoint (empty = log-only dry-run)                                                                                    |
@@ -745,6 +912,7 @@ make logs S=debug ENV=local  # local debug inbox
 - [x] Unified Flex XML parsing (Activity + Trade Confirmation)
 - [x] TypeScript type definitions (`@tradegist/relayport-types`, not yet published)
 - [x] Python type definitions (`relayport-types`, not yet published)
+- [x] Market data service (dividend lookup via Yahoo Finance)
 - [x] Multi-account support within each relay (`_2` suffix)
 - [x] Debug webhook inbox (`DEBUG_WEBHOOK_PATH`)
 - [x] Real-time listener (ibkr_bridge WebSocket)

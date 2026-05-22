@@ -1,0 +1,3 @@
+handle /v1/market-data/* {
+    reverse_proxy market_data:8001
+}

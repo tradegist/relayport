@@ -101,6 +101,7 @@ RelayPort is a **relay between broker accounts** that provides clear, common int
 - **Never share a `sqlite3.Connection` across threads.** `sqlite3.Connection` is not thread-safe. When using `asyncio.to_thread()`, either pass the connection into a single synchronous function that does all DB work in one thread, or use an `asyncio.Lock` to ensure only one `to_thread()` call uses the connection at a time. Never allow two concurrent `to_thread()` calls to touch the same connection — this causes intermittent `OperationalError` and data corruption.
 - **Poller engine `to_thread` pattern: create connections inside the worker thread.** Do NOT create `sqlite3.Connection` on the main (event-loop) thread and pass it into `asyncio.to_thread(poll_once, conn, ...)` — even with `check_same_thread=False`, this is cross-thread use and unsafe. Instead, `poll_once()` creates thread-local connections internally (via `init_dedup_db()` / `init_meta_db()`), closing them in a `finally` block. The caller (`_poll_loop`, `handle_poll`) passes only non-DB arguments. This ensures every `to_thread` call uses connections that were both created and closed on the same worker thread.
 - **Financial operations require extra scrutiny.** Any code path that places orders, moves money, or modifies account state must be reviewed for: race conditions, double-execution, partial failure (what if it crashes between two steps?), and idempotency.
+- **Use `asyncio.to_thread(func, *args)` to offload blocking calls, never `loop.run_in_executor(None, func, *args)`.** `asyncio.to_thread` is the idiomatic Python 3.9+ replacement — no loop plumbing required, same thread-pool semantics, and consistent with the rest of the codebase. Reserve `run_in_executor` only when you need a custom `Executor` (e.g. `ProcessPoolExecutor`).
 - **Use `asyncio.get_running_loop()`, never `asyncio.get_event_loop()`.** `get_event_loop()` is deprecated since Python 3.10 for contexts without a running loop and emits `DeprecationWarning` in 3.12+. Code that calls `loop.call_later()`, `loop.create_task()`, etc. always runs on the event-loop thread, so `get_running_loop()` is correct, explicit, and raises `RuntimeError` immediately if accidentally called off-loop.
 - **Schedule background tasks via `asyncio.get_running_loop().create_task(coro)`, not `asyncio.ensure_future(coro)`.** `ensure_future` falls back to `get_event_loop()` when no loop is provided, which can attach the task to a stale or unintended loop. Every place we schedule fire-and-forget work runs on the loop already, so `get_running_loop().create_task(...)` is deterministic and explicit. Retain the returned `Task` in a tracking set with `task.add_done_callback(set.discard)` to prevent garbage collection mid-run.
 - **Tasks stored in a dict keyed by external IDs must clean up on completion.** When a `dict[ID, asyncio.Task]` tracks per-key work (per-orderId debounce timers, per-symbol throttles, per-account state machines) it leaks completed `Task` references forever if entries are never removed. ID streams that don't repeat — e.g. Kraken `orderId`s, each used exactly once — make this leak unbounded over the lifetime of the process. Always wire `task.add_done_callback(cleanup)` and have `cleanup(task)` pop the entry, but **only when the dict slot still points at the finishing task**: a cancelled task whose slot has already been replaced must not evict its replacement. Pattern:
@@ -162,13 +163,14 @@ Configuration is split into three env files to separate concerns and enable scal
 
 ## Architecture
 
-Three Docker containers in a single Compose stack on a DigitalOcean droplet (debug is optional):
+Four Docker containers in a single Compose stack on a DigitalOcean droplet (debug is optional):
 
-| Service  | Role                                                                                                                                                                        |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `caddy`  | Reverse proxy with automatic HTTPS (Let's Encrypt)                                                                                                                          |
-| `relays` | Multi-relay service: loads broker adapters via the registry, runs pollers + listeners + HTTP API. Disabled when `RELAYS` is empty (API server still runs for health checks) |
-| `debug`  | Debug webhook inbox — captures webhook payloads for inspection. Disabled by default (`DEBUG_REPLICAS=0`), enabled when `DEBUG_WEBHOOK_PATH` is set                          |
+| Service       | Role                                                                                                                                                                        |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `caddy`       | Reverse proxy with automatic HTTPS (Let's Encrypt)                                                                                                                          |
+| `relays`      | Multi-relay service: loads broker adapters via the registry, runs pollers + listeners + HTTP API. Disabled when `RELAYS` is empty (API server still runs for health checks) |
+| `market_data` | Market data lookup service: REST API for dividend info via Yahoo Finance. Port 8001. Protected by its own `MD_API_TOKEN`, separate from the relay `API_TOKEN`               |
+| `debug`       | Debug webhook inbox — captures webhook payloads for inspection. Disabled by default (`DEBUG_REPLICAS=0`), enabled when `DEBUG_WEBHOOK_PATH` is set                          |
 
 ### Relay Registry Pattern
 
@@ -277,6 +279,7 @@ Shared projects deploy snippets to `/opt/caddy-shared/sites/` on the droplet (no
 During shared deploy, snippet files are **templated** — all `{$VAR}` placeholders are replaced with literal env var values from the shared project's `.env`. This avoids requiring the host Caddy container to have the shared project's env vars.
 
 - **`sites/*.caddy`** contain `handle` blocks imported inside the `{$SITE_DOMAIN}` site definition. Each project writes one snippet. Routes must be prefixed to avoid collisions. The `debug.caddy` snippet routes `/debug/webhook/*` to the `debug` container.
+- **When adding a new Caddy snippet (`infra/caddy/sites/*.caddy`), always update `route_prefixes` in `cli/__init__.py` in the same commit.** The CLI's `_validate_site_snippet_routes` checks every `handle` directive against `route_prefixes` during shared deploy — if a new snippet's prefix isn't listed, shared deployments abort. The full checklist for a new routed service: (1) add the `.caddy` snippet, (2) add the prefix to `route_prefixes`, (3) add the token to `required_env` if the service has its own auth token, (4) add the service alias to `service_map`.
 - This structure allows multiple projects to share a single Caddy instance on the same droplet.
 
 ## Sibling Project: ibkr_bridge
@@ -349,6 +352,7 @@ The E2E conftest (`services/relay_core/tests/e2e/conftest.py`) uses a **two-tier
 - **Unit tests are colocated** next to the source file they test: `flex_parser.py` → `test_flex_parser.py`, `registry.py` → `test_registry.py`.
 - **E2E tests live in `tests/e2e/`** within each service, since they test multiple components together rather than a single source file.
 - **`make test`** runs all unit tests. **`make e2e-run`** runs all E2E tests (requires Docker stack). **`make lint`** runs ruff. All must pass before deploying.
+- **Import `unittest.mock` as a submodule, not via `from unittest import mock`.** Always use `import unittest` and `import unittest.mock` together — never `from unittest import mock`. Reference mock objects as `unittest.mock.patch`, `unittest.mock.MagicMock`, etc. This avoids the mixed-import lint warning that fires when the same module is imported with both `import` and `from … import` in the same file.
 - **Always scope `unittest.mock.patch`.** Never call `patch.start()` at module level without a corresponding `patch.stop()` — the patched value leaks into every test module that runs afterward. Use one of these patterns instead:
   - **`setUpModule()` / `tearDownModule()`** — for module-wide patches (e.g. `API_TOKEN` that all tests in the file need).
   - **`self.addCleanup(patcher.stop)`** in `setUp()` — for class-scoped patches.
@@ -549,6 +553,82 @@ services/debug/
 - **Port 9000** is hardcoded (`HTTP_PORT = 9000`). In production, Caddy reverse-proxies to `debug:9000` — no host port mapping needed. Local dev uses `15003:9000` (`docker-compose.local.yml`), E2E uses `15012:9000` (`docker-compose.test.yml`).
 - **Module name**: `debug_app.py` (not `main.py`) to avoid `sys.modules` collisions when both are on `sys.path`.
 
+## Market Data Service
+
+The `services/market_data/` service is a **standalone aiohttp container** that serves market data lookups. It has its own `MD_API_TOKEN` (separate from the relay `API_TOKEN`) and its own Docker image.
+
+```
+services/market_data/
+  main.py                  # Entrypoint — registers adapters, validates registry, starts API server (port 8001)
+  errors.py                # ErrorCode (StrEnum), AppError, UserError, YahooError + _STATUS_OVERRIDES lookup table
+  utils.py                 # parse_string_list() — shared query-param validator (dedup, uppercase, max count)
+  models/
+    dividends.py           # Pydantic models: DividendsUpcomingQuery, DividendsUpcomingItem, DividendsUpcomingResponse, TickerError
+  adapters/
+    __init__.py            # MarketDataAdapter ABC + registry (register, get_adapter, known_targets) with singleton caching
+    yahoo.py               # YahooAdapter: maps YahooClient → DividendsUpcomingItem; converts AppError → TickerError
+  routes/
+    app.py                 # create_app(), start_api_server(), handle_health
+    middlewares.py         # error_middleware (outermost) + auth_middleware + validate_api_token()
+    dividends.py           # GET /v1/market-data/dividends/upcoming handler
+  yahoo_client/
+    __init__.py            # YahooClient: get_dividend_info(ticker), get_dividends_info(tickers); threading.Lock
+    auth.py                # get_yahoo_session() — FRAGILE, see module docstring
+    cache.py               # CacheStore, get_cached(), set_cached(), clear_dividend_info_cache()
+    dividends.py           # fetch_dividend_info_from_yahoo(), fetch_with_retry()
+    types.py               # DividendInfo, YahooSession, CacheEntry Pydantic models
+  Dockerfile
+  requirements.txt         # aiohttp, curl_cffi, pydantic
+```
+
+- **`MD_API_TOKEN`** — required env var, checked at startup via `validate_api_token()`. The auth middleware rejects empty tokens with HTTP 500 (same pattern as the relay `API_TOKEN` guard).
+- **Adapter pattern** — `target=yahoo` dispatches to `YahooAdapter` via the registry. New data providers (e.g. `target=alpha_vantage`) can be added by registering a new `MarketDataAdapter` subclass. Adapter instances are **singletons** (cached by class identity in `get_adapter`), so `YahooClient`'s in-memory cache and session are shared across all requests for the lifetime of the process.
+- **`GET /v1/market-data/dividends/upcoming?symbol=AAPL,MSFT&target=yahoo`** — returns `{ data: { [ticker]: DividendsUpcomingItem }, errors: { [ticker]: TickerError } }`. Fetch failures for individual tickers are isolated to `errors` without affecting others. HTTP status is always 200 for valid requests. `TickerError` has two fields: `code` (an `ErrorCode` string) and `message` (human-readable detail).
+- **`symbol` validation** — handled by `parse_string_list()` from `utils.py` inside the `DividendsUpcomingQuery.parse_symbol` field validator: uppercases, strips whitespace, deduplicates (order-preserving via `dict.fromkeys`), rejects blank-only input, and enforces a maximum of `_MAX_SYMBOLS = 20` tickers. Validation errors raise `ValueError`, which Pydantic wraps into a `ValidationError` caught by the route handler and re-raised as `UserError(VALIDATION_ERROR)` into the middleware. When adding a new array-of-string query param to any future endpoint, use `parse_string_list(v, max_count=N)` from `market_data.utils` — do not inline the same logic.
+- **Port 8001** (`MD_API_PORT` env var, default 8001). Local dev: `15002:8001` (`docker-compose.local.yml`) with `MD_API_TOKEN: dev-token`. Caddy routes `/v1/market-data/*` to `market_data:8001`. Two health endpoints are registered: `/health` (unauthenticated, used by Docker `HEALTHCHECK` on the direct container port) and `/v1/market-data/health` (the public path routed through Caddy — same handler, required because Caddy only forwards `/v1/market-data/*`).
+- **Yahoo auth is fragile.** `auth.py` reverse-engineers Yahoo's session flow. Uses `curl_cffi` with `impersonate="chrome120"` for browser-matching TLS fingerprints — plain `httpx` is blocked with HTTP 429 by Yahoo's WAF. If requests break, check `yfinance/data.py` in the [yfinance repo](https://github.com/ranaroussi/yfinance) first. The module docstring in `auth.py` documents exactly which functions to look at and which invariants currently hold. `IMPERSONATE` is a public constant (no leading underscore) because it is imported cross-module by `dividends.py`.
+- **Date selection in `fetch_dividend_info_from_yahoo`** — `ex_div_date` and `payment_date` are selected **independently**. For `ex_div_date`: use the announced value when it is in the future, fall back to the estimated value, then `None`. For `payment_date`: use the announced value when it is in the future, fall back to estimated (derived from `ex_div_unix_for_payment + payment_offset_seconds`), then `None`. The two dates do not gate each other — an announced payment date can be returned even when the ex-div date falls back to estimated, and vice versa. `are_dates_estimated` is `True` when either date used the fallback path.
+- **In-memory cache and thread safety** — `YahooClient` caches `DividendInfo` per ticker with a TTL (default 12 hours). The cache is per-process — no shared state between container restarts. All cache reads, writes, and clears are guarded by `self._lock` (`threading.Lock`) because `get_dividends_info` runs in a threadpool via `asyncio.to_thread`. `get_dividend_info` uses a **double-check lock pattern**: snapshot the session under the lock, do the network call outside it, then re-acquire to double-check cache (another thread may have fetched the same ticker) before writing. `clear_cache` also acquires the lock so `clear_dividend_info_cache`'s dict iteration and deletion are protected. A second dedicated `_session_init_lock` serialises `get_yahoo_session()` bootstrapping: when `self._session is None`, only one thread enters the session-init critical section while others wait; once it finishes, waiting threads see the populated `self._session` and skip re-initialisation. `get_dividends_info` pre-checks the cache under `_lock` before each ticker fetch and only sleeps `_INTER_TICKER_DELAY_SECONDS` on cache misses (not on cache hits), so cached tickers never incur artificial delay.
+- **TypeScript types** — `DividendsUpcomingItem`, `DividendsUpcomingQuery`, `DividendsUpcomingResponse` are generated from `services/market_data/models/dividends.py` via `schema_gen.py` into `types/typescript/market_data_api/`. Exported as the `MarketDataApi` namespace in `types/typescript/index.d.ts`.
+
+### Error handling (market data)
+
+All errors follow a two-class hierarchy defined in `errors.py`:
+
+- **`AppError(Exception)`** — server-side faults (5xx). Always has a `code: ErrorCode` and a human-readable `message`. `str(exc)` renders as `"{message} [{code}]"` — this format is used in HTTP response bodies and logs. `status_code` property derives the HTTP status from `_STATUS_OVERRIDES` (falling back to 500).
+- **`UserError(AppError)`** — client-side faults (4xx). Safe to surface to callers. Same interface, falls back to 400 when no override is defined.
+- **`YahooError(AppError)`** — Yahoo Finance errors. Kept as a distinct subclass so `fetch_with_retry` can target it for session refresh on `YAHOO_UNAUTHORIZED`.
+
+**`ErrorCode` (`StrEnum`)** is the registry of all valid codes. Every `AppError`/`UserError` must be constructed with one:
+
+| Code                 | Class        | Default HTTP status | Meaning                                                                                                    |
+| -------------------- | ------------ | ------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `YAHOO_UNAUTHORIZED` | `YahooError` | 503                 | Yahoo session expired and could not be refreshed. Currently always caught per-ticker, never HTTP-level 503 |
+| `YAHOO_ERROR`        | `YahooError` | 500                 | Other Yahoo Finance HTTP error. Currently always caught per-ticker                                         |
+| `FETCH_FAILED`       | `AppError`   | 500                 | Unexpected exception during a ticker fetch. Currently always caught per-ticker                             |
+| `INTERNAL_ERROR`     | `AppError`   | 500                 | Server misconfiguration (e.g. adapter not registered) — surfaces as HTTP 500                               |
+| `UNAUTHORIZED`       | `UserError`  | 401                 | Missing or invalid `Authorization` header — raised by auth middleware                                      |
+| `VALIDATION_ERROR`   | `UserError`  | 422                 | Request query parameter failed validation                                                                  |
+
+The `_STATUS_OVERRIDES` dict in `errors.py` only lists codes whose HTTP status differs from the class default — keep it small. Most `AppError` codes are 500; most `UserError` codes are 400; only exceptions appear in the table.
+
+**Error middleware** (`error_middleware` in `middlewares.py`) is registered **first** in `create_app` so it wraps all other handlers including auth:
+
+```python
+app = web.Application(middlewares=[error_middleware, auth_middleware])
+```
+
+It follows this precedence:
+
+1. `web.HTTPException` — converted to `{"error": "{reason} [{status}]"}` JSON (e.g. `"Not Found [404]"`). Every non-200 response has the same shape; aiohttp's default HTML/text format is never returned.
+2. `UserError` — returns `{"error": str(exc)}` with `exc.status_code`; logs at `warning`. Safe to surface because `UserError` is explicitly caller-facing.
+3. `AppError` (non-`UserError`) — returns `{"error": "Internal server error [INTERNAL_ERROR]"}` with `exc.status_code`; logs the full detail at `error`. The detailed message is never sent to the client to avoid leaking internal state.
+4. Any other `Exception` — returns `{"error": "Internal server error [INTERNAL_ERROR]"}` with 500; logs at `exception` level (full traceback)
+
+**Per-ticker errors** (in the batch response) are `TickerError` objects with separate `code` and `message` fields — not composite strings. The `YahooAdapter` converts `AppError` instances (returned by `YahooClient.get_dividends_info`) into `TickerError` at the serialisation boundary. The `__str__` composite format (`"{message} [{code}]"`) is only used for HTTP-level error responses and logging, never in the structured per-ticker error dict.
+
+**Adding new error codes**: add the member to `ErrorCode`, add a row to `_STATUS_OVERRIDES` only if it needs a non-default HTTP status, then raise `AppError(..., ErrorCode.NEW_CODE)` or `UserError(..., ErrorCode.NEW_CODE)` at the call site. The middleware handles the rest automatically.
+
 ## Dedup Package
 
 The `services/relay_core/dedup/` package provides SQLite dedup logic used by the poller and listener engines.
@@ -588,26 +668,29 @@ This project has **three model locations** — each owns a distinct contract lay
 
 ### Namespace Convention
 
-All relay projects export TypeScript types using a two-tier namespace pattern:
+All relay projects export TypeScript types using a three-tier namespace pattern:
 
 - **`types/typescript/shared/`** → exported as `BrokerRelay`. Contains the CommonFill primitives (`Fill`, `Trade`, `BuySell`) generated via `schema_gen.py` from `services/shared/models.py`.
 - **`types/typescript/relay_api/`** → exported as `RelayApi`. Contains the notifier payload contracts (`WebhookPayloadTrades`, `WebhookPayload`) and relay API types (`RunPollResponse`, `HealthResponse`) generated via `schema_gen.py` from `services/relay_core/relay_models.py`.
+- **`types/typescript/market_data_api/`** → exported as `MarketDataApi`. Contains the market data API types (`DividendsUpcomingItem`, `DividendsUpcomingQuery`, `DividendsUpcomingResponse`) generated via `schema_gen.py` from `services/market_data/models/dividends.py`.
 
 The barrel `types/typescript/index.d.ts` ties them together:
 
 ```ts
 import * as BrokerRelay from "./shared";
 import * as RelayApi from "./relay_api";
-export { BrokerRelay, RelayApi };
+import * as MarketDataApi from "./market_data_api";
+export { BrokerRelay, RelayApi, MarketDataApi };
 ```
 
 ### Types Package
 
 - Types are published as `@tradegist/relayport-types` (npm package in `types/typescript/`, not yet published).
-- **Two namespaces**: `BrokerRelay` (CommonFill primitives) and `RelayApi` (notifier payload contracts + relay API types).
-- **`make types`** regenerates both from Pydantic models (depends on `typecheck`):
+- **Three namespaces**: `BrokerRelay` (CommonFill primitives), `RelayApi` (notifier payload contracts + relay API types), and `MarketDataApi` (market data API types).
+- **`make types`** regenerates all three from Pydantic models (depends on `typecheck`):
   - `services/shared/models.py` → `types/typescript/shared/types.d.ts`
   - `services/relay_core/relay_models.py` → `types/typescript/relay_api/types.d.ts`
+  - `services/market_data/models/dividends.py` → `types/typescript/market_data_api/types.d.ts`
   - Also generates Python type packages via `gen_python_types.py`.
 - **Structure:**
   ```
@@ -622,8 +705,12 @@ export { BrokerRelay, RelayApi };
       index.d.ts               # Auto-generated barrel (every public type re-exported)
       types.d.ts               # Auto-generated from services/relay_core/relay_models.py
       types.schema.json        # Intermediate JSON Schema
+    market_data_api/
+      index.d.ts               # Auto-generated barrel (every public type re-exported)
+      types.d.ts               # Auto-generated from services/market_data/models/dividends.py
+      types.schema.json        # Intermediate JSON Schema
   ```
-- **Usage:** `import { BrokerRelay, RelayApi } from "@tradegist/relayport-types"`
+- **Usage:** `import { BrokerRelay, RelayApi, MarketDataApi } from "@tradegist/relayport-types"`
 - `schema_gen.py` owns the `SCHEMA_MODELS` dict (keyed by importable module path, e.g. `"shared"`, `"relay_core.relay_models"`). **To export a new model to TypeScript, add it to the relevant entry in `schema_gen.py:SCHEMA_MODELS` and run `make types` — that's the only required step.** Entries may be `BaseModel` subclasses **or** discriminated-union `TypeAlias` values; Pydantic's `TypeAdapter` handles both. Class aliases like `WebhookPayload = WebhookPayloadTrades` produce `export type WebhookPayload = WebhookPayloadTrades` in TypeScript via an `allOf: [$ref]` schema entry. The TypeScript module barrels (`types/typescript/*/index.d.ts`) are auto-generated by `gen_ts_barrels.py`; the Python package files are auto-generated by `gen_python_types.py`. **Do not hand-edit generated files** — they carry an `AUTO-GENERATED` header.
 
 ## Python Types Package
@@ -650,6 +737,7 @@ export { BrokerRelay, RelayApi };
   from relayport_types.notifier.models import WebhookPayloadTrades  # direct path
   ```
 - **Auto-generated** by `gen_python_types.py` — each source file is copied verbatim with one import-depth rewrite, and the top-level `__init__.py` barrel is built by AST-walking each source for top-level public class/literal/alias definitions. Run `make types` to regenerate. Do not edit generated files manually.
+- **`market_data` dependency auto-detection** — `gen_python_types.py` parses `dividends.py`'s top-level `ImportFrom` nodes at generation time. Any `from market_data.X import` statement causes `services/market_data/X.py` to be automatically copied into the types package as `relayport_types/X.py`, and the import is rewritten to `from .X import`. This means adding a new internal utility import to `dividends.py` requires no manual change to the generator — `make types` handles it. Only direct sub-modules (`market_data.X`) are auto-detected; nested paths (`market_data.models.X`) are not followed and must be handled manually.
 - **Covered by `make lint` and `make typecheck`** — `types/python/relayport_types/` is included in both targets. Generated code must pass ruff and mypy like any other Python module.
 
 ## Code Style
@@ -712,7 +800,7 @@ env_examples/              # Env var templates (make setup copies to .<name>)
   env.droplet              # CLI-only deployment config (.env.droplet)
   env.relays               # Relay-prefixed vars (.env.relays)
   env.test                 # E2E test config (.env.test)
-docker-compose.yml             # All services (caddy, relays, debug)
+docker-compose.yml             # All services (caddy, relays, debug, market_data)
 docker-compose.shared.yml      # Shared-mode overlay (disables Caddy)
 docker-compose.shared-network.yml # Marks SHARED_NETWORK as external (CLI pre-creates it)
 docker-compose.local.yml   # Local dev override (direct port access, no TLS)
@@ -775,11 +863,38 @@ services/                  # Business-logic services
     debug_app.py           # aiohttp app: POST/GET/DELETE /debug/webhook/{path}
     Dockerfile
     requirements.txt
+  market_data/             # Market data HTTP service (dividend info via Yahoo Finance)
+    main.py                # Entrypoint — aiohttp app startup
+    errors.py              # ErrorCode (StrEnum), AppError, UserError, YahooError
+    utils.py               # parse_string_list() — shared query-param validator (dedup, uppercase, max count)
+    adapters/              # Adapter pattern: MarketDataAdapter ABC + registry with singleton caching
+      __init__.py          # get_adapter(target) → MarketDataAdapter (singleton); register, known_targets
+      yahoo.py             # YahooAdapter: maps YahooClient → DividendsUpcomingItem; AppError → TickerError
+      test_yahoo.py        # Tests for YahooAdapter
+    models/
+      __init__.py
+      dividends.py         # DividendsUpcomingQuery, DividendsUpcomingItem, DividendsUpcomingResponse, TickerError Pydantic models
+    routes/                # HTTP API
+      app.py               # create_app() — registers error_middleware + auth_middleware
+      dividends.py         # GET /v1/market-data/dividends/upcoming handler
+      middlewares.py       # error_middleware (outermost) + auth_middleware (Bearer token, MD_API_TOKEN)
+      test_dividends.py    # Tests for dividends route handler
+    yahoo_client/          # Yahoo Finance client (curl_cffi + Chrome TLS impersonation)
+      __init__.py          # YahooClient: get_dividends_info() with in-memory cache
+      auth.py              # Session management: finance.yahoo.com cookies + crumb fetch
+      cache.py             # CacheEntry + _cache_key + TTL constants
+      dividends.py         # fetch_dividend_info_from_yahoo(), fetch_with_retry()
+      types.py             # YahooSession, DividendInfo, CacheEntry Pydantic models
+      test_cache.py        # Tests for cache module
+      test_dividends.py    # Tests for dividends fetch + retry logic
+    Dockerfile
+    requirements.txt
 infra/                     # Infrastructure backbone (no business logic)
   caddy/Caddyfile          # Reverse proxy config (uses env vars for domains)
   caddy/sites/             # Route snippets imported inside {$SITE_DOMAIN}
-    ibkr.caddy             # /relays/* routes → relays:8000
+    relayport.caddy        # /relays/* routes → relays:8000
     debug.caddy            # /debug/webhook/* → debug:9000
+    market_data.caddy      # /v1/market-data/* → market_data:8001
 types/                     # Type packages (TypeScript + Python)
   typescript/              # @tradegist/relayport-types (BrokerRelay + RelayApi namespaces)
   python/                  # relayport-types PyPI package

@@ -1,0 +1,141 @@
+{
+  "$defs": {
+    "DividendsUpcomingQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "symbol": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "target": {
+          "$ref": "#/$defs/MarketDataTarget"
+        }
+      },
+      "required": [
+        "symbol",
+        "target"
+      ],
+      "title": "DividendsUpcomingQuery",
+      "type": "object"
+    },
+    "DividendsUpcomingItem": {
+      "additionalProperties": false,
+      "properties": {
+        "ex_div_date": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payment_date": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dps": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "annual_dps": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "are_dates_estimated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ex_div_date",
+        "payment_date",
+        "dps",
+        "annual_dps",
+        "are_dates_estimated"
+      ],
+      "title": "DividendsUpcomingItem",
+      "type": "object"
+    },
+    "TickerError": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "TickerError",
+      "type": "object"
+    },
+    "DividendsUpcomingResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DividendsUpcomingItem"
+          },
+          "type": "object"
+        },
+        "errors": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TickerError"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "data",
+        "errors"
+      ],
+      "title": "DividendsUpcomingResponse",
+      "type": "object"
+    },
+    "MarketDataTarget": {
+      "enum": [
+        "yahoo"
+      ],
+      "type": "string"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/DividendsUpcomingQuery"
+    },
+    {
+      "$ref": "#/$defs/DividendsUpcomingItem"
+    },
+    {
+      "$ref": "#/$defs/DividendsUpcomingResponse"
+    },
+    {
+      "$ref": "#/$defs/MarketDataTarget"
+    }
+  ]
+}

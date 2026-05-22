@@ -9,8 +9,8 @@ TYPESCRIPT_VERSION = 5.6.3
 JSON2TS = npx --yes -p json-schema-to-typescript@$(JSON2TS_VERSION) json2ts
 TSC = npx --yes -p typescript@$(TYPESCRIPT_VERSION) tsc
 E2E_ENV = .env.test
-E2E_COMPOSE = SITE_DOMAIN=unused API_TOKEN=test-token docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
-E2E_COMPOSE_DOWN = SITE_DOMAIN=unused API_TOKEN=test-token docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
+E2E_COMPOSE = SITE_DOMAIN=unused API_TOKEN=test-token MD_API_TOKEN=md-test-token docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
+E2E_COMPOSE_DOWN = SITE_DOMAIN=unused API_TOKEN=test-token MD_API_TOKEN=md-test-token docker compose -f docker-compose.yml -f docker-compose.test.yml -p $(PROJECT)-test --env-file $(E2E_ENV)
 LOCAL_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.local.yml
 _RESOLVE_ENV = . ./.env 2>/dev/null; . ./.env.droplet 2>/dev/null; env="$${RELAY_ENV:-$${DEFAULT_CLI_ENV:-prod}}"; [ -n "$(ENV)" ] && env="$(ENV)";
 
@@ -22,7 +22,7 @@ help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  make %-12s %s\n", $$1, $$2}'
 
 PIP ?= $(dir $(PYTHON))pip
-REQ_FILES = -r requirements-dev.txt -r services/relay_core/requirements.txt
+REQ_FILES = -r requirements-dev.txt -r services/relay_core/requirements.txt -r services/market_data/requirements.txt -r services/debug/requirements.txt
 
 deps: ## Install Python dependencies
 	$(PIP) install $(REQ_FILES)
@@ -122,7 +122,9 @@ types: ## Regenerate TypeScript + Python types from Pydantic models
 	$(JSON2TS) types/typescript/shared/types.schema.json > types/typescript/shared/types.d.ts
 	PYTHONPATH=services $(PYTHON) schema_gen.py relay_core.relay_models > types/typescript/relay_api/types.schema.json
 	$(JSON2TS) types/typescript/relay_api/types.schema.json > types/typescript/relay_api/types.d.ts
-	@echo "Generated types/typescript/shared/types.d.ts + types/typescript/relay_api/types.d.ts"
+	PYTHONPATH=services $(PYTHON) schema_gen.py market_data.models.dividends > types/typescript/market_data_api/types.schema.json
+	$(JSON2TS) types/typescript/market_data_api/types.schema.json > types/typescript/market_data_api/types.d.ts
+	@echo "Generated types/typescript/shared/types.d.ts + types/typescript/relay_api/types.d.ts + types/typescript/market_data_api/types.d.ts"
 	$(PYTHON) gen_ts_barrels.py
 	$(PYTHON) gen_python_types.py
 	$(PYTHON) -m ruff check types/python/relayport_types/ --fix --quiet
@@ -136,6 +138,7 @@ typecheck: ## Run mypy strict type checking
 	MYPYPATH=services $(PYTHON) -m mypy services/relay_core/
 	MYPYPATH=services $(PYTHON) -m mypy services/relays/
 	MYPYPATH=services/debug $(PYTHON) -m mypy services/debug/
+	MYPYPATH=services $(PYTHON) -m mypy services/market_data/
 	$(PYTHON) -m mypy schema_gen.py
 	$(PYTHON) -m mypy gen_python_types.py
 	$(PYTHON) -m mypy gen_ts_barrels.py
@@ -143,16 +146,17 @@ typecheck: ## Run mypy strict type checking
 	$(TSC) --noEmit -p types/typescript/
 
 lint: ## Run ruff linter (use FIX=1 to auto-fix)
-	$(PYTHON) -m ruff check services/shared/ services/relay_core/ services/relays/ services/debug/ cli/ schema_gen.py gen_python_types.py gen_ts_barrels.py types/python/relayport_types/ $(if $(FIX),--fix)
+	$(PYTHON) -m ruff check services/shared/ services/relay_core/ services/relays/ services/debug/ services/market_data/ cli/ schema_gen.py gen_python_types.py gen_ts_barrels.py types/python/relayport_types/ $(if $(FIX),--fix)
 	@if grep -rn '__all__' services/ types/ cli/ --include='*.py'; then echo "ERROR: __all__ is banned — use explicit re-exports"; exit 1; fi
 
 local-up: ## Start full stack locally (no TLS, direct port access)
 	@$(auto_debug_replicas) && $(LOCAL_COMPOSE) up -d --build
 	@echo ""
-	@echo "  Relays:   http://localhost:15001/health"
+	@echo "  Relays:      http://localhost:15001/health"
+	@echo "  Market data: http://localhost:15002/health  (token: dev-token)"
 	@if [ -f .env ]; then . ./.env; fi; \
 	if [ -n "$$(printf '%s' "$$DEBUG_WEBHOOK_PATH" | tr -d '[:space:]')" ]; then \
-		echo "  Debug:    http://localhost:15003/debug/webhook/$$DEBUG_WEBHOOK_PATH"; \
+		echo "  Debug:       http://localhost:15003/debug/webhook/$$DEBUG_WEBHOOK_PATH"; \
 	fi
 	@echo ""
 
