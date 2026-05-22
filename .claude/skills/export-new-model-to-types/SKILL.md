@@ -14,24 +14,27 @@ Add the **exported name** (as a string) to `SCHEMA_MODELS` in `schema_gen.py`, u
 ```python
 SCHEMA_MODELS: dict[str, list[str]] = {
     "shared": [
-        "Fill",
         "Trade",
-        "OptionContract",
+        "Fill",
         # "NewPrimitiveModel",  # ← add here for CommonFill primitives
     ],
     "relay_core.relay_models": [
+        "WebhookPayload",
         "WebhookPayloadTrades",
         "RunPollResponse",
         "HealthResponse",
         # "NewWebhookPayload",  # ← add here for relay API / notifier contracts
     ],
     "market_data.models.dividends": [
+        "DividendsUpcomingQuery",
         "DividendsUpcomingItem",
         "DividendsUpcomingResponse",
         # "NewMarketDataModel",  # ← add here for market data API
     ],
 }
 ```
+
+The example reflects the current contents of `schema_gen.py:SCHEMA_MODELS`. Re-check the file before editing — the lists change as models are added or removed.
 
 Then run:
 

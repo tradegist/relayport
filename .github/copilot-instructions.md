@@ -125,3 +125,7 @@ These are the **always-on rules**. Path-scoped rules live in `.github/instructio
 ## Sibling Project: ibkr_bridge
 
 This project and its sibling `ibkr_bridge` share the same CLI deploy/destroy/sync infrastructure pattern. Any change to `cli/core/deploy.py`, `cli/core/destroy.py`, or `cli/core/sync.py` here must be mirrored in `ibkr_bridge`, and vice versa.
+
+## Maintenance of this file
+
+This file is the always-on Copilot mirror of the root `CLAUDE.md` (Claude Code's repo-wide instruction file). Per-directory rules also have paired mirrors at `.github/instructions/<slug>.instructions.md` with `applyTo:` globs. **When editing any `CLAUDE.md`, update its corresponding Copilot mirror in the same commit** — rule content must stay in sync; presentation may differ slightly (see `docs/INSTRUCTION_FILES.md` for the full layout and the allowed divergences).
