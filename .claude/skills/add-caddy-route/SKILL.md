@@ -15,7 +15,7 @@ Adding a new service that should be reachable via the public `SITE_DOMAIN` requi
 
 3. **Add the token to `required_env`** in `cli/__init__.py` if the service has its own auth token (like `MD_API_TOKEN`). The CLI's pre-deploy validation refuses to push when required tokens are missing or empty.
 
-4. **Add the service alias to `service_map`** in `cli/__init__.py`. This is the human-friendly name (`market-data`) → container name (`market_data`) mapping used by `make logs S=<alias>`.
+4. **Add the service alias to `CoreConfig.service_map`** in `cli/__init__.py`. The map's key is the alias used by `make logs S=<alias>`, the value is the container name — by current convention both use the same underscored string (`"market_data": "market_data"`).
 
 ## Example: adding a `/v1/market-data/*` route
 
@@ -27,24 +27,26 @@ handle /v1/market-data/* {
 ```
 
 ```python
-# cli/__init__.py
-route_prefixes = [
-    "/relays/",
-    "/debug/webhook/",
-    "/v1/market-data/",  # NEW
-]
-
-required_env = [
-    "API_TOKEN",
-    "MD_API_TOKEN",  # NEW
-    ...
-]
-
-service_map = {
-    "relays": "relays",
-    "debug": "debug",
-    "market-data": "market_data",  # NEW
-}
+# cli/__init__.py — fields on the CoreConfig() call
+core_config = CoreConfig(
+    ...,
+    service_map={
+        "caddy": "caddy",
+        "relays": "relays",
+        "debug": "debug",
+        "market_data": "market_data",  # NEW — underscored key, same as container name
+    },
+    required_env=[
+        "DO_API_TOKEN",
+        "API_TOKEN",
+        "MD_API_TOKEN",  # NEW
+    ],
+    # Prefixes are matched against handle paths via `startswith(f"{prefix}/")`,
+    # so list each prefix WITHOUT a trailing slash. A single `/debug` prefix
+    # covers any path under it (e.g. `/debug/webhook/*`).
+    route_prefixes=["/relays", "/debug", "/v1/market-data"],  # NEW: "/v1/market-data"
+    ...,
+)
 ```
 
 ## Shared-mode considerations
