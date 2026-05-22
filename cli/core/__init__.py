@@ -136,7 +136,12 @@ CORE_MODULES: dict[str, str] = {
 
 
 def register_parsers(sub: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
-    """Register core subcommands (deploy, destroy, pause, resume, sync)."""
+    """Register core subcommands (deploy, destroy, pause, resume, sanity-check-deployment, sync).
+
+    ``deploy`` and ``sync`` accept ``--skip-post-check`` to skip the post-deploy
+    claude sanity check; ``sync`` additionally accepts ``--local-files``,
+    ``--build``, and ``--skip-e2e``.
+    """
     p = sub.add_parser("deploy", help="Deploy infrastructure (Terraform + Docker)")
     p.add_argument("--skip-post-check", action="store_true",
                    help="Skip the post-deploy `claude` sanity check")

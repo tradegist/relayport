@@ -1,4 +1,4 @@
-.PHONY: deps setup deploy destroy pause resume sync poll test-webhook watermark-reset ibkr-flex-dump ibkr-flex-refresh types test typecheck lint e2e e2e-up e2e-run e2e-down local-up local-down logs stats ssh help
+.PHONY: deps setup deploy destroy pause resume sync sanity-check-deployment poll test-webhook watermark-reset ibkr-flex-dump ibkr-flex-refresh types test typecheck lint e2e e2e-up e2e-run e2e-down local-up local-down logs stats ssh help
 
 PROJECT = relayport
 PYTHON ?= .venv/bin/python3

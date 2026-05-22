@@ -18,6 +18,7 @@ from cli.core import (
     ssh_cmd,
     ssh_key_path,
 )
+from cli.core.sanity_check import post_deploy_sanity_check
 
 
 def _test_subprocess_env(cfg: CoreConfig) -> dict[str, str]:
@@ -105,85 +106,6 @@ def _sync_local_files(droplet_ip: str, *, strict_host_check: bool = True) -> Non
     print(f"Deployed commit: {sha[:12]}")
 
 
-_SANITY_CHECK_PROMPT = """\
-You are running on the operator's machine right after a relay-stack deploy. \
-SSH into the droplet and verify the deploy is healthy.
-
-Droplet: root@{droplet_ip} using -i {ssh_key}
-Remote project dir: {remote_dir}
-
-Run `cd {remote_dir} && docker compose ps` and \
-`docker compose logs --since 5m`. Look for: containers not "Up", restart loops, \
-ERROR / exception / traceback lines, services that never finished starting.
-
-Reply with a single short paragraph in this exact shape:
-[GREEN|YELLOW|RED] <one-line reason>. <one concrete next step if not GREEN>.
-
-No follow-up questions, no offers to help further. Stop after the verdict.
-"""
-
-
-def run_sanity_check(droplet_ip: str) -> None:
-    """Run the claude sanity check against the droplet.
-
-    Best-effort: a missing CLI, network outage, auth failure, rate limit,
-    or hung agent prints a one-line warning and returns — never raises.
-    """
-    if not shutil.which("claude"):
-        print("[sanity-check] claude CLI not installed — skipping")
-        return
-
-    cfg = config()
-    prompt = _SANITY_CHECK_PROMPT.format(
-        droplet_ip=droplet_ip,
-        ssh_key=ssh_key_path(),
-        remote_dir=cfg.remote_dir,
-    )
-
-    print("Running sanity check (claude agent)...")
-    try:
-        result = subprocess.run(
-            [
-                "claude",
-                "--print",
-                "--model", "claude-sonnet-4-6",
-                "--permission-mode", "bypassPermissions",
-                "--allowedTools", "Bash",
-                "--max-budget-usd", "0.50",
-                prompt,
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=120,
-        )
-    except subprocess.TimeoutExpired:
-        print("[sanity-check] timed out after 120s — verify the droplet manually")
-        return
-    except Exception as e:
-        print(f"[sanity-check] skipped: {e}")
-        return
-
-    if result.returncode != 0:
-        first_err = (result.stderr or "").strip().splitlines()[:1]
-        reason = first_err[0] if first_err else f"exit {result.returncode}"
-        print(f"[sanity-check] claude exited {result.returncode}: {reason}")
-        return
-
-    output = (result.stdout or "").strip()
-    print("── Sanity check " + "─" * 44)
-    print(output if output else "(claude returned no output)")
-    print("─" * 60)
-
-
-def _post_deploy_sanity_check(droplet_ip: str, *, skip_flag: bool) -> None:
-    """Post-deploy hook wrapper. Honors SKIP_POST_DEPLOY_CHECK / --skip-post-check."""
-    if skip_flag or os.environ.get("SKIP_POST_DEPLOY_CHECK", "").strip() == "1":
-        print("[sanity-check] skipped (flag set)")
-        return
-    run_sanity_check(droplet_ip)
-
-
 def run(args: argparse.Namespace) -> None:
     load_env()
     cfg = config()
@@ -259,4 +181,4 @@ def run(args: argparse.Namespace) -> None:
     print("Done.")
 
     if args.local_files:
-        _post_deploy_sanity_check(droplet_ip, skip_flag=args.skip_post_check)
+        post_deploy_sanity_check(droplet_ip, skip_flag=args.skip_post_check)

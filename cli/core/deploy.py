@@ -27,7 +27,8 @@ from cli.core import (
 
 def _deploy_standalone(skip_post_check: bool) -> None:
     """Deploy via Terraform (own droplet), then rsync files and start services."""
-    from cli.core.sync import _post_deploy_sanity_check, _run_checks, _sync_local_files
+    from cli.core.sanity_check import post_deploy_sanity_check
+    from cli.core.sync import _run_checks, _sync_local_files
 
     cfg = config()
 
@@ -121,7 +122,7 @@ def _deploy_standalone(skip_post_check: bool) -> None:
         print(f"  2. {cfg.post_deploy_message}")
     print()
 
-    _post_deploy_sanity_check(droplet_ip, skip_flag=skip_post_check)
+    post_deploy_sanity_check(droplet_ip, skip_flag=skip_post_check)
 
 
 def _template_caddy_snippet(src: Path) -> str:
@@ -208,7 +209,8 @@ def _deploy_caddy_snippets(droplet_ip: str) -> None:
 
 def _deploy_shared(skip_post_check: bool) -> None:
     """Deploy to an existing shared droplet (no Terraform)."""
-    from cli.core.sync import _post_deploy_sanity_check, _run_checks, _sync_local_files
+    from cli.core.sanity_check import post_deploy_sanity_check
+    from cli.core.sync import _run_checks, _sync_local_files
 
     cfg = config()
     droplet_ip = env("DROPLET_IP")
@@ -249,7 +251,7 @@ def _deploy_shared(skip_post_check: bool) -> None:
     print("=" * 44)
     print()
 
-    _post_deploy_sanity_check(droplet_ip, skip_flag=skip_post_check)
+    post_deploy_sanity_check(droplet_ip, skip_flag=skip_post_check)
 
 
 def run(args: argparse.Namespace) -> None:
