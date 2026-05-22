@@ -6,7 +6,8 @@
   "files": [
     "index.d.ts",
     "shared/",
-    "relay_api/"
+    "relay_api/",
+    "market_data_api/"
   ],
   "license": "MIT"
 }
