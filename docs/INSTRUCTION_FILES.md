@@ -18,18 +18,18 @@ docs/
   INSTRUCTION_FILES.md             # This file
 .github/
   copilot-instructions.md          # Mirror of root CLAUDE.md (Copilot universal)
-  instructions/                    # Path-scoped Copilot files
-    cli.instructions.md            # applyTo: cli/**
-    services.instructions.md       # applyTo: services/**
-    relay_core.instructions.md     # applyTo: services/relay_core/**
-    relays.instructions.md         # applyTo: services/relays/**
-    relays-ibkr.instructions.md    # applyTo: services/relays/ibkr/**
-    relays-kraken.instructions.md  # applyTo: services/relays/kraken/**
-    market_data.instructions.md    # applyTo: services/market_data/**
-    debug.instructions.md          # applyTo: services/debug/**
-    shared.instructions.md         # applyTo: services/shared/**
-    infra.instructions.md          # applyTo: infra/**
-    types.instructions.md          # applyTo: types/**
+  instructions/                    # Path-scoped Copilot files — one per directory CLAUDE.md
+    cli.instructions.md
+    services.instructions.md
+    relay_core.instructions.md
+    relays.instructions.md
+    relays-ibkr.instructions.md
+    relays-kraken.instructions.md
+    market_data.instructions.md
+    debug.instructions.md
+    shared.instructions.md
+    infra.instructions.md
+    types.instructions.md
 cli/CLAUDE.md                      # Lazy-loaded by Claude
 services/CLAUDE.md
 services/relay_core/CLAUDE.md
@@ -47,6 +47,14 @@ types/CLAUDE.md
   add-caddy-route/SKILL.md
   export-new-model-to-types/SKILL.md
 ```
+
+The `applyTo:` glob for each Copilot instruction file lives in its YAML frontmatter — that's the source of truth. Most match the obvious directory (e.g. `services/relays/ibkr/**`), but three intentionally cover paths beyond it:
+
+- `cli.instructions.md` → `cli/**,Makefile,docker-compose*.yml,env_examples/**,terraform/**` (the CLI owns deploy, env templates, and IaC, so the same rules apply to all of them).
+- `infra.instructions.md` → `infra/**,docker-compose*.yml` (Caddy snippet + compose changes are paired).
+- `types.instructions.md` → `types/**,schema_gen.py,gen_ts_barrels.py,gen_python_types.py` (the generators are part of the same contract).
+
+When in doubt, read the frontmatter.
 
 ## Maintenance contract
 
