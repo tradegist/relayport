@@ -69,11 +69,12 @@ These differences are intentional and don't violate the sync contract:
 1. **Cross-references.** `CLAUDE.md` files use Markdown links to other CLAUDE.md files (`[../CLAUDE.md](../CLAUDE.md)`); Copilot mirrors reference siblings by name (`services.instructions.md`) since the directory structure differs.
 2. **Glob breadth.** `applyTo:` globs may legitimately cover files outside the CLAUDE.md's directory (e.g. `cli.instructions.md` applies to `Makefile`, `docker-compose*.yml`, and `terraform/**` in addition to `cli/**`, because those files share the same deploy rules). Document such inclusions inline.
 3. **Skill pointers.** CLAUDE.md may link to a Skill via Markdown link (`[add-relay-adapter](.claude/skills/add-relay-adapter/SKILL.md)`); the Copilot mirror references it by name only, since Skills are a Claude-specific feature.
+4. **Summarization for tool fit.** Copilot mirrors may abbreviate, reorder, or lightly rephrase prose when needed for brevity or tool-specific formatting, as long as they preserve the same normative rules, constraints, required steps, and factual content as the paired `CLAUDE.md`. Summarization must not drop or weaken any requirement.
 
 ### What must stay identical
 
-- Every **rule** (every bullet starting with **"…"**, every numbered procedure step, every code block enforcing a pattern) must appear in both files with the same wording.
-- Tables of facts (env vars, error codes, file-to-output mappings) must match row for row.
+- Every **rule** (every bullet starting with **"…"**, every numbered procedure step, every code block enforcing a pattern) must appear in both files with the same meaning and enforcement, even if wording or ordering differs.
+- Tables of facts (env vars, error codes, file-to-output mappings) must match row for row unless a documented tool-specific formatting difference applies.
 
 ### Sanity check during PR review
 
@@ -95,18 +96,19 @@ Empty diff = rules match. Anything else = a rule drifted between the two.
 
 ## When to move a rule
 
-| Lives where? | When | Why |
-| --- | --- | --- |
-| Root | Applies repo-wide or could be violated in any file | Always-on for safety |
-| Directory CLAUDE.md | Only applies in that subtree | Lazy-load saves context |
-| Skill | Multi-step procedure for a rare task | Zero context cost until invoked |
-| ARCHITECTURE.md | Descriptive prose, not enforceable | Reference, not a rule |
+| Lives where?        | When                                               | Why                             |
+| ------------------- | -------------------------------------------------- | ------------------------------- |
+| Root                | Applies repo-wide or could be violated in any file | Always-on for safety            |
+| Directory CLAUDE.md | Only applies in that subtree                       | Lazy-load saves context         |
+| Skill               | Multi-step procedure for a rare task               | Zero context cost until invoked |
+| ARCHITECTURE.md     | Descriptive prose, not enforceable                 | Reference, not a rule           |
 
 If a rule appears in three places, collapse it. Cross-reference instead of duplicating.
 
 ## Verifying Claude loads what you expect
 
 When working in `services/relay_core/`, Claude should have:
+
 1. Root `CLAUDE.md` (always)
 2. `services/CLAUDE.md` (descendant, loaded on first read)
 3. `services/relay_core/CLAUDE.md` (descendant, loaded on first read)
