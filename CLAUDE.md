@@ -155,4 +155,4 @@ This project and its sibling `ibkr_bridge` share the same CLI deploy/destroy/syn
 
 ---
 
-**Maintenance note.** Each directory `CLAUDE.md` has a Copilot mirror at `.github/instructions/<name>.instructions.md` with an `applyTo:` glob. Root rules also mirror to `.github/copilot-instructions.md`. When editing any `CLAUDE.md`, update its mirror in the same commit. See [docs/INSTRUCTION_FILES.md](docs/INSTRUCTION_FILES.md) for the full layout and sync rules.
+**Maintenance note.** Each directory `CLAUDE.md` has a Copilot mirror at `.github/instructions/<slug>.instructions.md` with an `applyTo:` glob — the slug is hyphenated path (`relays-ibkr`), not necessarily a single directory name. Root rules also mirror to `.github/copilot-instructions.md`. When editing any `CLAUDE.md`, update its mirror in the same commit. See [docs/INSTRUCTION_FILES.md](docs/INSTRUCTION_FILES.md) for the full layout and sync rules.

@@ -12,7 +12,7 @@ This repo gives AI agents (Claude Code, GitHub Copilot) layered instructions so 
 ## File layout
 
 ```
-CLAUDE.md                          # Root — always-on rules (~180 lines)
+CLAUDE.md                          # Root — always-on rules (~160 lines)
 docs/
   ARCHITECTURE.md                  # Descriptive prose; not auto-loaded
   INSTRUCTION_FILES.md             # This file

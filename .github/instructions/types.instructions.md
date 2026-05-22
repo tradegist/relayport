@@ -50,4 +50,4 @@ The module barrels `types/typescript/*/index.d.ts` are **auto-generated** by `ge
 
 - **Do not hand-edit generated files.** They carry an `AUTO-GENERATED` header. Edit the source Pydantic model in `services/` instead, then `make types`.
 - The hand-maintained barrel is `types/typescript/index.d.ts`. The module barrels inside `types/typescript/<ns>/index.d.ts` are auto-generated.
-- `schema_gen.py:SCHEMA_MODELS` is keyed by importable module path (`"shared"`, `"relay_core.relay_models"`, `"market_data.models.dividends"`). To export a new model, add it to the relevant entry — that's the only required step. Entries may be `BaseModel` subclasses or discriminated-union `TypeAlias` values.
+- `schema_gen.py:SCHEMA_MODELS` is typed `dict[str, list[str]]` and keyed by importable module path (`"shared"`, `"relay_core.relay_models"`, `"market_data.models.dividends"`). To export a new model, add the symbol's **name as a string** (e.g. `"Fill"`, not `Fill`) to the relevant entry — `schema_gen.py` resolves the name via `getattr(module, name)` at generation time. The resolved value may be a `BaseModel` subclass, a discriminated-union `TypeAlias`, or a class alias.

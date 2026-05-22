@@ -9,26 +9,26 @@ The type packages (`@tradegist/relayport-types` for TS, `relayport-types` for Py
 
 ## The one required step
 
-Add the model to `SCHEMA_MODELS` in `schema_gen.py`, under the correct key.
+Add the **exported name** (as a string) to `SCHEMA_MODELS` in `schema_gen.py`, under the correct key. `SCHEMA_MODELS` is typed `dict[str, list[str]]`; `schema_gen.py` resolves each name via `getattr(module, name)` at generation time — so paste the symbol's name in quotes, not the symbol itself.
 
 ```python
-SCHEMA_MODELS = {
+SCHEMA_MODELS: dict[str, list[str]] = {
     "shared": [
-        Fill,
-        Trade,
-        OptionContract,
-        # NewPrimitiveModel,  # ← add here for CommonFill primitives
+        "Fill",
+        "Trade",
+        "OptionContract",
+        # "NewPrimitiveModel",  # ← add here for CommonFill primitives
     ],
     "relay_core.relay_models": [
-        WebhookPayloadTrades,
-        RunPollResponse,
-        HealthResponse,
-        # NewWebhookPayload,  # ← add here for relay API / notifier contracts
+        "WebhookPayloadTrades",
+        "RunPollResponse",
+        "HealthResponse",
+        # "NewWebhookPayload",  # ← add here for relay API / notifier contracts
     ],
     "market_data.models.dividends": [
-        DividendsUpcomingItem,
-        DividendsUpcomingResponse,
-        # NewMarketDataModel,  # ← add here for market data API
+        "DividendsUpcomingItem",
+        "DividendsUpcomingResponse",
+        # "NewMarketDataModel",  # ← add here for market data API
     ],
 }
 ```
@@ -55,13 +55,15 @@ This regenerates:
 
 If your model conceptually belongs to one of these layers but lives in a different file, **move the model to the right file** instead of registering a new key. Adding new top-level keys requires updating `gen_python_types.py` and `gen_ts_barrels.py` and is rarely correct.
 
-## Supported entry types
+## Supported symbols
 
-`SCHEMA_MODELS` values may be:
+Each string name in `SCHEMA_MODELS` must resolve via `getattr(module, name)` to one of these (Pydantic's `TypeAdapter` handles all three):
 
 - **`BaseModel` subclasses** — generated as `interface Foo` in TS, `class Foo(BaseModel)` in Python.
-- **Discriminated-union `TypeAlias` values** — `WebhookPayload = WebhookPayloadTrades | WebhookPayloadOrders` style. Pydantic's `TypeAdapter` handles both via JSON Schema.
+- **Discriminated-union `TypeAlias` values** — `WebhookPayload = WebhookPayloadTrades | WebhookPayloadOrders` style. The TypeAlias must be defined at module top level so `getattr` finds it.
 - **Class aliases** — `WebhookPayload = WebhookPayloadTrades` produces `export type WebhookPayload = WebhookPayloadTrades` in TypeScript via an `allOf: [$ref]` schema entry.
+
+In all three cases you only paste the **name** (e.g. `"WebhookPayload"`) into `SCHEMA_MODELS` — the symbol itself stays in its source module.
 
 ## Pydantic config that propagates to the generated types
 
