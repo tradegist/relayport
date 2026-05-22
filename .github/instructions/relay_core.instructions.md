@@ -66,7 +66,7 @@ To add a new broker, see the `add-relay-adapter` skill in `.claude/skills/`.
 - `init_db` performs an idempotent `ALTER TABLE` migration (see PRAGMA-gated pattern in root rules).
 - Two write paths: `mark_processed_batch` (exec_id only, poller) and `mark_processed_batch_with_orders` (listener).
 - Two read paths: `get_processed_ids` (exec_id set lookup) and `get_recently_processed_order_ids` (relay-prefixed + time-windowed; ignores NULL-order_id rows so poller-only marks never block subsequent polls).
-- **Dedup key priority**: `ibExecId → transactionId → tradeID`, resolved in `services/relays/ibkr/flex_parser.py` at parse time by setting `Fill.execId`. `services/shared/utilities.py::_dedup_id()` simply returns `fill.execId`.
+- **Dedup key priority**: `ibExecId → transactionId → tradeID`, resolved in `services/relays/ibkr/flex_parser.py` at parse time by setting `Fill.execId`. The engines then dedup directly on `fill.execId` — there is no helper indirection.
 - The poller engine has a separate metadata DB at `META_DB_PATH` (default `/data/meta/<relay>.db`) on a `relay-meta` volume for the timestamp watermark.
 
 ## Routes (`relay_core/routes/`)

@@ -16,7 +16,7 @@ Test conventions and the three-location model layout. Service-specific rules liv
 
 - **`services/shared/models.py`** defines the primitives. The `__init__.py` barrel re-exports so `from shared import Fill` works.
 - **`services/relay_core/notifier/models.py`** is the authoritative home for outbound webhook payload contracts. Add new payload variants here.
-- **`services/shared/utilities.py`** contains internal helpers (`aggregate_fills`, `normalize_order_type`, `normalize_asset_class`, `_dedup_id`). Not re-exported by model shims.
+- **`services/shared/utilities.py`** contains the single internal helper `aggregate_fills` (orderId-grouped VWAP/cost/fee aggregation). Per-relay normalisation helpers (`normalize_order_type`, `normalize_asset_class`) live in each adapter package (e.g. `services/relays/ibkr/utilities.py`, `services/relays/kraken/ws_parser.py`), not in `shared/`. Engines dedup directly on `fill.execId` — there is no `_dedup_id()` helper.
 - **Model shims only re-export models and types.** Utility functions must be imported directly from the owning module: `from shared import aggregate_fills`. Never re-export functions through model shims.
 - All external-contract models use `ConfigDict(extra="forbid")` for strict validation.
 - After modifying any of the three model files, run `make types` to regenerate TypeScript + Python type packages.

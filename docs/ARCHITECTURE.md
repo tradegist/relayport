@@ -79,7 +79,7 @@ services/                  # Business-logic services
       kraken_types.py      # TypedDicts for raw API shapes
   shared/                  # Shared models + utilities (no container)
     models.py              # Fill, Trade, BuySell, RelayName, etc.
-    utilities.py           # aggregate_fills, normalize_*, _dedup_id
+    utilities.py           # aggregate_fills (only) — per-relay normalisers live in each adapter
     time_format.py         # normalize_timestamp() — ISO-8601 → canonical UTC
   debug/                   # Debug webhook inbox service
     debug_app.py
