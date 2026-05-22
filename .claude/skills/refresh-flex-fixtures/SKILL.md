@@ -14,13 +14,14 @@ make ibkr-flex-refresh           # primary account
 make ibkr-flex-refresh S=_2      # second account (uses IBKR_FLEX_QUERY_ID_2)
 ```
 
-This runs `flex_dump.py` to fetch a live response into `fixtures/raw.xml` (gitignored), auto-detects the report type (Activity Flex vs Trade Confirmation), and runs `fixtures/sanitize.py` to write the appropriate committed fixture file.
+This runs `flex_dump.py` to fetch a live response into `services/relays/ibkr/fixtures/raw.xml` (gitignored), auto-detects the report type (Activity Flex vs Trade Confirmation), and runs `services/relays/ibkr/fixtures/sanitize.py` to write the appropriate committed fixture file.
 
 ## Two-step (debugging)
 
 ```bash
-make ibkr-flex-dump              # writes fixtures/raw.xml (gitignored)
-python -m relays.ibkr.fixtures.sanitize fixtures/raw.xml --out fixtures/<target>.xml
+make ibkr-flex-dump              # writes services/relays/ibkr/fixtures/raw.xml (gitignored)
+python -m relays.ibkr.fixtures.sanitize services/relays/ibkr/fixtures/raw.xml \
+    --out services/relays/ibkr/fixtures/<target>.xml
 ```
 
 ## What `sanitize.py` does
@@ -37,10 +38,10 @@ Two files, both committed:
 
 ## Things to verify before committing
 
-- `grep -E '(U[0-9]{7,}|[0-9]{15,})' fixtures/<target>.xml` should return only synthetic IDs (`UXXXXXXX`, padded synthetic numbers).
+- `grep -E '(U[0-9]{7,}|[0-9]{15,})' services/relays/ibkr/fixtures/<target>.xml` should return only synthetic IDs (`UXXXXXXX`, padded synthetic numbers).
 - The fixture should still parse: run `make test` — IBKR parser tests load these fixtures and exercise the full parsing path.
 - The fixture size: rough sanity check `wc -l` (Activity ~few hundred lines, Trade Confirmation similar).
-- `git status` should show only the committed fixture changed, not `fixtures/raw.xml`.
+- `git status` should show only the committed fixture changed, not `services/relays/ibkr/fixtures/raw.xml`.
 
 ## When to add a new fixture
 

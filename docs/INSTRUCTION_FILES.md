@@ -50,19 +50,41 @@ types/CLAUDE.md
 
 ## Maintenance contract
 
-Each `<dir>/CLAUDE.md` has a paired `.github/instructions/<slug>.instructions.md` with the **same body** plus a YAML frontmatter:
+Each `<dir>/CLAUDE.md` has a paired `.github/instructions/<slug>.instructions.md` covering the **same rules** plus a YAML frontmatter:
 
 ```markdown
 ---
 applyTo: "<glob matching the same files>"
 ---
 
-<body, same as the CLAUDE.md>
+<rules, same content as the CLAUDE.md — see "Allowed divergence" below>
 ```
 
-**When editing any `CLAUDE.md`, update its mirror in the same commit.** Same for the root `CLAUDE.md` ↔ `.github/copilot-instructions.md` pair.
+**When editing any `CLAUDE.md`, update its mirror in the same commit.** Same for the root `CLAUDE.md` ↔ `.github/copilot-instructions.md` pair. The rule **content** must stay in sync; presentation may differ slightly.
 
-Sanity check during PR review: `diff <(tail -n +1 services/X/CLAUDE.md) <(awk '/^---/{c++; next} c==2' .github/instructions/X.instructions.md)` should be empty (modulo the frontmatter).
+### Allowed divergence
+
+These differences are intentional and don't violate the sync contract:
+
+1. **Cross-references.** `CLAUDE.md` files use Markdown links to other CLAUDE.md files (`[../CLAUDE.md](../CLAUDE.md)`); Copilot mirrors reference siblings by name (`services.instructions.md`) since the directory structure differs.
+2. **Glob breadth.** `applyTo:` globs may legitimately cover files outside the CLAUDE.md's directory (e.g. `cli.instructions.md` applies to `Makefile`, `docker-compose*.yml`, and `terraform/**` in addition to `cli/**`, because those files share the same deploy rules). Document such inclusions inline.
+3. **Skill pointers.** CLAUDE.md may link to a Skill via Markdown link (`[add-relay-adapter](.claude/skills/add-relay-adapter/SKILL.md)`); the Copilot mirror references it by name only, since Skills are a Claude-specific feature.
+
+### What must stay identical
+
+- Every **rule** (every bullet starting with **"…"**, every numbered procedure step, every code block enforcing a pattern) must appear in both files with the same wording.
+- Tables of facts (env vars, error codes, file-to-output mappings) must match row for row.
+
+### Sanity check during PR review
+
+A simple grep is more useful than a strict diff: confirm both files have the same set of rule-bullets:
+
+```bash
+diff <(grep -E '^- \*\*' services/X/CLAUDE.md) \
+     <(grep -E '^- \*\*' .github/instructions/X.instructions.md)
+```
+
+Empty diff = rules match. Anything else = a rule drifted between the two.
 
 ## What goes where
 

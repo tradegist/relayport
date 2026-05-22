@@ -15,7 +15,7 @@ For the rule "to export a new model to TypeScript, add it to `schema_gen.py:SCHE
 | `services/shared/models.py` | `types/typescript/shared/types.d.ts` | `types/python/relayport_types/shared.py` |
 | `services/relay_core/relay_models.py` | `types/typescript/relay_api/types.d.ts` | `types/python/relayport_types/relay_api.py` |
 | `services/relay_core/notifier/models.py` | (included in `relay_api/`) | `types/python/relayport_types/notifier/models.py` |
-| `services/market_data/models/dividends.py` | `types/typescript/market_data_api/types.d.ts` | (n/a — service-internal) |
+| `services/market_data/models/dividends.py` | `types/typescript/market_data_api/types.d.ts` | `types/python/relayport_types/market_data_api.py` (plus any auto-detected `market_data.<X>` sub-modules) |
 
 Run `make types` after any model change.
 

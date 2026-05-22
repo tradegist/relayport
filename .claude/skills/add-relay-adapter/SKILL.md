@@ -7,7 +7,7 @@ description: Step-by-step procedure to add a new broker relay adapter (after IBK
 
 Use the existing `ibkr` and `kraken` relays as reference implementations. IBKR demonstrates a complex adapter (XML polling + bridge WS with two event types); Kraken demonstrates a simpler one (JSON REST polling + native WS with token-based auth).
 
-## 1. Update shared types ([services/shared/models.py](services/shared/models.py))
+## 1. Update shared types (`services/shared/models.py`)
 
 - Add the relay name to `RelayName` (e.g. `Literal["ibkr", "kraken", "newbroker"]`).
 - Add any new source identifiers to `Source` (e.g. `"newbroker_rest"`, `"newbroker_ws"`).
@@ -88,5 +88,5 @@ Add the relay's env vars, webhook payload examples, broker-specific setup. If th
 
 ## Cross-cutting conventions to read first
 
-- **Fee normalisation** — see [services/relays/CLAUDE.md](services/relays/CLAUDE.md): prefer `*_usd_equiv`, single-asset only, `abs()` per entry.
+- **Fee normalisation** — see `services/relays/CLAUDE.md`: prefer `*_usd_equiv`, single-asset only, `abs()` per entry.
 - **Timestamp normalisation** — same file: two-layer split (relay-owned `<format>_to_iso` + shared `normalize_timestamp`).

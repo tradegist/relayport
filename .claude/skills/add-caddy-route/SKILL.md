@@ -11,7 +11,7 @@ Adding a new service that should be reachable via the public `SITE_DOMAIN` requi
 
 1. **Add the `.caddy` snippet** under `infra/caddy/sites/<name>.caddy`. Use `relayport.caddy`, `debug.caddy`, or `market_data.caddy` as a template. Each snippet defines `handle /<prefix>/*` blocks inside the implicit `{$SITE_DOMAIN}` site.
 
-2. **Add the prefix to `route_prefixes`** in [cli/__init__.py](cli/__init__.py). The CLI's `_validate_site_snippet_routes` checks every `handle` directive against this list during shared deploy — if a new snippet's prefix isn't listed, shared deployments abort.
+2. **Add the prefix to `route_prefixes`** in `cli/__init__.py`. The CLI's `_validate_site_snippet_routes` checks every `handle` directive against this list during shared deploy — if a new snippet's prefix isn't listed, shared deployments abort.
 
 3. **Add the token to `required_env`** in `cli/__init__.py` if the service has its own auth token (like `MD_API_TOKEN`). The CLI's pre-deploy validation refuses to push when required tokens are missing or empty.
 

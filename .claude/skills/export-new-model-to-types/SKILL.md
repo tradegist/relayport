@@ -9,7 +9,7 @@ The type packages (`@tradegist/relayport-types` for TS, `relayport-types` for Py
 
 ## The one required step
 
-Add the model to `SCHEMA_MODELS` in [schema_gen.py](schema_gen.py), under the correct key.
+Add the model to `SCHEMA_MODELS` in `schema_gen.py`, under the correct key.
 
 ```python
 SCHEMA_MODELS = {

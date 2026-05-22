@@ -84,7 +84,7 @@ make pause     # Snapshot + delete droplet (save costs)
 make resume    # Restore from snapshot
 make poll      # Trigger immediate poll (RELAY=ibkr, IDX=1)
 make watermark-reset    # Reset timestamp watermark [RELAY=ibkr or empty] [ENV=local]
-make ibkr-flex-dump     # Dump live IBKR Flex XML to fixtures/raw.xml
+make ibkr-flex-dump     # Dump live IBKR Flex XML to services/relays/ibkr/fixtures/raw.xml
 make ibkr-flex-refresh  # Fetch live Flex, sanitize, write fixture
 make e2e       # Run E2E tests (starts/stops stack)
 make lint      # Run ruff linter (FIX=1 to auto-fix)
