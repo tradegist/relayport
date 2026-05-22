@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 _Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 
 AUTH_PREFIX = "/v1/market-data"
+_PUBLIC_PATHS = frozenset({f"{AUTH_PREFIX}/health"})
 
 
 @web.middleware
@@ -55,7 +56,7 @@ async def auth_middleware(
     handler: _Handler,
 ) -> web.StreamResponse:
     """Verify Bearer token on all routes under AUTH_PREFIX."""
-    if request.path.startswith(f"{AUTH_PREFIX}/"):
+    if request.path.startswith(f"{AUTH_PREFIX}/") and request.path not in _PUBLIC_PATHS:
         api_token = _get_api_token()
         if not api_token:
             raise AppError("MD_API_TOKEN not configured", ErrorCode.INTERNAL_ERROR)

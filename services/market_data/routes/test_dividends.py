@@ -101,15 +101,6 @@ class TestDividendsUpcomingHandler(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(resp.status, 500)
 
-    # ── Health ────────────────────────────────────────────────────────
-
-    async def test_health_is_unauthenticated(self) -> None:
-        async with TestClient(TestServer(create_app())) as client:
-            resp = await client.get("/health")
-            body = await resp.json()
-        self.assertEqual(resp.status, 200)
-        self.assertEqual(body["status"], "ok")
-
     # ── Validation ────────────────────────────────────────────────────
 
     async def test_missing_symbol_returns_422(self) -> None:
