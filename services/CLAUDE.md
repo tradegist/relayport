@@ -4,11 +4,11 @@ Test conventions and the three-location model layout. Service-specific rules liv
 
 ## Models (Three Locations)
 
-| File | Domain | Contains |
-|---|---|---|
-| `services/shared/models.py` | CommonFill primitives | `Fill`, `Trade`, `OptionContract`, `BuySell`, `AssetClass`, `OrderType`, `Source`, `RelayName` |
-| `services/relay_core/notifier/models.py` | Notifier payload (outbound) | `WebhookPayloadTrades`, `WebhookPayload` |
-| `services/relay_core/relay_models.py` | Relay API (outbound) | Re-exports notifier payload + `RunPollResponse`, `HealthResponse` |
+| File                                     | Domain                      | Contains                                                                                       |
+| ---------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------- |
+| `services/shared/models.py`              | CommonFill primitives       | `Fill`, `Trade`, `OptionContract`, `BuySell`, `AssetClass`, `OrderType`, `Source`, `RelayName` |
+| `services/relay_core/notifier/models.py` | Notifier payload (outbound) | `WebhookPayloadTrades`, `WebhookPayload`                                                       |
+| `services/relay_core/relay_models.py`    | Relay API (outbound)        | Re-exports notifier payload + `RunPollResponse`, `HealthResponse`                              |
 
 - **`services/shared/models.py`** defines the primitives. The `__init__.py` barrel re-exports so `from shared import Fill` works.
 - **`services/relay_core/notifier/models.py`** is the authoritative home for outbound webhook payload contracts. Add new payload variants here.
