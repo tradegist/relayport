@@ -130,6 +130,7 @@ CORE_MODULES: dict[str, str] = {
     "destroy": "cli.core.destroy",
     "pause": "cli.core.pause",
     "resume": "cli.core.resume",
+    "sanity-check-deployment": "cli.core.sanity_check",
     "sync": "cli.core.sync",
 }
 
@@ -142,6 +143,8 @@ def register_parsers(sub: "argparse._SubParsersAction[argparse.ArgumentParser]")
     sub.add_parser("destroy", help="Permanently destroy all infrastructure")
     sub.add_parser("pause", help="Snapshot droplet + delete (save costs)")
     sub.add_parser("resume", help="Restore droplet from snapshot")
+    sub.add_parser("sanity-check-deployment",
+                   help="Run the claude sanity check against the droplet (no sync/deploy)")
 
     p = sub.add_parser("sync", help="Push .env + restart services")
     p.add_argument("services", nargs="*", help="Services to restart (default: all)")

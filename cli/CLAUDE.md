@@ -75,6 +75,7 @@ Controlled by `DEPLOY_MODE` in `.env.droplet` (required, validated before any de
 - **Best-effort only.** Failures never abort the deploy. Skipped gracefully when: `claude` CLI not on PATH, network/auth/rate-limit errors (non-zero exit), or the agent hangs (120s timeout).
 - **Opt-out:** `SKIP_POST_DEPLOY_CHECK=1` env var, `--skip-post-check` CLI flag, or `make sync SKIP_POST_CHECK=1` / `make deploy SKIP_POST_CHECK=1`.
 - Plain `make sync` (without `LOCAL_FILES=1`) does not trigger the check — only file-syncing deploys do.
+- **Run on demand:** `make sanity-check-deployment` (or `python3 -m cli sanity-check-deployment`) runs the same check without a sync/deploy. Useful for ad-hoc "is the droplet OK right now?" probes. Ignores the `SKIP_POST_DEPLOY_CHECK` env var — the operator explicitly asked for it.
 
 ## Build & Deploy commands
 
@@ -86,6 +87,7 @@ make sync SKIP_POST_CHECK=1  # skip the post-deploy claude sanity check
 make destroy   # Terraform destroy
 make pause     # Snapshot + delete droplet (save costs)
 make resume    # Restore from snapshot
+make sanity-check-deployment  # Run the claude sanity check against the droplet
 make poll      # Trigger immediate poll (RELAY=ibkr, IDX=1)
 make watermark-reset    # Reset timestamp watermark [RELAY=ibkr or empty] [ENV=local]
 make ibkr-flex-dump     # Dump live IBKR Flex XML to services/relays/ibkr/fixtures/raw.xml

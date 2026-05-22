@@ -60,6 +60,9 @@ pause: ## Snapshot droplet + delete (save costs)
 resume: ## Restore droplet from snapshot
 	$(PYTHON) -m cli resume
 
+sanity-check-deployment: ## Run the claude sanity check against the droplet
+	$(PYTHON) -m cli sanity-check-deployment
+
 sync: ## Push .env + restart (S=service B=1 LOCAL_FILES=1 SKIP_E2E=1 SKIP_POST_CHECK=1 ENV=local)
 	@$(_RESOLVE_ENV) \
 	if [ "$$env" = "local" ]; then \
