@@ -283,6 +283,32 @@ def shared_network_compose_env() -> str:
     return f"SHARED_NETWORK='{net}' " if net else ""
 
 
+def compose_invocation() -> tuple[str, str]:
+    """Return ``(env_prefix, file_args)`` matching how deploy/sync invoke compose.
+
+    ``env_prefix`` is the shell ``KEY='value' KEY2='value2' `` prefix.
+    ``file_args`` is the ``-f docker-compose.yml [-f overlay.yml ...] `` string
+    (or empty when no overlays apply).
+
+    Mirrors the construction in ``deploy.py`` / ``sync.py`` so consumers that
+    enumerate containers or tail logs after a deploy (e.g. ``sanity_check``)
+    see the same set of services as the deploy-time ``up`` command — shared-mode
+    profiles, shared-network overlay, and ``DEBUG_REPLICAS`` are all honoured.
+    """
+    cfg = config()
+    overlays = ""
+    if is_shared():
+        overlays += "-f docker-compose.shared.yml "
+    overlays += shared_network_compose_flag()
+    file_args = f"-f docker-compose.yml {overlays}" if overlays else ""
+
+    profiles = cfg.compose_profiles()
+    compose_env = cfg.compose_env()
+    net_env = shared_network_compose_env()
+    env_prefix = f"{compose_env}{net_env}COMPOSE_PROFILES='{profiles}' "
+    return env_prefix, file_args
+
+
 def ensure_shared_network(droplet_ip: str) -> None:
     """Idempotently create the SHARED_NETWORK on the droplet.
 
@@ -311,14 +337,21 @@ def ssh_cmd(
     command: str,
     strict_host_check: bool = True,
     capture: bool = False,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     cmd = ["ssh", "-i", ssh_key_path()]
     if not strict_host_check:
         cmd += ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5"]
+    if timeout is not None:
+        # BatchMode=yes makes SSH fail fast on any prompt (auth, host-key)
+        # rather than hanging on stdin. ConnectTimeout bounds the TCP/handshake
+        # phase separately from the overall subprocess timeout.
+        connect_timeout = max(1, min(int(timeout), 30))
+        cmd += ["-o", f"ConnectTimeout={connect_timeout}", "-o", "BatchMode=yes"]
     cmd += [f"root@{ip}", command]
     if capture:
-        return subprocess.run(cmd, check=True, capture_output=True, text=True)
-    return subprocess.run(cmd, check=True, text=True)
+        return subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(cmd, check=True, text=True, timeout=timeout)
 
 
 def scp_file(

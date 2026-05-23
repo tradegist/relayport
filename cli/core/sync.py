@@ -178,7 +178,8 @@ def run(args: argparse.Namespace) -> None:
                 f"COMPOSE_PROFILES='{profiles}' "
                 f"docker compose {compose_files}up -d {build}--force-recreate {svc_str}")
 
-    print("Done.")
-
     if args.local_files:
+        print("Sync complete; running post-deploy sanity check...")
         post_deploy_sanity_check(droplet_ip, skip_flag=args.skip_post_check)
+
+    print("Done.")

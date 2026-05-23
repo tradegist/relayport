@@ -1,21 +1,33 @@
 import argparse
-import os
 import re
 import shutil
 import subprocess
 
-from cli.core import config, env, load_env, ssh_cmd
+from cli.core import (
+    compose_invocation,
+    config,
+    die,
+    env,
+    load_env,
+    ssh_cmd,
+)
 
 _LOG_TAIL = 100
 _LOG_SINCE = "5m"
 _CLAUDE_TIMEOUT_SECONDS = 60
+_SSH_TIMEOUT_SECONDS = 30
 # Hard cap on droplet output forwarded to claude. `docker compose logs --tail N`
 # is per-service, so total volume scales with service count. The cap bounds LLM
 # context size and limits the blast radius if a misbehaving service spams logs
 # with secrets the project rules say must never be logged.
 _MAX_PROMPT_CHARS = 50_000
+# Skip values shorter than this when collecting secrets to redact — short
+# common words ("local", "prod", "true") would cause noisy false positives.
+_MIN_SECRET_LEN = 6
 
 _VERDICT_RE = re.compile(r"^\s*\[(GREEN|YELLOW|RED)\]")
+_BEARER_RE = re.compile(r"(?i)bearer\s+[A-Za-z0-9_.\-+/=]{8,}")
+_AUTH_HEADER_RE = re.compile(r"(?i)(authorization:\s*)[^\n]+")
 
 _SUMMARIZE_PROMPT = """\
 You are reviewing the output of post-deploy diagnostic commands run on a droplet.
@@ -34,26 +46,84 @@ No follow-up questions, no offers to help further. Stop after the verdict.
 
 
 def skip_post_deploy_check() -> bool:
-    """Return True when SKIP_POST_DEPLOY_CHECK=1 is set in the environment."""
-    return os.environ.get("SKIP_POST_DEPLOY_CHECK", "").strip() == "1"
+    """Return True when ``SKIP_POST_DEPLOY_CHECK=1`` is set in the environment.
+
+    Strict: only "", "0", "1" are accepted. A typo like ``true`` or ``yes``
+    would otherwise silently fail to skip, hiding the misconfiguration; die
+    with a clear message instead.
+    """
+    raw = env("SKIP_POST_DEPLOY_CHECK", "").strip()
+    if raw not in ("", "0", "1"):
+        die(f"SKIP_POST_DEPLOY_CHECK must be '0', '1', or unset (got: {raw!r})")
+    return raw == "1"
+
+
+def _collect_secrets_to_redact() -> set[str]:
+    """Read values from project .env files for redaction in droplet output.
+
+    Trivial values (short strings, pure numbers, common keywords) are skipped
+    so we don't accidentally redact harmless tokens like "local" or "1".
+    """
+    cfg = config()
+    skip_words = {"true", "false", "yes", "no", "local", "prod", "standalone", "shared"}
+    secrets: set[str] = set()
+    for name in (".env", ".env.droplet", ".env.relays"):
+        path = cfg.project_dir / name
+        if not path.exists():
+            continue
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            _, _, value = line.partition("=")
+            value = value.strip().strip('"').strip("'")
+            if (
+                len(value) < _MIN_SECRET_LEN
+                or value.isdigit()
+                or value.lower() in skip_words
+            ):
+                continue
+            secrets.add(value)
+    return secrets
+
+
+def _redact(text: str, secrets: set[str]) -> str:
+    """Replace known secret values and common auth patterns with [REDACTED]."""
+    # Sort longest-first so we don't leave a partial match behind when one
+    # secret is a prefix of another (e.g. a token that contains a shorter URL).
+    for secret in sorted(secrets, key=len, reverse=True):
+        text = text.replace(secret, "[REDACTED]")
+    text = _BEARER_RE.sub("Bearer [REDACTED]", text)
+    text = _AUTH_HEADER_RE.sub(r"\1[REDACTED]", text)
+    return text
 
 
 def _fetch_droplet_state(droplet_ip: str) -> str | None:
-    """Run `docker compose ps` and bounded `docker compose logs` over SSH.
+    """Run ``docker compose ps`` and bounded ``docker compose logs`` over SSH.
 
-    Returns the captured output, or None on SSH failure. `--tail` is per
-    service, so the full output is also capped to ``_MAX_PROMPT_CHARS`` in
-    the caller before being sent to claude.
+    Uses the same compose overlays / env vars / profiles as deploy and sync
+    via :func:`compose_invocation` — otherwise shared-mode and shared-network
+    services would be invisible to the sanity check and produce false RED
+    verdicts.
+
+    Returns the captured output, or None on SSH failure or timeout. The output
+    is bounded by ``--tail`` / ``--since`` at the remote end and then by
+    ``_MAX_PROMPT_CHARS`` in the caller; redaction runs between the two.
     """
     cfg = config()
+    env_prefix, file_args = compose_invocation()
     remote_cmd = (
         f"cd {cfg.remote_dir} && "
-        f"echo '=== docker compose ps ===' && docker compose ps && "
+        f"echo '=== docker compose ps ===' && "
+        f"{env_prefix}docker compose {file_args}ps && "
         f"echo && echo '=== docker compose logs --since {_LOG_SINCE} --tail {_LOG_TAIL} (per service) ===' && "
-        f"docker compose logs --since {_LOG_SINCE} --tail {_LOG_TAIL} --no-color"
+        f"{env_prefix}docker compose {file_args}logs --since {_LOG_SINCE} --tail {_LOG_TAIL} --no-color"
     )
     try:
-        result = ssh_cmd(droplet_ip, remote_cmd, capture=True)
+        result = ssh_cmd(droplet_ip, remote_cmd, capture=True, timeout=_SSH_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        print(f"[sanity-check] SSH timed out after {_SSH_TIMEOUT_SECONDS}s — verify the droplet manually")
+        return None
     except subprocess.CalledProcessError as e:
         first_err = (e.stderr or "").strip().splitlines()[:1]
         reason = first_err[0] if first_err else f"exit {e.returncode}"
@@ -89,12 +159,17 @@ def _print_verdict(output: str) -> None:
 def run_sanity_check(droplet_ip: str) -> None:
     """Run the sanity check against the droplet.
 
-    Gathers ``docker compose ps`` and bounded recent logs over SSH (in Python),
-    truncates to ``_MAX_PROMPT_CHARS``, then feeds the result to a
-    non-interactive ``claude --print`` call (via stdin, to avoid argv size
-    limits) for summarization. Claude runs with no tools — pure text-in /
-    text-out, so there is no permission bypass and no risk of agent-driven
-    shell execution.
+    Flow:
+
+    1. SSH to the droplet (Python, with timeout) and capture ``docker compose ps``
+       plus bounded recent logs, using the same compose overlays as deploy/sync.
+    2. Redact known secret values (from ``.env*`` files) and common auth
+       patterns (``Bearer``, ``Authorization:``) from the captured output.
+    3. Truncate to ``_MAX_PROMPT_CHARS`` and pipe the result via stdin to a
+       non-interactive ``claude --print`` call.
+
+    Claude runs with no tools — pure text-in / text-out, so there is no
+    permission bypass and no agent-driven shell execution.
 
     Best-effort: any failure prints a one-line warning and returns.
     """
@@ -102,12 +177,13 @@ def run_sanity_check(droplet_ip: str) -> None:
         print("[sanity-check] claude CLI not installed — skipping")
         return
 
-    droplet_output = _fetch_droplet_state(droplet_ip)
-    if droplet_output is None:
+    raw_output = _fetch_droplet_state(droplet_ip)
+    if raw_output is None:
         return
 
+    redacted = _redact(raw_output, _collect_secrets_to_redact())
     prompt = _SUMMARIZE_PROMPT.format(
-        droplet_output=_truncate(droplet_output, _MAX_PROMPT_CHARS),
+        droplet_output=_truncate(redacted, _MAX_PROMPT_CHARS),
     )
 
     print("Running sanity check (claude summarization)...")
@@ -153,7 +229,7 @@ def post_deploy_sanity_check(droplet_ip: str, *, skip_flag: bool) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    """CLI entry point for `python -m cli sanity-check-deployment`.
+    """CLI entry point for ``python -m cli sanity-check-deployment``.
 
     Standalone runs ignore SKIP_POST_DEPLOY_CHECK — the operator explicitly
     asked for the check.
