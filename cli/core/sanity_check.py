@@ -6,7 +6,6 @@ import subprocess
 from cli.core import (
     compose_invocation,
     config,
-    die,
     env,
     load_env,
     ssh_cmd,
@@ -48,13 +47,18 @@ No follow-up questions, no offers to help further. Stop after the verdict.
 def skip_post_deploy_check() -> bool:
     """Return True when ``SKIP_POST_DEPLOY_CHECK=1`` is set in the environment.
 
-    Strict: only "", "0", "1" are accepted. A typo like ``true`` or ``yes``
-    would otherwise silently fail to skip, hiding the misconfiguration; die
-    with a clear message instead.
+    Only "", "0", "1" are valid. Anything else prints a warning and is
+    treated as not-set — the post-deploy hook is best-effort and must not
+    abort ``deploy`` / ``sync`` over a typo like ``SKIP_POST_DEPLOY_CHECK=true``.
+    The warning still surfaces the misconfiguration to the operator.
     """
     raw = env("SKIP_POST_DEPLOY_CHECK", "").strip()
     if raw not in ("", "0", "1"):
-        die(f"SKIP_POST_DEPLOY_CHECK must be '0', '1', or unset (got: {raw!r})")
+        print(
+            f"[sanity-check] ignoring invalid SKIP_POST_DEPLOY_CHECK={raw!r} — "
+            "must be '0', '1', or unset"
+        )
+        return False
     return raw == "1"
 
 
@@ -181,7 +185,15 @@ def run_sanity_check(droplet_ip: str) -> None:
     if raw_output is None:
         return
 
-    redacted = _redact(raw_output, _collect_secrets_to_redact())
+    # Redaction reads `.env*` files and runs regex; an I/O or encoding error
+    # must not crash a best-effort hook AND must not leak unredacted output.
+    # Skip the check on redaction failure rather than send the raw payload.
+    try:
+        redacted = _redact(raw_output, _collect_secrets_to_redact())
+    except Exception as e:
+        print(f"[sanity-check] redaction failed, skipping check: {e}")
+        return
+
     prompt = _SUMMARIZE_PROMPT.format(
         droplet_output=_truncate(redacted, _MAX_PROMPT_CHARS),
     )

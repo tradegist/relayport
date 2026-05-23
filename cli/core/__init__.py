@@ -340,14 +340,25 @@ def ssh_cmd(
     timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     cmd = ["ssh", "-i", ssh_key_path()]
+    # ConnectTimeout is set in exactly one place to avoid emitting the option
+    # twice when both branches apply: ``timeout`` wins (caller-supplied),
+    # then ``strict_host_check=False`` falls back to the 5s default for new
+    # droplets, otherwise leave it to SSH's default.
+    if timeout is not None:
+        connect_timeout: int | None = max(1, min(int(timeout), 30))
+    elif not strict_host_check:
+        connect_timeout = 5
+    else:
+        connect_timeout = None
     if not strict_host_check:
-        cmd += ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5"]
+        cmd += ["-o", "StrictHostKeyChecking=no"]
+    if connect_timeout is not None:
+        cmd += ["-o", f"ConnectTimeout={connect_timeout}"]
     if timeout is not None:
         # BatchMode=yes makes SSH fail fast on any prompt (auth, host-key)
-        # rather than hanging on stdin. ConnectTimeout bounds the TCP/handshake
-        # phase separately from the overall subprocess timeout.
-        connect_timeout = max(1, min(int(timeout), 30))
-        cmd += ["-o", f"ConnectTimeout={connect_timeout}", "-o", "BatchMode=yes"]
+        # rather than hanging on stdin — only enabled when timeout is set, so
+        # interactive `make ssh` users still get prompted normally.
+        cmd += ["-o", "BatchMode=yes"]
     cmd += [f"root@{ip}", command]
     if capture:
         return subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout)
