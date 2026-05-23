@@ -355,8 +355,15 @@ def ssh_cmd(
       which auto-accepts UNKNOWN host keys on first connect but still rejects
       CHANGED keys (MITM protection intact). Use this for non-interactive
       callers that need to work on first contact (e.g. post-deploy sanity
-      check). Mutually exclusive with ``strict_host_check=False``.
+      check). Mutually exclusive with ``strict_host_check=False`` — passing
+      both is a caller bug and raises ``ValueError`` rather than silently
+      letting ``=no`` win and downgrading host-key verification.
     """
+    if accept_new_host_keys and not strict_host_check:
+        raise ValueError(
+            "ssh_cmd: accept_new_host_keys=True and strict_host_check=False "
+            "are mutually exclusive — pick one host-key policy"
+        )
     cmd = ["ssh", "-i", ssh_key_path()]
     # ConnectTimeout: caller-supplied timeout wins; else the 5s default for the
     # loose-host-check path; else SSH's default. Single source so the option is
