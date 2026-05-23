@@ -71,7 +71,7 @@ Controlled by `DEPLOY_MODE` in `.env.droplet` (required, validated before any de
 
 ## Post-Deploy Sanity Check
 
-- After every `make sync LOCAL_FILES=1` and `make deploy`, the CLI runs a best-effort sanity check: SSHes into the droplet from Python (using the existing `ssh_cmd` helper), captures `docker compose ps` + recent logs (`--since 5m --tail 100` — note `--tail` is **per service**, so the total is capped to 50 KB before being sent to claude), then pipes the captured text via stdin to `claude --print --model claude-sonnet-4-6` for summarization. Claude runs with **no tools** — pure text-in / text-out, so there's no permission bypass and no risk of agent-driven shell execution.
+- After every `make sync LOCAL_FILES=1` and `make deploy`, the CLI runs a best-effort sanity check: SSHes into the droplet from Python (using the existing `ssh_cmd` helper), captures `docker compose ps` + recent logs (`--since 5m --tail 100` — note `--tail` is **per service**, so the total is capped to 50,000 characters before being sent to claude), then pipes the captured text via stdin to `claude --print --model claude-sonnet-4-6` for summarization. Claude runs with **no tools** — pure text-in / text-out, so there's no permission bypass and no risk of agent-driven shell execution.
 - **Best-effort only.** Failures never abort the deploy. Skipped gracefully when: `claude` CLI not on PATH, SSH fails, network/auth/rate-limit errors (non-zero exit), or the claude call hangs (60s timeout).
 - **Opt-out:** `SKIP_POST_DEPLOY_CHECK=1` env var, `--skip-post-check` CLI flag, or `make sync SKIP_POST_CHECK=1` / `make deploy SKIP_POST_CHECK=1`.
 - Plain `make sync` (without `LOCAL_FILES=1`) does not trigger the check — only file-syncing deploys do.

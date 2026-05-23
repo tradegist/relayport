@@ -352,10 +352,18 @@ def ssh_cmd(
         connect_timeout = None
     if not strict_host_check:
         cmd += ["-o", "StrictHostKeyChecking=no"]
+    elif timeout is not None:
+        # BatchMode=yes (added below) makes SSH fail on *any* prompt, including
+        # the first-contact host-key confirmation. accept-new lets SSH auto-
+        # accept unknown keys on first connect (then save them for future
+        # validation), so a first-time sanity check against a fresh droplet
+        # works without an interactive prompt — but a *changed* key still
+        # fails (which is what we want for MITM detection).
+        cmd += ["-o", "StrictHostKeyChecking=accept-new"]
     if connect_timeout is not None:
         cmd += ["-o", f"ConnectTimeout={connect_timeout}"]
     if timeout is not None:
-        # BatchMode=yes makes SSH fail fast on any prompt (auth, host-key)
+        # BatchMode=yes makes SSH fail fast on any prompt (auth, etc.)
         # rather than hanging on stdin — only enabled when timeout is set, so
         # interactive `make ssh` users still get prompted normally.
         cmd += ["-o", "BatchMode=yes"]
