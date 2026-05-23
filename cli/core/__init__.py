@@ -338,33 +338,46 @@ def ssh_cmd(
     strict_host_check: bool = True,
     capture: bool = False,
     timeout: float | None = None,
+    accept_new_host_keys: bool = False,
 ) -> subprocess.CompletedProcess[str]:
+    """Run ``ssh -i <key> root@<ip> <command>``.
+
+    Knobs (orthogonal — each controls one concern):
+
+    - ``strict_host_check=False`` adds ``StrictHostKeyChecking=no`` (used by
+      new-droplet deploys where the host key isn't known yet and TOFU is
+      acceptable).
+    - ``timeout`` bounds the subprocess and adds ``BatchMode=yes`` +
+      ``ConnectTimeout`` so a stalled connection or interactive prompt can't
+      block the caller. Default is no timeout (interactive callers stay
+      interactive).
+    - ``accept_new_host_keys=True`` adds ``StrictHostKeyChecking=accept-new``,
+      which auto-accepts UNKNOWN host keys on first connect but still rejects
+      CHANGED keys (MITM protection intact). Use this for non-interactive
+      callers that need to work on first contact (e.g. post-deploy sanity
+      check). Mutually exclusive with ``strict_host_check=False``.
+    """
     cmd = ["ssh", "-i", ssh_key_path()]
-    # ConnectTimeout is set in exactly one place to avoid emitting the option
-    # twice when both branches apply: ``timeout`` wins (caller-supplied),
-    # then ``strict_host_check=False`` falls back to the 5s default for new
-    # droplets, otherwise leave it to SSH's default.
+    # ConnectTimeout: caller-supplied timeout wins; else the 5s default for the
+    # loose-host-check path; else SSH's default. Single source so the option is
+    # never emitted twice.
     if timeout is not None:
         connect_timeout: int | None = max(1, min(int(timeout), 30))
     elif not strict_host_check:
         connect_timeout = 5
     else:
         connect_timeout = None
+    # Host-key handling: three mutually exclusive modes.
     if not strict_host_check:
         cmd += ["-o", "StrictHostKeyChecking=no"]
-    elif timeout is not None:
-        # BatchMode=yes (added below) makes SSH fail on *any* prompt, including
-        # the first-contact host-key confirmation. accept-new lets SSH auto-
-        # accept unknown keys on first connect (then save them for future
-        # validation), so a first-time sanity check against a fresh droplet
-        # works without an interactive prompt — but a *changed* key still
-        # fails (which is what we want for MITM detection).
+    elif accept_new_host_keys:
         cmd += ["-o", "StrictHostKeyChecking=accept-new"]
+    # else: SSH default (strict, prompts on unknown — fine for interactive use).
     if connect_timeout is not None:
         cmd += ["-o", f"ConnectTimeout={connect_timeout}"]
     if timeout is not None:
-        # BatchMode=yes makes SSH fail fast on any prompt (auth, etc.)
-        # rather than hanging on stdin — only enabled when timeout is set, so
+        # BatchMode=yes makes SSH fail fast on any prompt (auth, host-key)
+        # rather than hanging on stdin. Only enabled when timeout is set, so
         # interactive `make ssh` users still get prompted normally.
         cmd += ["-o", "BatchMode=yes"]
     cmd += [f"root@{ip}", command]

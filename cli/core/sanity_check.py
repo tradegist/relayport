@@ -20,9 +20,16 @@ _SSH_TIMEOUT_SECONDS = 30
 # context size and limits the blast radius if a misbehaving service spams logs
 # with secrets the project rules say must never be logged.
 _MAX_PROMPT_CHARS = 50_000
-# Skip values shorter than this when collecting secrets to redact — short
-# common words ("local", "prod", "true") would cause noisy false positives.
-_MIN_SECRET_LEN = 6
+# Skip values shorter than this when collecting secrets to redact — even with
+# name-based filtering, a 1-char "secret" would match too much in logs.
+_MIN_SECRET_LEN = 4
+# Names matched (case-insensitive) flag an env var as a credential whose value
+# must be redacted. Plain config keys (RELAYS, NOTIFIERS, POLL_INTERVAL, ...)
+# do NOT match — their values stay readable in the prompt so claude has the
+# context it needs to judge service health.
+_SENSITIVE_KEY_RE = re.compile(
+    r"(?i)(token|secret|password|key|auth|webhook|query_id|hash|credential)"
+)
 
 _VERDICT_RE = re.compile(r"^\s*\[(GREEN|YELLOW|RED)\]")
 _BEARER_RE = re.compile(r"(?i)bearer\s+[A-Za-z0-9_.\-+/=]{8,}")
@@ -45,31 +52,32 @@ No follow-up questions, no offers to help further. Stop after the verdict.
 
 
 def skip_post_deploy_check() -> bool:
-    """Return True when ``SKIP_POST_DEPLOY_CHECK=1`` is set in the environment.
+    """Return True when ``SKIP_POST_DEPLOY_CHECK`` is set to a non-empty,
+    non-"0" value.
 
-    Only "", "0", "1" are valid. Anything else prints a warning and is
-    treated as not-set — the post-deploy hook is best-effort and must not
-    abort ``deploy`` / ``sync`` over a typo like ``SKIP_POST_DEPLOY_CHECK=true``.
-    The warning still surfaces the misconfiguration to the operator.
+    Fail-closed semantics for an opt-out flag: any non-empty value other than
+    "0" means skip. ``SKIP_POST_DEPLOY_CHECK=true`` / ``yes`` / ``foo`` all
+    skip — the operator explicitly set something, so honour the intent rather
+    than silently running the check (which could ship logs to the LLM when the
+    user meant to opt out). Only "" and "0" allow the check to run.
+
+    The actual value is surfaced in the skip message in
+    :func:`post_deploy_sanity_check` so the operator can see what triggered it.
     """
     raw = env("SKIP_POST_DEPLOY_CHECK", "").strip()
-    if raw not in ("", "0", "1"):
-        print(
-            f"[sanity-check] ignoring invalid SKIP_POST_DEPLOY_CHECK={raw!r} — "
-            "must be '0', '1', or unset"
-        )
-        return False
-    return raw == "1"
+    return bool(raw) and raw != "0"
 
 
 def _collect_secrets_to_redact() -> set[str]:
-    """Read values from project .env files for redaction in droplet output.
+    """Read values from project .env files whose KEY names look sensitive.
 
-    Trivial values (short strings, pure numbers, common keywords) are skipped
-    so we don't accidentally redact harmless tokens like "local" or "1".
+    Filter is name-based, not value-based: only values for vars whose name
+    matches :data:`_SENSITIVE_KEY_RE` (TOKEN / SECRET / PASSWORD / KEY / AUTH /
+    WEBHOOK / QUERY_ID / HASH / CREDENTIAL) are collected. Plain config like
+    ``NOTIFIERS=webhook`` or ``RELAYS=ibkr`` is intentionally NOT redacted —
+    those values are diagnostically useful and not credentials.
     """
     cfg = config()
-    skip_words = {"true", "false", "yes", "no", "local", "prod", "standalone", "shared"}
     secrets: set[str] = set()
     for name in (".env", ".env.droplet", ".env.relays"):
         path = cfg.project_dir / name
@@ -79,13 +87,18 @@ def _collect_secrets_to_redact() -> set[str]:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            _, _, value = line.partition("=")
+            key, sep, value = line.partition("=")
+            if not sep:
+                continue
+            key = key.strip()
+            # Strip optional `export ` prefix so e.g. `export DO_API_TOKEN=...`
+            # is still matched on the actual var name.
+            if key.startswith("export "):
+                key = key[len("export "):].strip()
+            if not _SENSITIVE_KEY_RE.search(key):
+                continue
             value = value.strip().strip('"').strip("'")
-            if (
-                len(value) < _MIN_SECRET_LEN
-                or value.isdigit()
-                or value.lower() in skip_words
-            ):
+            if len(value) < _MIN_SECRET_LEN:
                 continue
             secrets.add(value)
     return secrets
@@ -124,7 +137,16 @@ def _fetch_droplet_state(droplet_ip: str) -> str | None:
         f"{env_prefix}docker compose {file_args}logs --since {_LOG_SINCE} --tail {_LOG_TAIL} --no-color"
     )
     try:
-        result = ssh_cmd(droplet_ip, remote_cmd, capture=True, timeout=_SSH_TIMEOUT_SECONDS)
+        result = ssh_cmd(
+            droplet_ip,
+            remote_cmd,
+            capture=True,
+            timeout=_SSH_TIMEOUT_SECONDS,
+            # BatchMode=yes (set by timeout) makes the first-contact host-key
+            # confirmation prompt fail; accept-new lets first contact succeed
+            # while still rejecting *changed* keys (MITM protection intact).
+            accept_new_host_keys=True,
+        )
     except subprocess.TimeoutExpired:
         print(f"[sanity-check] SSH timed out after {_SSH_TIMEOUT_SECONDS}s — verify the droplet manually")
         return None
@@ -144,10 +166,21 @@ def _fetch_droplet_state(droplet_ip: str) -> str | None:
 
 
 def _truncate(text: str, limit: int) -> str:
-    """Truncate text to ``limit`` chars, appending an explicit marker if cut."""
+    """Truncate text so the returned string is at most ``limit`` chars total.
+
+    When truncation happens, an explicit marker is appended and the body is
+    sliced to leave room for it — the marker length counts against ``limit``
+    so the total never exceeds the cap (the point of the cap: a strict upper
+    bound on what gets sent to claude). If ``limit`` is too small to fit the
+    marker at all (pathological case), the text is hard-truncated without a
+    marker rather than emit a string longer than the limit.
+    """
     if len(text) <= limit:
         return text
-    return text[:limit] + f"\n\n... [truncated at {limit} chars]"
+    marker = f"\n\n... [truncated at {limit} chars]"
+    if len(marker) >= limit:
+        return text[:limit]
+    return text[:limit - len(marker)] + marker
 
 
 def _print_verdict(output: str) -> None:
@@ -248,7 +281,8 @@ def post_deploy_sanity_check(droplet_ip: str, *, skip_flag: bool) -> None:
         print("[sanity-check] skipped (--skip-post-check)")
         return
     if skip_post_deploy_check():
-        print("[sanity-check] skipped (SKIP_POST_DEPLOY_CHECK=1)")
+        raw = env("SKIP_POST_DEPLOY_CHECK", "").strip()
+        print(f"[sanity-check] skipped (SKIP_POST_DEPLOY_CHECK={raw!r})")
         return
     run_sanity_check(droplet_ip)
 
