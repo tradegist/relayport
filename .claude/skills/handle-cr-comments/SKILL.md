@@ -12,10 +12,43 @@ This skill enforces an adversarial audit *between* the fixing and the push, so t
 ## The flow
 
 ```
+[before each round]
+assess: still real bugs? or hardening nits? → if hardening, surface + ask before fixing
+                                ↓
 fetch comments → categorize → fix → adversarial self-audit → validate → commit + push → reply to false positives
                                               ^
                                     this is the step that's usually skipped
 ```
+
+## Step 0 — Decide whether to address this round at all
+
+Automated reviewers (Copilot Review, etc.) have **no built-in "ship it" threshold** — they will always find at least one thing because they can always imagine an edge case, a typo, or a "consider also handling X." Treating every round as "we must address everything" turns code review into an indefinite treadmill instead of a quality gate.
+
+**After every round** (especially round 4+), before fetching or fixing, take 30 seconds to honestly classify the trajectory:
+
+- **Rounds 1–3 usually surface real architectural / correctness issues.** Address them.
+- **Rounds 4+ often shift to hardening, defense-in-depth, doc nits, and "could also handle" suggestions.** These are not bugs.
+
+If you notice the trajectory has shifted from "real bugs" to "incremental hardening," **surface this to the user with a concrete recommendation before doing the work**. The operator decides when to ship; your job is to give them the data to decide, not to silently grind through every comment.
+
+A short table from the actual round history is often the most useful framing:
+
+```
+| Round | Comments | Severity                                          |
+|-------|----------|---------------------------------------------------|
+| CR1   | 5        | Architecture: bypassPermissions, security         |
+| CR2   | 5        | Real edge cases (SSH timeout, env var getter)     |
+| CR3   | 3        | Real (ConnectTimeout dupe, redaction wrapping)    |
+| CR4   | 3        | Mixed (fail-closed skip, BatchMode first-contact) |
+| CR5   | 2        | Narrow (single-line verdict, KB vs chars)         |
+| CR6   | 4        | Narrow (over-redaction, marker-length math)       |
+| CR7   | 1        | Self-imposed (I created the contract drift)       |
+| CR8   | 3        | Stale docstring, README sync, broader redaction   |
+```
+
+Then offer the user a clear choice (ship now / fix this round then ship / keep iterating / disable Copilot on the PR). **This is not pushback against the user** — it's protecting them from a treadmill they probably don't realize they're on.
+
+Only proceed to Step 1 if the user explicitly says to keep iterating.
 
 ## Step 1 — Fetch the comments
 
@@ -125,9 +158,10 @@ When handling CR for a PR in one repo, **always check whether the same fix needs
 
 ## Why this skill exists
 
-Past CR loops on this repo ran 5+ rounds because:
-1. I addressed only the flagged items, never the integrated result.
-2. Each new fix added a new branch with its own edge cases.
-3. The next round found those edge cases, and I treated each as a fresh surprise.
+Two failure modes from the `post-sync-sanity-check` PRs (May 2026, 8 rounds before ship):
 
-The adversarial audit step in §4 is the one mechanism that breaks this loop. If you skip it, the loop continues. If you do it honestly — looking specifically for the kinds of issues the *next* reviewer would find — most rounds collapse into 1-2 follow-ups instead of 5.
+**Failure mode 1: reactive fixing without integrated audit.** I addressed only the flagged items, never the integrated result. Each new fix added a new branch with its own edge cases. The next round found those edge cases, and I treated each as a fresh surprise. → **Step 4** (adversarial self-audit) is the mechanism that breaks this. Done honestly, most rounds collapse from 5 nits to 1–2 follow-ups.
+
+**Failure mode 2: no "stop" gate.** Even after the audit caught most things, the automated reviewer kept finding 1–3 hardening nits per round indefinitely. I dutifully addressed all of them through CR8 instead of recognising that the trajectory had shifted from "real bugs" to "could-also-handle" suggestions three rounds earlier. The user got frustrated ("this is NEVER ending") and was right to push back. → **Step 0** (decide whether to address this round at all) is the mechanism for this. The operator decides when to ship; my job is to give them the trajectory data so they can decide, not to silently grind through every comment until they revolt.
+
+If both steps are honest: a typical CR loop is 2–3 rounds of meaningful improvement, then a clean ship.
