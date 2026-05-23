@@ -1,4 +1,4 @@
-.PHONY: deps setup deploy destroy pause resume sync poll test-webhook watermark-reset ibkr-flex-dump ibkr-flex-refresh types test typecheck lint e2e e2e-up e2e-run e2e-down local-up local-down logs stats ssh help
+.PHONY: deps setup deploy destroy pause resume sync sanity-check-deployment poll test-webhook watermark-reset ibkr-flex-dump ibkr-flex-refresh types test typecheck lint e2e e2e-up e2e-run e2e-down local-up local-down logs stats ssh help
 
 PROJECT = relayport
 PYTHON ?= .venv/bin/python3
@@ -48,8 +48,8 @@ setup: ## Create .venv and install all dependencies
 	done
 	@[ -f .env.test ] || echo "  NOTE: .env.test not auto-created — cp env_examples/env.test .env.test and set real paper-account values before running E2E tests."
 
-deploy: ## Deploy infrastructure (Terraform + Docker)
-	$(PYTHON) -m cli deploy
+deploy: ## Deploy infrastructure (Terraform + Docker) [SKIP_POST_CHECK=1]
+	$(PYTHON) -m cli deploy $(if $(SKIP_POST_CHECK),--skip-post-check)
 
 destroy: ## Permanently destroy all infrastructure
 	$(PYTHON) -m cli destroy
@@ -60,13 +60,16 @@ pause: ## Snapshot droplet + delete (save costs)
 resume: ## Restore droplet from snapshot
 	$(PYTHON) -m cli resume
 
-sync: ## Push .env + restart (S=service B=1 LOCAL_FILES=1 SKIP_E2E=1 ENV=local)
+sanity-check-deployment: ## Run the claude sanity check against the droplet
+	$(PYTHON) -m cli sanity-check-deployment
+
+sync: ## Push .env + restart (S=service B=1 LOCAL_FILES=1 SKIP_E2E=1 SKIP_POST_CHECK=1 ENV=local)
 	@$(_RESOLVE_ENV) \
 	if [ "$$env" = "local" ]; then \
 		$(auto_debug_replicas); \
 		$(LOCAL_COMPOSE) up -d --force-recreate $(if $(B),--build); \
 	else \
-		$(PYTHON) -m cli sync $(S) $(if $(LOCAL_FILES),--local-files) $(if $(B),--build) $(if $(SKIP_E2E),--skip-e2e); \
+		$(PYTHON) -m cli sync $(S) $(if $(LOCAL_FILES),--local-files) $(if $(B),--build) $(if $(SKIP_E2E),--skip-e2e) $(if $(SKIP_POST_CHECK),--skip-post-check); \
 	fi
 
 poll: ## Trigger an immediate poll (RELAY=ibkr, IDX=1, V=1 verbose, REPLAY=N resend)

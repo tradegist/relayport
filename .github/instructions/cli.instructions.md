@@ -73,15 +73,25 @@ Controlled by `DEPLOY_MODE` in `.env.droplet` (required, validated before any de
 - **`.deployed-sha`** is the only server-side file inside the project directory. Written by `cli/sync.py` after each `--local-files` sync; excluded from rsync `--delete`. Records the deployed commit SHA.
 - **rsync exclusions:** `.git/`, `.env`, `.env.relays`, `.env.droplet`, `.env.test`, `.deployed-sha`, and everything in `.gitignore` (via `--filter ':- .gitignore'`).
 
+## Post-Deploy Sanity Check
+
+- After every `make sync LOCAL_FILES=1` and `make deploy`, the CLI runs a best-effort sanity check: SSHes into the droplet from Python (using the existing `ssh_cmd` helper), captures `docker compose ps` + recent logs (`--since 5m --tail 100` — note `--tail` is **per service**, so the total is capped to 50,000 characters before being sent to claude), then pipes the captured text via stdin to `claude --print --model claude-sonnet-4-6` for summarization. Claude runs with **no tools** — pure text-in / text-out, so there's no permission bypass and no risk of agent-driven shell execution.
+- **Best-effort only.** Failures never abort the deploy. Skipped gracefully when: `claude` CLI not on PATH, SSH fails, network/auth/rate-limit errors (non-zero exit), or the claude call hangs (60s timeout).
+- **Opt-out:** `SKIP_POST_DEPLOY_CHECK=1` env var, `--skip-post-check` CLI flag, or `make sync SKIP_POST_CHECK=1` / `make deploy SKIP_POST_CHECK=1`.
+- Plain `make sync` (without `LOCAL_FILES=1`) does not trigger the check — only file-syncing deploys do.
+- **Run on demand:** `make sanity-check-deployment` (or `python3 -m cli sanity-check-deployment`) runs the same check without a sync/deploy. Useful for ad-hoc "is the droplet OK right now?" probes. **Ignores `SKIP_POST_DEPLOY_CHECK` and `--skip-post-check`** — the operator explicitly invoked the command, so both opt-outs are bypassed; only `claude not on PATH` will skip.
+
 ## Build & Deploy commands
 
 ```bash
 make deploy    # Standalone: Terraform | Shared: rsync + compose (reads .env.droplet)
 make sync      # Push .env + .env.relays to droplet + restart services
-make sync LOCAL_FILES=1  # rsync files + rebuild + restart
+make sync LOCAL_FILES=1  # rsync files + rebuild + restart + claude sanity check
+make sync SKIP_POST_CHECK=1  # skip the post-deploy claude sanity check
 make destroy   # Terraform destroy
 make pause     # Snapshot + delete droplet (save costs)
 make resume    # Restore from snapshot
+make sanity-check-deployment  # Run the claude sanity check against the droplet
 make poll      # Trigger immediate poll (RELAY=ibkr, IDX=1)
 make watermark-reset    # Reset timestamp watermark [RELAY=ibkr or empty] [ENV=local]
 make ibkr-flex-dump     # Dump live IBKR Flex XML to services/relays/ibkr/fixtures/raw.xml

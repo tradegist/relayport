@@ -130,16 +130,26 @@ CORE_MODULES: dict[str, str] = {
     "destroy": "cli.core.destroy",
     "pause": "cli.core.pause",
     "resume": "cli.core.resume",
+    "sanity-check-deployment": "cli.core.sanity_check",
     "sync": "cli.core.sync",
 }
 
 
 def register_parsers(sub: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
-    """Register core subcommands (deploy, destroy, pause, resume, sync)."""
-    sub.add_parser("deploy", help="Deploy infrastructure (Terraform + Docker)")
+    """Register core subcommands (deploy, destroy, pause, resume, sanity-check-deployment, sync).
+
+    ``deploy`` and ``sync`` accept ``--skip-post-check`` to skip the post-deploy
+    claude sanity check; ``sync`` additionally accepts ``--local-files``,
+    ``--build``, and ``--skip-e2e``.
+    """
+    p = sub.add_parser("deploy", help="Deploy infrastructure (Terraform + Docker)")
+    p.add_argument("--skip-post-check", action="store_true",
+                   help="Skip the post-deploy `claude` sanity check")
     sub.add_parser("destroy", help="Permanently destroy all infrastructure")
     sub.add_parser("pause", help="Snapshot droplet + delete (save costs)")
     sub.add_parser("resume", help="Restore droplet from snapshot")
+    sub.add_parser("sanity-check-deployment",
+                   help="Run the claude sanity check against the droplet (no sync/deploy)")
 
     p = sub.add_parser("sync", help="Push .env + restart services")
     p.add_argument("services", nargs="*", help="Services to restart (default: all)")
@@ -149,6 +159,8 @@ def register_parsers(sub: "argparse._SubParsersAction[argparse.ArgumentParser]")
                    help="Rebuild Docker images before restarting")
     p.add_argument("--skip-e2e", action="store_true",
                    help="Skip E2E tests during --local-files pre-deploy checks")
+    p.add_argument("--skip-post-check", action="store_true",
+                   help="Skip the post-deploy `claude` sanity check")
 
 
 # ── Generic helpers ─────────────────────────────────────────────────
@@ -271,6 +283,32 @@ def shared_network_compose_env() -> str:
     return f"SHARED_NETWORK='{net}' " if net else ""
 
 
+def compose_invocation() -> tuple[str, str]:
+    """Return ``(env_prefix, file_args)`` matching how deploy/sync invoke compose.
+
+    ``env_prefix`` is the shell ``KEY='value' KEY2='value2' `` prefix.
+    ``file_args`` is the ``-f docker-compose.yml [-f overlay.yml ...] `` string
+    (or empty when no overlays apply).
+
+    Mirrors the construction in ``deploy.py`` / ``sync.py`` so consumers that
+    enumerate containers or tail logs after a deploy (e.g. ``sanity_check``)
+    see the same set of services as the deploy-time ``up`` command — shared-mode
+    profiles, shared-network overlay, and ``DEBUG_REPLICAS`` are all honoured.
+    """
+    cfg = config()
+    overlays = ""
+    if is_shared():
+        overlays += "-f docker-compose.shared.yml "
+    overlays += shared_network_compose_flag()
+    file_args = f"-f docker-compose.yml {overlays}" if overlays else ""
+
+    profiles = cfg.compose_profiles()
+    compose_env = cfg.compose_env()
+    net_env = shared_network_compose_env()
+    env_prefix = f"{compose_env}{net_env}COMPOSE_PROFILES='{profiles}' "
+    return env_prefix, file_args
+
+
 def ensure_shared_network(droplet_ip: str) -> None:
     """Idempotently create the SHARED_NETWORK on the droplet.
 
@@ -299,14 +337,60 @@ def ssh_cmd(
     command: str,
     strict_host_check: bool = True,
     capture: bool = False,
+    timeout: float | None = None,
+    accept_new_host_keys: bool = False,
 ) -> subprocess.CompletedProcess[str]:
+    """Run ``ssh -i <key> root@<ip> <command>``.
+
+    Knobs (orthogonal — each controls one concern):
+
+    - ``strict_host_check=False`` adds ``StrictHostKeyChecking=no`` (used by
+      new-droplet deploys where the host key isn't known yet and TOFU is
+      acceptable).
+    - ``timeout`` bounds the subprocess and adds ``BatchMode=yes`` +
+      ``ConnectTimeout`` so a stalled connection or interactive prompt can't
+      block the caller. Default is no timeout (interactive callers stay
+      interactive).
+    - ``accept_new_host_keys=True`` adds ``StrictHostKeyChecking=accept-new``,
+      which auto-accepts UNKNOWN host keys on first connect but still rejects
+      CHANGED keys (MITM protection intact). Use this for non-interactive
+      callers that need to work on first contact (e.g. post-deploy sanity
+      check). Mutually exclusive with ``strict_host_check=False`` — passing
+      both is a caller bug and raises ``ValueError`` rather than silently
+      letting ``=no`` win and downgrading host-key verification.
+    """
+    if accept_new_host_keys and not strict_host_check:
+        raise ValueError(
+            "ssh_cmd: accept_new_host_keys=True and strict_host_check=False "
+            "are mutually exclusive — pick one host-key policy"
+        )
     cmd = ["ssh", "-i", ssh_key_path()]
+    # ConnectTimeout: caller-supplied timeout wins; else the 5s default for the
+    # loose-host-check path; else SSH's default. Single source so the option is
+    # never emitted twice.
+    if timeout is not None:
+        connect_timeout: int | None = max(1, min(int(timeout), 30))
+    elif not strict_host_check:
+        connect_timeout = 5
+    else:
+        connect_timeout = None
+    # Host-key handling: three mutually exclusive modes.
     if not strict_host_check:
-        cmd += ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5"]
+        cmd += ["-o", "StrictHostKeyChecking=no"]
+    elif accept_new_host_keys:
+        cmd += ["-o", "StrictHostKeyChecking=accept-new"]
+    # else: SSH default (strict, prompts on unknown — fine for interactive use).
+    if connect_timeout is not None:
+        cmd += ["-o", f"ConnectTimeout={connect_timeout}"]
+    if timeout is not None:
+        # BatchMode=yes makes SSH fail fast on any prompt (auth, host-key)
+        # rather than hanging on stdin. Only enabled when timeout is set, so
+        # interactive `make ssh` users still get prompted normally.
+        cmd += ["-o", "BatchMode=yes"]
     cmd += [f"root@{ip}", command]
     if capture:
-        return subprocess.run(cmd, check=True, capture_output=True, text=True)
-    return subprocess.run(cmd, check=True, text=True)
+        return subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(cmd, check=True, text=True, timeout=timeout)
 
 
 def scp_file(
