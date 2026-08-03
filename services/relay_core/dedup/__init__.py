@@ -15,10 +15,112 @@ import contextlib
 import logging
 import sqlite3
 from pathlib import Path
+from typing import Literal
 
 log = logging.getLogger(__name__)
 
 DEDUP_DB_PATH = "/data/dedup/fills.db"
+
+# ── Book-trade cross-path dedup ──────────────────────────────────────
+#
+# Book trades (option assignment / exercise / expiry) reach a relay
+# through both the poller and the listener with completely disjoint
+# identifiers (IBKR Flex reports them without an ibExecID and with
+# per-leg synthetic order ids; the bridge reports native exec ids under
+# the order's permId), so neither exec-id nor order-level dedup can
+# match them. Adapters that can classify these fills provide
+# ``BrokerRelay.book_trade_key``; the engines then reconcile the two
+# paths here via per-fill *economic* keys.
+#
+# Key rows are stored in ``processed_fills`` as synthetic exec_ids of
+# the form ``{relay}:bt:{src}:{key}`` (``order_id`` NULL). Real broker
+# exec ids never start with ``bt:`` — that namespace is reserved by
+# convention for these rows. ``src`` is the engine that notified the
+# fill; a fill only ever consumes a key written by the OPPOSITE engine,
+# so same-path repeats of identical events (e.g. partial assignment in
+# equal tranches on consecutive days, seen by the poller only) are
+# never suppressed.
+#
+# Consumption is a single-statement DELETE with a rowcount check —
+# atomic across the poller and listener connections, so two engines
+# racing for one key row can never both consume it, and a batch holding
+# two identical-key fills against one stored row consumes exactly one.
+
+BookTradeSource = Literal["poll", "ws"]
+
+# Maximum age of a key row for it to be consumable. Covers the observed
+# cross-path reporting gap for the same event (~48 min; both reports
+# land in the same overnight batch cycle) with a wide margin, while
+# staying strictly under the ~24 h cadence of consecutive-night
+# assignment tranches so identical distinct events can never
+# cross-consume. A larger gap (path down for a day+) fails open to a
+# duplicate webhook, never to a dropped fill.
+BOOK_TRADE_WINDOW_SECONDS = 18 * 3600
+
+
+def _book_trade_row_id(relay_name: str, src: BookTradeSource, key: str) -> str:
+    return f"{relay_name}:bt:{src}:{key}"
+
+
+def consume_book_trade_keys(
+    conn: sqlite3.Connection,
+    relay_name: str,
+    own_src: BookTradeSource,
+    items: list[tuple[str, str]],
+) -> set[str]:
+    """Consume opposite-engine book-trade keys; return consumed exec_ids.
+
+    *items* holds ``(exec_id, key)`` pairs for the classified fills of a
+    batch. For each pair, atomically delete the opposite-source key row
+    if one exists within :data:`BOOK_TRADE_WINDOW_SECONDS`; on success
+    the fill's own exec_id is marked processed in the same transaction
+    and the exec_id is included in the returned set — the caller must
+    drop those fills without notifying.
+
+    Marking without notifying is a deliberate, documented exception to
+    the mark-after-notify rule: an opposite-source key row is only ever
+    written AFTER a successful notify of a fill with an identical
+    economic key, so the consumed fill's content is already delivered.
+    """
+    other_src: BookTradeSource = "ws" if own_src == "poll" else "poll"
+    consumed: set[str] = set()
+    for exec_id, key in items:
+        cur = conn.execute(
+            "DELETE FROM processed_fills WHERE exec_id = ? AND processed_at > datetime('now', ?)",
+            (
+                _book_trade_row_id(relay_name, other_src, key),
+                f"-{BOOK_TRADE_WINDOW_SECONDS} seconds",
+            ),
+        )
+        if cur.rowcount == 1:
+            conn.execute(
+                "INSERT OR IGNORE INTO processed_fills (exec_id) VALUES (?)",
+                (f"{relay_name}:{exec_id}",),
+            )
+            consumed.add(exec_id)
+        conn.commit()
+    return consumed
+
+
+def mark_book_trade_keys(
+    conn: sqlite3.Connection,
+    relay_name: str,
+    own_src: BookTradeSource,
+    keys: list[str],
+) -> None:
+    """Record this engine's book-trade keys after a successful notify.
+
+    ``INSERT OR REPLACE`` (not ``OR IGNORE``): a stale row with the same
+    key must get a fresh ``processed_at``, otherwise its old timestamp
+    would put the new event outside the consume window. The primary-key
+    collapse of two identical live keys is intentional — worst case one
+    duplicate webhook survives, never a dropped fill.
+    """
+    conn.executemany(
+        "INSERT OR REPLACE INTO processed_fills (exec_id) VALUES (?)",
+        [(_book_trade_row_id(relay_name, own_src, key),) for key in keys],
+    )
+    conn.commit()
 
 
 def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:

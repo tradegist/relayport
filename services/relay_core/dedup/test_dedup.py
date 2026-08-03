@@ -8,11 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from relay_core.dedup import (
+    BOOK_TRADE_WINDOW_SECONDS,
+    consume_book_trade_keys,
     get_processed_ids,
     get_processed_rows,
     get_recently_processed_order_ids,
     init_db,
     is_processed,
+    mark_book_trade_keys,
     mark_processed,
     mark_processed_batch,
     mark_processed_batch_with_orders,
@@ -365,3 +368,138 @@ class TestRecentlyProcessedTimeBoundary(unittest.TestCase):
             ) == set()
         finally:
             conn.close()
+
+
+class TestBookTradeDedup(unittest.TestCase):
+    """Consume-once cross-path dedup for book trades (assignments etc.)."""
+
+    KEY = "U1|TSLA|buy|100|335"
+
+    def setUp(self) -> None:
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.execute(
+            "CREATE TABLE processed_fills ("
+            "  exec_id TEXT PRIMARY KEY,"
+            "  order_id TEXT,"
+            "  processed_at TEXT DEFAULT (datetime('now'))"
+            ")"
+        )
+        self.conn.commit()
+
+    def tearDown(self) -> None:
+        self.conn.close()
+
+    def _insert_key(
+        self, src: str, key: str, age_seconds: int = 0,
+    ) -> None:
+        """Insert a book-trade key row with a backdated timestamp."""
+        self.conn.execute(
+            "INSERT OR REPLACE INTO processed_fills (exec_id, processed_at) "
+            "VALUES (?, datetime('now', ?))",
+            (f"ibkr:bt:{src}:{key}", f"-{age_seconds} seconds"),
+        )
+        self.conn.commit()
+
+    def test_no_stored_key_nothing_consumed(self) -> None:
+        consumed = consume_book_trade_keys(
+            self.conn, "ibkr", "poll", [("E1", self.KEY)],
+        )
+        assert consumed == set()
+
+    def test_cross_source_consumes_and_marks(self) -> None:
+        mark_book_trade_keys(self.conn, "ibkr", "ws", [self.KEY])
+        consumed = consume_book_trade_keys(
+            self.conn, "ibkr", "poll", [("E1", self.KEY)],
+        )
+        assert consumed == {"E1"}
+        # Key row is gone — consume-once.
+        assert get_processed_ids(self.conn, {f"ibkr:bt:ws:{self.KEY}"}) == set()
+        # The consumed fill's exec_id is marked so it never re-arrives.
+        assert is_processed(self.conn, "ibkr:E1")
+
+    def test_same_source_never_consumes(self) -> None:
+        # Two identical single-path events (e.g. partial assignment in
+        # equal tranches on consecutive days via Flex only) must BOTH
+        # notify — a poll-written key must never suppress a poll fill.
+        mark_book_trade_keys(self.conn, "ibkr", "poll", [self.KEY])
+        consumed = consume_book_trade_keys(
+            self.conn, "ibkr", "poll", [("E1", self.KEY)],
+        )
+        assert consumed == set()
+        assert get_processed_ids(
+            self.conn, {f"ibkr:bt:poll:{self.KEY}"},
+        ) == {f"ibkr:bt:poll:{self.KEY}"}
+
+    def test_ws_consumes_poll_key(self) -> None:
+        mark_book_trade_keys(self.conn, "ibkr", "poll", [self.KEY])
+        consumed = consume_book_trade_keys(
+            self.conn, "ibkr", "ws", [("W1", self.KEY)],
+        )
+        assert consumed == {"W1"}
+
+    def test_key_outside_window_not_consumed(self) -> None:
+        self._insert_key("ws", self.KEY, age_seconds=BOOK_TRADE_WINDOW_SECONDS + 60)
+        consumed = consume_book_trade_keys(
+            self.conn, "ibkr", "poll", [("E1", self.KEY)],
+        )
+        assert consumed == set()
+        assert not is_processed(self.conn, "ibkr:E1")
+
+    def test_key_inside_window_consumed(self) -> None:
+        self._insert_key("ws", self.KEY, age_seconds=BOOK_TRADE_WINDOW_SECONDS - 60)
+        consumed = consume_book_trade_keys(
+            self.conn, "ibkr", "poll", [("E1", self.KEY)],
+        )
+        assert consumed == {"E1"}
+
+    def test_multiset_one_row_consumes_exactly_one_fill(self) -> None:
+        # Recovered batch holds two identical-key fills but only one
+        # opposite-source row exists: exactly one is consumed, the other
+        # survives and must notify (set semantics would drop both).
+        mark_book_trade_keys(self.conn, "ibkr", "ws", [self.KEY])
+        consumed = consume_book_trade_keys(
+            self.conn, "ibkr", "poll", [("E1", self.KEY), ("E2", self.KEY)],
+        )
+        assert consumed == {"E1"}
+
+    def test_second_consume_finds_nothing(self) -> None:
+        mark_book_trade_keys(self.conn, "ibkr", "ws", [self.KEY])
+        assert consume_book_trade_keys(
+            self.conn, "ibkr", "poll", [("E1", self.KEY)],
+        ) == {"E1"}
+        assert consume_book_trade_keys(
+            self.conn, "ibkr", "poll", [("E2", self.KEY)],
+        ) == set()
+
+    def test_mark_replaces_stale_row_timestamp(self) -> None:
+        # A stale same-key row must get a fresh processed_at on re-mark,
+        # otherwise the old timestamp would put the new event outside
+        # the consume window (INSERT OR IGNORE would keep it).
+        self._insert_key("ws", self.KEY, age_seconds=BOOK_TRADE_WINDOW_SECONDS + 60)
+        mark_book_trade_keys(self.conn, "ibkr", "ws", [self.KEY])
+        consumed = consume_book_trade_keys(
+            self.conn, "ibkr", "poll", [("E1", self.KEY)],
+        )
+        assert consumed == {"E1"}
+
+    def test_different_key_not_consumed(self) -> None:
+        mark_book_trade_keys(self.conn, "ibkr", "ws", [self.KEY])
+        consumed = consume_book_trade_keys(
+            self.conn, "ibkr", "poll", [("E1", "U1|TSLA|sell|100|335")],
+        )
+        assert consumed == set()
+
+    def test_relay_namespaces_isolated(self) -> None:
+        mark_book_trade_keys(self.conn, "ibkr", "ws", [self.KEY])
+        consumed = consume_book_trade_keys(
+            self.conn, "kraken", "poll", [("E1", self.KEY)],
+        )
+        assert consumed == set()
+
+    def test_bt_rows_invisible_to_order_dedup(self) -> None:
+        # Book-trade rows have NULL order_id — the order-level dedup
+        # query must never return them.
+        mark_book_trade_keys(self.conn, "ibkr", "ws", [self.KEY])
+        assert get_recently_processed_order_ids(
+            self.conn, "ibkr", {self.KEY}, within_seconds=3600,
+        ) == set()

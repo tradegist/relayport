@@ -13,8 +13,10 @@ from pathlib import Path
 
 from relay_core.context import get_relay
 from relay_core.dedup import (
+    consume_book_trade_keys,
     get_processed_ids,
     get_recently_processed_order_ids,
+    mark_book_trade_keys,
     mark_processed_batch,
     prune,
 )
@@ -319,6 +321,9 @@ def poll_once(
         # Sending those fills now would race the listener into a duplicate
         # webhook; defer them and let the next cycle resolve either way
         # (listener succeeded → dedup skips; failed → poller delivers).
+        # Runs before the book-trade consume so a deferred fill has no
+        # side effects this cycle — its key consumption (a one-shot
+        # DELETE) waits until the listener's outcome is known.
         deferred_fills: list[Fill] = []
         if new_fills:
             in_flight = INFLIGHT_ORDERS.intersect(
@@ -333,6 +338,34 @@ def poll_once(
                         "(listener notify in progress — deferred to next cycle)",
                         f.side, f.symbol, f.orderId,
                     )
+
+        # Book-trade cross-path dedup: fills the broker books outside
+        # normal execution flow (assignment/exercise/expiry) carry
+        # disjoint identifiers on the two paths, so they are reconciled
+        # by economic key instead. Consumed fills were already notified
+        # by the listener; they are exec-marked inside the consume call
+        # (documented mark-after-notify exception — see relay_core.dedup).
+        bt_keys: dict[str, str] = {}
+        if relay.book_trade_key is not None:
+            bt_keys = {
+                f.execId: key
+                for f in new_fills
+                if (key := relay.book_trade_key(f)) is not None
+            }
+        if bt_keys:
+            consumed_ids = consume_book_trade_keys(
+                dedup_conn, relay_name, "poll", list(bt_keys.items()),
+            )
+            if consumed_ids:
+                # Keys embed the account id — log symbol/side/volume only.
+                for f in new_fills:
+                    if f.execId in consumed_ids:
+                        relay_log.info(
+                            "  Book-trade dedup: %s %s vol=%s"
+                            " (already notified via listener)",
+                            f.side, f.symbol, f.volume,
+                        )
+                new_fills = [f for f in new_fills if f.execId not in consumed_ids]
 
         relay_log.info("%d new fill(s) after dedup", len(new_fills))
 
@@ -388,6 +421,11 @@ def poll_once(
         # Mark all fills as processed after successful webhook (prefixed)
         all_new_ids = [did for t in trades for did in t.execIds]
         mark_processed_batch(dedup_conn, _prefix_ids(relay_name, all_new_ids))
+        if bt_keys:
+            mark_book_trade_keys(
+                dedup_conn, relay_name, "poll",
+                [bt_keys[f.execId] for f in new_fills if f.execId in bt_keys],
+            )
 
         # Update timestamp watermark to the latest trade time (stored as
         # epoch int; logged with the human-readable ISO source for context).

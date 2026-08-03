@@ -18,7 +18,9 @@ import aiohttp
 
 from relay_core.context import get_relay
 from relay_core.dedup import (
+    consume_book_trade_keys,
     get_processed_rows,
+    mark_book_trade_keys,
     mark_processed_batch_with_orders,
 )
 from relay_core.dedup import init_db as _init_dedup_db
@@ -179,6 +181,34 @@ def _send_and_mark(
                 continue
             new_fills.append(f)
 
+        # Book-trade cross-path dedup (mirrors poller_engine — see
+        # relay_core.dedup for the semantics). Consumed fills were
+        # already notified by the poller; they are exec-marked inside
+        # the consume call (documented mark-after-notify exception).
+        # Only mark=True fills reach this function, so fire-and-forget
+        # execDetailsEvent fills can never insert or consume keys.
+        bt_keys: dict[str, str] = {}
+        if relay.book_trade_key is not None:
+            bt_keys = {
+                f.execId: key
+                for f in new_fills
+                if (key := relay.book_trade_key(f)) is not None
+            }
+        if bt_keys:
+            consumed_ids = consume_book_trade_keys(
+                conn, relay_name, "ws", list(bt_keys.items()),
+            )
+            if consumed_ids:
+                # Keys embed the account id — log symbol/side/volume only.
+                for f in new_fills:
+                    if f.execId in consumed_ids:
+                        log.info(
+                            "Book-trade dedup: %s %s vol=%s"
+                            " (already notified via poller)",
+                            f.side.value, f.symbol, f.volume,
+                        )
+                new_fills = [f for f in new_fills if f.execId not in consumed_ids]
+
         if not new_fills and not _parse_errors:
             log.debug("All %d fill(s) already processed", len(fills))
             return
@@ -241,6 +271,11 @@ def _send_and_mark(
                 mark_processed_batch_with_orders(conn, items)
                 fill_count = sum(len(t.execIds) for t in trades)
                 log.info("Marked %d fill(s) as processed", fill_count)
+            if bt_keys:
+                mark_book_trade_keys(
+                    conn, relay_name, "ws",
+                    [bt_keys[f.execId] for f in new_fills if f.execId in bt_keys],
+                )
         finally:
             INFLIGHT_ORDERS.release(relay_name, in_flight_orders)
     finally:

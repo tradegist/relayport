@@ -74,3 +74,12 @@ If the broker supports option derivatives, populate `Fill.option` (type `OptionC
 When both `LISTENER_ENABLED` and `POLLER_ENABLED` are true for the same relay, the same fill can reach the consumer through both paths. The engine reconciles in three layers (see [services/relay_core/CLAUDE.md](../relay_core/CLAUDE.md) for the implementation): exec_id dedup (always on), order-level dedup (listener-side write, 2× POLL_INTERVAL window), and in-flight deferral (the poller defers orders whose listener notify is still in progress — covers the window before anything is marked).
 
 When designing a new relay, verify experimentally whether the broker reuses identifiers across paths. If not (Kraken-style), the order-level dedup will suppress the poller's fee-bearing webhook for that order — document the fee trade-off in the README. If your broker's listener does not reliably include fees in real time, consider recommending poller-only mode (with a shorter `{RELAY}_POLL_INTERVAL`) as the fee-accurate option.
+
+### Book trades (assignment / exercise / expiry)
+
+Events the broker books outside normal execution flow carry **disjoint identifiers on both paths** (verified for IBKR: Flex has no `ibExecID` and synthesizes per-leg order ids; the bridge reports native exec ids via overnight reconcile), so both identifier layers miss them and the consumer gets a duplicate webhook. If your broker has such events, provide `BrokerRelay.book_trade_key(fill) -> str | None`:
+
+- **Classify from an explicit broker marker only** (IBKR: Flex `transactionType="BookTrade"` or exact-token `notes`/`code` codes; bridge `isBookTrade` envelope flag). Never infer from heuristics like sentinel field values — a misclassified normal fill enters the dedup layer and can suppress real trades.
+- **Key format**: `{account}|{symbol}|{side}|{abs(volume):.10g}|{price:.10g}`. Account-scoped (multi-account configs must not cross-consume) — therefore never log the key.
+- Return `None` when unclassified OR when the account cannot be resolved — always fail open to a duplicate, never guess.
+- Engine semantics (consume-once, source-tagged, 18 h window) live in `relay_core/dedup` — see [services/relay_core/CLAUDE.md](../relay_core/CLAUDE.md).

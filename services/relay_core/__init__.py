@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from relay_core.notifier.base import BaseNotifier as BaseNotifier
-from shared import RelayName
+from shared import Fill, RelayName
 
 # Re-export domain types so consumers can do ``from relay_core import X``.
 from .listener_engine import (
@@ -68,6 +68,14 @@ class BrokerRelay:
     # return its input. None disables aliasing (Kraken reconciles paths
     # via order-level dedup instead).
     dedup_aliases: Callable[[str], list[str]] | None = None
+
+    # Book-trade classifier for cross-path dedup (see relay_core.dedup).
+    # Returns an account-scoped economic key for fills the broker books
+    # outside normal execution flow (option assignment/exercise/expiry),
+    # which reach both engines with disjoint identifiers; None for every
+    # other fill. None here (the default) disables the layer entirely.
+    # Keys embed the account id — engines must never log them.
+    book_trade_key: Callable[[Fill], str | None] | None = None
 
     # Runtime state (set by the orchestrator, not by the adapter)
     poll_locks: list[asyncio.Lock] = field(default_factory=list)
