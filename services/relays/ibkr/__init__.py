@@ -590,6 +590,25 @@ def _on_start(ctx: StartupContext) -> None:
     ctx.add_logging_filter(RedactTokenFilter())
 
 
+# ── Dedup aliases ────────────────────────────────────────────────────
+
+
+def _dedup_aliases(exec_id: str) -> list[str]:
+    """Map a TWS execId to the form Flex reports for the same execution.
+
+    TWS appends a 5th dot-segment to combo (BAG) leg execIds
+    (``0000fb0a.xxxxxxxx.02.01.01``); Flex statements report the same
+    execution truncated to its 4-segment prefix (``0000fb0a.xxxxxxxx.02.01``).
+    Without the alias, each path treats the other's ID as an unseen fill and
+    sends a duplicate webhook — confirmed for every combo order in production.
+
+    Non-combo execIds (4 segments) and Flex fallback IDs (numeric
+    ``transactionId``) have no alternate form and map to nothing.
+    """
+    parts = exec_id.split(".")
+    return [".".join(parts[:4])] if len(parts) == 5 else []
+
+
 # ── Public API ───────────────────────────────────────────────────────
 
 def build_relay(notifiers: list[BaseNotifier]) -> BrokerRelay:
@@ -621,4 +640,5 @@ def build_relay(notifiers: list[BaseNotifier]) -> BrokerRelay:
         poller_configs=poller_configs,
         listener_config=listener_config,
         on_start=_on_start,
+        dedup_aliases=_dedup_aliases,
     )

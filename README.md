@@ -673,7 +673,7 @@ export default defineComponent({
 
 `deliveryId` is derived from the broker's execution identifiers, and some brokers report **different identifiers on their real-time (WS) and polling (REST) paths** for the same order. On such brokers, a failure-path re-send — a delivery that reached you but looked failed to the relay, later re-sent by the poller — can carry a *different* `deliveryId`, which step 2 won't catch.
 
-The relay already suppresses this server-side (execution-id dedup, order-level dedup, and in-flight deferral), so it can only slip through on a narrow failure path. If a duplicate ever matters enough to close this gap, deduplicate on `data[].orderId` within a window of roughly twice the poll interval — but implement it carefully: a too-eager `orderId` check silently drops legitimate later fills for the same order, which is worse than the duplicate it prevents. For most consumers, the right call is to accept the rare duplicate.
+The relay already suppresses this server-side (execution-id dedup, dedup aliases for identifiers that differ only in form across paths — e.g. IBKR combo-leg execIds — order-level dedup, and in-flight deferral), so it can only slip through on a narrow failure path. Closing it consumer-side is broker-dependent: deduplicating on `data[].orderId` within a window of roughly twice the poll interval works for Kraken, but **not for IBKR** — its real-time and polling paths report unrelated order identifiers (and combo legs differ per leg), so there is no field to match on. It is also easy to get wrong: a too-eager `orderId` check silently drops legitimate later fills for the same order, which is worse than the duplicate it prevents. For most consumers, the right call is to accept the rare duplicate.
 
 ### FX Rate Enrichment
 
@@ -825,7 +825,7 @@ The listener processes two event types from the bridge stream:
 
 #### Operational notes
 
-- **Dedup is shared with the Flex poller.** Both the listener and the Flex poller write to the same SQLite dedup database. A fill delivered by the listener will be silently skipped if the Flex poller later sees the same `execId`, and vice versa.
+- **Dedup is shared with the Flex poller.** Both the listener and the Flex poller write to the same SQLite dedup database. A fill delivered by the listener will be silently skipped if the Flex poller later sees the same `execId`, and vice versa. Combo-leg executions — whose TWS execId carries an extra 5th segment that Flex omits — are reconciled through dedup aliases: the listener marks and checks the 4-segment Flex form alongside the real ID, in both directions.
 - **Auto-reconnect with backoff.** On disconnect or error the listener waits (starting at 5 s, up to 5 min) and reconnects automatically. The last seen sequence number is sent on reconnect so the bridge can replay any missed events.
 - **Debounce (optional).** Set `LISTENER_DEBOUNCE_MS` (milliseconds, default `0`) to buffer rapid partial fills before dispatching a single batched webhook. Useful when a large order fills in many small lots within a short window.
 

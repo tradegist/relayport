@@ -76,6 +76,28 @@ def get_processed_ids(conn: sqlite3.Connection, exec_ids: set[str]) -> set[str]:
     return {r[0] for r in rows}
 
 
+def get_processed_rows(
+    conn: sqlite3.Connection, exec_ids: set[str],
+) -> dict[str, str | None]:
+    """Return ``{exec_id: order_id}`` for the subset of exec_ids already stored.
+
+    Callers that only need membership use :func:`get_processed_ids`. This
+    variant also exposes ``order_id`` so the listener engine can tell rows
+    written by the poller (``order_id`` NULL) from rows it wrote itself when
+    matching dedup aliases — an alias hit must only suppress a fill when the
+    poller delivered it first.
+    """
+    if not exec_ids:
+        return {}
+    placeholders = ",".join("?" for _ in exec_ids)
+    rows = conn.execute(
+        f"SELECT exec_id, order_id FROM processed_fills "
+        f"WHERE exec_id IN ({placeholders})",
+        list(exec_ids),
+    ).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
 def mark_processed(conn: sqlite3.Connection, exec_id: str) -> None:
     """Record a single exec_id as processed (idempotent)."""
     conn.execute(

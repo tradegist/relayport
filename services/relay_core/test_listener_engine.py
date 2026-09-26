@@ -11,10 +11,11 @@ from unittest.mock import MagicMock, patch
 
 import aiohttp
 
-from relay_core import ListenerConfig, OnMessageResult
-from relay_core.context import get_relay
+from relay_core import BrokerRelay, ListenerConfig, OnMessageResult
+from relay_core.context import _reset, get_relay, init_relays
 from relay_core.dedup import (
     get_processed_ids,
+    get_processed_rows,
     init_db,
     mark_processed_batch,
 )
@@ -25,7 +26,6 @@ from relay_core.listener_engine import (
     _prefix_ids,
     _send_and_mark,
     _send_no_mark,
-    _strip_prefix,
 )
 from shared import BuySell, Fill
 
@@ -107,24 +107,15 @@ async def _noop_on_message(
 
 
 class TestNamespaceHelpers(unittest.TestCase):
-    """Test relay-prefixed ID generation and stripping."""
+    """Test relay-prefixed ID generation."""
 
     def test_prefix_ids(self) -> None:
         fills = [_make_fill(exec_id="A"), _make_fill(exec_id="B")]
         result = _prefix_ids("ibkr", fills)
         self.assertEqual(result, {"ibkr:A", "ibkr:B"})
 
-    def test_strip_prefix(self) -> None:
-        prefixed = {"ibkr:A", "ibkr:B"}
-        result = _strip_prefix("ibkr", prefixed)
-        self.assertEqual(result, {"A", "B"})
-
     def test_prefix_empty(self) -> None:
         result = _prefix_ids("ibkr", [])
-        self.assertEqual(result, set())
-
-    def test_strip_empty(self) -> None:
-        result = _strip_prefix("ibkr", set())
         self.assertEqual(result, set())
 
 
@@ -142,7 +133,7 @@ class TestInFlightRegistration(unittest.TestCase):
 
     @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
-    @patch("relay_core.listener_engine.get_processed_ids", return_value=set())
+    @patch("relay_core.listener_engine.get_processed_rows", return_value={})
     @patch("relay_core.listener_engine._init_dedup_db")
     def test_order_registered_during_notify(
         self,
@@ -169,7 +160,7 @@ class TestInFlightRegistration(unittest.TestCase):
 
     @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
-    @patch("relay_core.listener_engine.get_processed_ids", return_value=set())
+    @patch("relay_core.listener_engine.get_processed_rows", return_value={})
     @patch("relay_core.listener_engine._init_dedup_db")
     def test_order_released_when_notify_fails(
         self,
@@ -196,7 +187,7 @@ class TestSendAndMark(unittest.TestCase):
 
     @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
-    @patch("relay_core.listener_engine.get_processed_ids", return_value=set())
+    @patch("relay_core.listener_engine.get_processed_rows", return_value={})
     @patch("relay_core.listener_engine._init_dedup_db")
     def test_new_fill_dispatched_and_marked(
         self,
@@ -221,7 +212,7 @@ class TestSendAndMark(unittest.TestCase):
 
     @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
-    @patch("relay_core.listener_engine.get_processed_ids", return_value=set())
+    @patch("relay_core.listener_engine.get_processed_rows", return_value={})
     @patch("relay_core.listener_engine._init_dedup_db")
     def test_dedup_checks_prefixed_ids(
         self,
@@ -230,7 +221,7 @@ class TestSendAndMark(unittest.TestCase):
         mock_notify: MagicMock,
         mock_mark: MagicMock,
     ) -> None:
-        """get_processed_ids is called with relay-prefixed candidate IDs."""
+        """get_processed_rows is called with relay-prefixed candidate IDs."""
         mock_conn = MagicMock()
         mock_init_db.return_value = mock_conn
 
@@ -242,7 +233,7 @@ class TestSendAndMark(unittest.TestCase):
 
     @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
-    @patch("relay_core.listener_engine.get_processed_ids")
+    @patch("relay_core.listener_engine.get_processed_rows")
     @patch("relay_core.listener_engine._init_dedup_db")
     def test_already_seen_fill_skipped(
         self,
@@ -253,7 +244,7 @@ class TestSendAndMark(unittest.TestCase):
     ) -> None:
         mock_conn = MagicMock()
         mock_init_db.return_value = mock_conn
-        mock_get_ids.return_value = {"ibkr:0001"}
+        mock_get_ids.return_value = {"ibkr:0001": "12345"}
 
         fill = _make_fill()
         _send_and_mark("ibkr", [fill], "/tmp/test.db")
@@ -264,7 +255,7 @@ class TestSendAndMark(unittest.TestCase):
 
     @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
-    @patch("relay_core.listener_engine.get_processed_ids", return_value=set())
+    @patch("relay_core.listener_engine.get_processed_rows", return_value={})
     @patch("relay_core.listener_engine._init_dedup_db")
     def test_connection_closed_on_error(
         self,
@@ -286,7 +277,7 @@ class TestSendAndMark(unittest.TestCase):
 
     @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
-    @patch("relay_core.listener_engine.get_processed_ids", return_value=set())
+    @patch("relay_core.listener_engine.get_processed_rows", return_value={})
     @patch("relay_core.listener_engine._init_dedup_db")
     def test_parse_errors_included_in_payload(
         self,
@@ -308,7 +299,7 @@ class TestSendAndMark(unittest.TestCase):
 
     @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
-    @patch("relay_core.listener_engine.get_processed_ids", return_value=set())
+    @patch("relay_core.listener_engine.get_processed_rows", return_value={})
     @patch("relay_core.listener_engine._init_dedup_db")
     def test_errors_only_triggers_notify_no_mark(
         self,
@@ -331,7 +322,7 @@ class TestSendAndMark(unittest.TestCase):
 
     @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
-    @patch("relay_core.listener_engine.get_processed_ids")
+    @patch("relay_core.listener_engine.get_processed_rows")
     @patch("relay_core.listener_engine._init_dedup_db")
     def test_already_seen_fill_with_errors_still_notifies(
         self,
@@ -343,7 +334,7 @@ class TestSendAndMark(unittest.TestCase):
         """When a fill is deduped away but parse_errors exist, notify is still called."""
         mock_conn = MagicMock()
         mock_init_db.return_value = mock_conn
-        mock_get_ids.return_value = {"ibkr:0001"}
+        mock_get_ids.return_value = {"ibkr:0001": "12345"}
 
         fill = _make_fill()
         _send_and_mark("ibkr", [fill], "/tmp/test.db", parse_errors=["missing qty"])
@@ -453,6 +444,108 @@ class TestSendAndMarkRealDb(unittest.TestCase):
             conn.close()
 
 
+# ── _send_and_mark dedup-alias tests (real SQLite) ──────────────────
+
+
+def _truncate_alias(exec_id: str) -> list[str]:
+    """IBKR-style alias: 5-segment TWS combo-leg ID -> 4-segment Flex form."""
+    parts = exec_id.split(".")
+    return [".".join(parts[:4])] if len(parts) == 5 else []
+
+
+class TestSendAndMarkDedupAliases(unittest.TestCase):
+    """Cross-path dedup via ``BrokerRelay.dedup_aliases`` against a real DB.
+
+    Reproduces the production duplicate: TWS reports combo-leg executions
+    with a 5-segment execId while Flex reports the same execution truncated
+    to 4 segments — without aliases each path misses the other's row and
+    re-delivers the fill.
+    """
+
+    _TWS_ID = "0000fb0a.6a91b9f0.02.01.01"
+    _FLEX_ID = "0000fb0a.6a91b9f0.02.01"
+
+    def setUp(self) -> None:
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self._db_path = str(Path(self._tmp_dir.name) / "test.db")
+        # Replace the conftest default relay with one carrying the alias hook.
+        _reset()
+        init_relays([
+            BrokerRelay(name="ibkr", notifiers=[], dedup_aliases=_truncate_alias),
+        ])
+
+    def tearDown(self) -> None:
+        self._tmp_dir.cleanup()
+
+    @patch("relay_core.listener_engine.notify")
+    def test_listener_first_marks_alias_row_for_poller(
+        self, mock_notify: MagicMock,
+    ) -> None:
+        """Listener-first: the alias is marked so the poller's exact-match lookup hits."""
+        fill = _make_fill(exec_id=self._TWS_ID, order_id="1909410294")
+        _send_and_mark("ibkr", [fill], self._db_path)
+        mock_notify.assert_called_once()
+
+        conn = init_db(Path(self._db_path))
+        try:
+            rows = get_processed_rows(
+                conn, {f"ibkr:{self._TWS_ID}", f"ibkr:{self._FLEX_ID}"},
+            )
+            # Both keys stored; the alias row carries the orderId
+            # (listener-written), never NULL.
+            self.assertEqual(rows, {
+                f"ibkr:{self._TWS_ID}": "1909410294",
+                f"ibkr:{self._FLEX_ID}": "1909410294",
+            })
+        finally:
+            conn.close()
+
+    @patch("relay_core.listener_engine.notify")
+    def test_without_hook_poller_lookup_misses(
+        self, mock_notify: MagicMock,
+    ) -> None:
+        """Companion regression: no hook, no alias row — the pre-fix behavior."""
+        _reset()
+        init_relays([BrokerRelay(name="ibkr", notifiers=[])])
+
+        fill = _make_fill(exec_id=self._TWS_ID)
+        _send_and_mark("ibkr", [fill], self._db_path)
+
+        conn = init_db(Path(self._db_path))
+        try:
+            seen = get_processed_ids(conn, {f"ibkr:{self._FLEX_ID}"})
+            self.assertEqual(seen, set())
+        finally:
+            conn.close()
+
+    @patch("relay_core.listener_engine.notify")
+    def test_poller_first_suppresses_replayed_fill(
+        self, mock_notify: MagicMock,
+    ) -> None:
+        """Poller-first: a poller-written (NULL order_id) alias row suppresses the WS replay."""
+        conn = init_db(Path(self._db_path))
+        try:
+            mark_processed_batch(conn, [f"ibkr:{self._FLEX_ID}"])
+        finally:
+            conn.close()
+
+        fill = _make_fill(exec_id=self._TWS_ID)
+        _send_and_mark("ibkr", [fill], self._db_path)
+        mock_notify.assert_not_called()
+
+    @patch("relay_core.listener_engine.notify")
+    def test_listener_alias_row_never_suppresses_sibling(
+        self, mock_notify: MagicMock,
+    ) -> None:
+        """A listener-written alias row (order_id set) must not suppress a
+        sibling 5-segment execution sharing the same truncation."""
+        first = _make_fill(exec_id="0000fb0a.6a91b9f0.02.01.01")
+        sibling = _make_fill(exec_id="0000fb0a.6a91b9f0.02.01.02")
+        _send_and_mark("ibkr", [first], self._db_path)
+        _send_and_mark("ibkr", [sibling], self._db_path)
+        self.assertEqual(mock_notify.call_count, 2)
+
+
 # ── _send_no_mark tests ─────────────────────────────────────────────
 
 
@@ -521,7 +614,7 @@ class TestDispatchOrdering(unittest.TestCase):
 
     @patch("relay_core.listener_engine.mark_processed_batch_with_orders")
     @patch("relay_core.listener_engine.notify")
-    @patch("relay_core.listener_engine.get_processed_ids", return_value=set())
+    @patch("relay_core.listener_engine.get_processed_rows", return_value={})
     @patch("relay_core.listener_engine._init_dedup_db")
     def test_send_and_mark_sorts_trades_by_timestamp_ascending(
         self,

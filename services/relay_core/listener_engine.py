@@ -18,7 +18,7 @@ import aiohttp
 
 from relay_core.context import get_relay
 from relay_core.dedup import (
-    get_processed_ids,
+    get_processed_rows,
     mark_processed_batch_with_orders,
 )
 from relay_core.dedup import init_db as _init_dedup_db
@@ -126,12 +126,6 @@ def _prefix_ids(relay_name: str, fills: list[Fill]) -> set[str]:
     return {f"{relay_name}:{f.execId}" for f in fills}
 
 
-def _strip_prefix(relay_name: str, prefixed_ids: set[str]) -> set[str]:
-    """Remove relay prefix to recover original exec IDs."""
-    prefix = f"{relay_name}:"
-    return {pid[len(prefix):] for pid in prefixed_ids}
-
-
 # ── Dispatch helpers (blocking IO — run in asyncio.to_thread) ────────
 
 def _send_and_mark(
@@ -154,14 +148,36 @@ def _send_and_mark(
     unprocessed and will be retried on the next event or reconnect.
     """
     relay = get_relay(relay_name)
+    alias_fn = relay.dedup_aliases
     conn = _init_dedup_db(db_path)
     _parse_errors = parse_errors or []
     log_fills(relay_name, fills)
     try:
-        prefixed_candidates = _prefix_ids(relay_name, fills)
-        already_seen_prefixed = get_processed_ids(conn, prefixed_candidates)
-        already_seen = _strip_prefix(relay_name, already_seen_prefixed)
-        new_fills = [f for f in fills if f.execId not in already_seen]
+        # Each fill is looked up under its own exec ID plus any relay-declared
+        # dedup aliases — alternate IDs the broker's other feed uses for the
+        # same execution (e.g. IBKR Flex truncates combo-leg execIds).
+        aliases = {
+            f.execId: (alias_fn(f.execId) if alias_fn else []) for f in fills
+        }
+        lookup = _prefix_ids(relay_name, fills) | {
+            f"{relay_name}:{alias}" for f in fills for alias in aliases[f.execId]
+        }
+        seen_rows = get_processed_rows(conn, lookup)
+
+        new_fills: list[Fill] = []
+        for f in fills:
+            if f"{relay_name}:{f.execId}" in seen_rows:
+                continue
+            # An alias hit only counts when the stored row was written by the
+            # poller (order_id NULL): rows this listener wrote under an alias
+            # key carry their orderId, so they never suppress a sibling
+            # execution that truncates to the same alias.
+            if any(
+                key in seen_rows and seen_rows[key] is None
+                for key in (f"{relay_name}:{a}" for a in aliases[f.execId])
+            ):
+                continue
+            new_fills.append(f)
 
         if not new_fills and not _parse_errors:
             log.debug("All %d fill(s) already processed", len(fills))
@@ -212,13 +228,19 @@ def _send_and_mark(
             # multi-match fills where the broker issues a different
             # consolidated identifier on its REST path.
             if trades:
+                # Alias keys are marked alongside the real exec IDs (with the
+                # same orderId) so the poller's exact-match lookup recognises
+                # fills it would otherwise re-deliver under the broker's
+                # alternate ID.
                 items = [
-                    (f"{relay_name}:{eid}", t.orderId)
+                    (f"{relay_name}:{key}", t.orderId)
                     for t in trades
                     for eid in t.execIds
+                    for key in (eid, *(alias_fn(eid) if alias_fn else []))
                 ]
                 mark_processed_batch_with_orders(conn, items)
-                log.info("Marked %d fill(s) as processed", len(items))
+                fill_count = sum(len(t.execIds) for t in trades)
+                log.info("Marked %d fill(s) as processed", fill_count)
         finally:
             INFLIGHT_ORDERS.release(relay_name, in_flight_orders)
     finally:
