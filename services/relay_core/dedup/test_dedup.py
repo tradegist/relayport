@@ -9,6 +9,7 @@ from typing import Any
 
 from relay_core.dedup import (
     get_processed_ids,
+    get_processed_rows,
     get_recently_processed_order_ids,
     init_db,
     is_processed,
@@ -124,6 +125,39 @@ class TestMarkProcessedBatchWithOrders(unittest.TestCase):
         ).fetchone()
         assert count is not None
         assert count[0] == 1
+
+
+class TestGetProcessedRows(unittest.TestCase):
+    """``get_processed_rows`` maps stored exec_ids to their order_id."""
+
+    def setUp(self) -> None:
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS processed_fills ("
+            "  exec_id TEXT PRIMARY KEY,"
+            "  order_id TEXT,"
+            "  processed_at TEXT DEFAULT (datetime('now'))"
+            ")"
+        )
+        self.conn.commit()
+
+    def tearDown(self) -> None:
+        self.conn.close()
+
+    def test_empty_input_returns_empty(self) -> None:
+        assert get_processed_rows(self.conn, set()) == {}
+
+    def test_missing_ids_omitted(self) -> None:
+        mark_processed_batch(self.conn, ["ibkr:A"])
+        rows = get_processed_rows(self.conn, {"ibkr:A", "ibkr:B"})
+        assert rows == {"ibkr:A": None}
+
+    def test_null_and_populated_order_ids(self) -> None:
+        # Poller-style write (order_id NULL) vs listener-style write.
+        mark_processed_batch(self.conn, ["ibkr:POLL"])
+        mark_processed_batch_with_orders(self.conn, [("ibkr:WS", "42")])
+        rows = get_processed_rows(self.conn, {"ibkr:POLL", "ibkr:WS"})
+        assert rows == {"ibkr:POLL": None, "ibkr:WS": "42"}
 
 
 class TestGetRecentlyProcessedOrderIds(unittest.TestCase):

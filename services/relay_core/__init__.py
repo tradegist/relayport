@@ -61,6 +61,14 @@ class BrokerRelay:
     # Relay adapters use this to register cross-cutting concerns (e.g. log filters).
     on_start: Callable[["StartupContext"], None] | None = None
 
+    # Dedup alias hook — maps an exec ID the broker emits on the listener
+    # (WS) path to the alternate IDs its other feed may use for the SAME
+    # execution (e.g. IBKR Flex truncates the 5th segment of combo-leg
+    # execIds that TWS reports in real time). Pure function; must never
+    # return its input. None disables aliasing (Kraken reconciles paths
+    # via order-level dedup instead).
+    dedup_aliases: Callable[[str], list[str]] | None = None
+
     # Runtime state (set by the orchestrator, not by the adapter)
     poll_locks: list[asyncio.Lock] = field(default_factory=list)
 

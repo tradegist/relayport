@@ -11,6 +11,7 @@ from relay_core import get_debounce_ms, get_poll_interval, is_listener_enabled
 from relays.ibkr import (
     _build_connect,
     _build_poller_configs,
+    _dedup_aliases,
     _event_filter,
     _get_account_timezone,
     _get_bridge_api_token,
@@ -761,12 +762,41 @@ class TestBuildConnect(unittest.IsolatedAsyncioTestCase):
 # ── build_relay integration test ─────────────────────────────────────
 
 
+class TestDedupAliases(unittest.TestCase):
+    """TWS combo-leg execIds alias to their 4-segment Flex form."""
+
+    def test_combo_leg_truncates_to_flex_form(self) -> None:
+        self.assertEqual(
+            _dedup_aliases("0000fb0a.6a91b9f0.02.01.01"),
+            ["0000fb0a.6a91b9f0.02.01"],
+        )
+
+    def test_plain_execid_has_no_alias(self) -> None:
+        self.assertEqual(_dedup_aliases("00010196.6a82e3b0.01.01"), [])
+
+    def test_numeric_flex_fallback_has_no_alias(self) -> None:
+        # Flex rows with empty ibExecID fall back to a numeric transactionId.
+        self.assertEqual(_dedup_aliases("1526509190"), [])
+
+    def test_empty_string_has_no_alias(self) -> None:
+        self.assertEqual(_dedup_aliases(""), [])
+
+    def test_alias_is_not_aliasable_itself(self) -> None:
+        # Idempotence: the 4-segment form maps to nothing.
+        alias = _dedup_aliases("0000fb0a.6a91b9f0.02.01.01")[0]
+        self.assertEqual(_dedup_aliases(alias), [])
+
+
 class TestBuildRelay(unittest.TestCase):
     """Test that build_relay wires everything together."""
 
     def test_relay_name_is_ibkr(self) -> None:
         relay = build_relay(notifiers=[])
         self.assertEqual(relay.name, "ibkr")
+
+    def test_dedup_aliases_registered(self) -> None:
+        relay = build_relay(notifiers=[])
+        self.assertIs(relay.dedup_aliases, _dedup_aliases)
 
     def test_has_poller_and_listener(self) -> None:
         relay = build_relay(notifiers=[])

@@ -32,6 +32,7 @@ For `assetCategory == "OPT"` fills:
 ## Combo (multi-leg / BAG) orders
 
 - **`_map_fill` skips `secType == "BAG"` executions** (bridge path). IBKR emits a synthetic "combo summary" execution for multi-leg orders — reported under the *underlying* symbol, with zero commission and the parent order's `permId`. It is not a tradeable leg (the real legs arrive as their own executions), and it shares the legs' `permId` (→ `Fill.orderId`). Left in, it would (1) fire a phantom underlying-symbol webhook and (2) merge with the legs in `aggregate_fills`. The Flex path never sees it (IBKR omits the combo leg from Flex reports).
+- **Combo-leg execIds differ between TWS and Flex** — TWS appends a 5th dot-segment to combo-leg execIds (`0000fb0a.xxxxxxxx.02.01.01`); Flex reports the same execution truncated to its 4-segment prefix (`0000fb0a.xxxxxxxx.02.01`). Without reconciliation each path treats the other's ID as unseen and re-delivers the fill (confirmed for every production combo order). `_dedup_aliases` maps the 5-segment form to its 4-segment prefix and is registered as `BrokerRelay.dedup_aliases`; the listener engine marks and checks the alias alongside the real ID. Flex fallback IDs (numeric `transactionId` when `ibExecID` is empty) have no alias — that family is a separate, unsolved mismatch.
 - **`aggregate_fills` groups by `(orderId, symbol)`, not `orderId` alone** — the second reason combo legs stay separate: even sharing one `permId`, distinct option contracts have distinct `Fill.symbol`, so each leg becomes its own `Trade`.
 
 ## Fixture management
