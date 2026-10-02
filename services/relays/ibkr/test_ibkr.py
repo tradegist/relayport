@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from relay_core import get_debounce_ms, get_poll_interval, is_listener_enabled
 from relays.ibkr import (
+    _book_trade_key,
     _build_connect,
     _build_poller_configs,
     _dedup_aliases,
@@ -24,7 +25,7 @@ from relays.ibkr import (
     _on_message_factory,
     build_relay,
 )
-from shared import BuySell
+from shared import BuySell, Fill
 
 from .bridge_models import (
     WsCommissionReport,
@@ -100,12 +101,18 @@ def _make_envelope(
     side: str = "BOT",
     source: Literal["live", "reconciled"] = "live",
     contract: WsContract | None = None,
+    book_trade: bool = False,
+    shares: float | None = None,
+    price: float | None = None,
 ) -> WsFillEnvelope:
+    exec_update: dict[str, Any] = {"execId": exec_id, "side": side}
+    if shares is not None:
+        exec_update["shares"] = shares
+    if price is not None:
+        exec_update["price"] = price
     fill = WsFill(
         contract=contract if contract is not None else _DEFAULT_CONTRACT,
-        execution=_DEFAULT_EXECUTION.model_copy(
-            update={"execId": exec_id, "side": side},
-        ),
+        execution=_DEFAULT_EXECUTION.model_copy(update=exec_update),
         commissionReport=_DEFAULT_COMMISSION.model_copy(
             update={"execId": exec_id},
         ),
@@ -117,6 +124,7 @@ def _make_envelope(
         timestamp="2026-04-11T10:30:00+00:00",
         fill=fill,
         source=source,
+        isBookTrade=book_trade,
     )
 
 
@@ -828,3 +836,133 @@ class TestBuildRelay(unittest.TestCase):
             relay = build_relay(notifiers=[])
         self.assertEqual(relay.poller_configs, [])
         self.assertIsNotNone(relay.listener_config)
+
+
+# ── Book-trade classification tests ─────────────────────────────────
+
+
+def _flex_fill(
+    *,
+    symbol: str = "TSLA",
+    side: BuySell = BuySell.BUY,
+    volume: float = 100.0,
+    price: float = 335.0,
+    raw: dict[str, Any] | None = None,
+) -> Fill:
+    """Build a Fill the way the Flex parser would emit it."""
+    return Fill(
+        execId="1526509190",
+        orderId="6405307307",
+        symbol=symbol,
+        assetClass="equity",
+        side=side,
+        price=price,
+        volume=volume,
+        cost=0.0,
+        fee=0.0,
+        timestamp="2026-07-30T20:20:00",
+        source="flex",
+        raw=raw if raw is not None else {
+            "accountId": "UXXXXXXX",
+            "transactionType": "BookTrade",
+        },
+    )
+
+
+class TestBookTradeKey(unittest.TestCase):
+    """Classification + economic-key construction for cross-path dedup."""
+
+    def test_flex_booktrade_transaction_type(self) -> None:
+        key = _book_trade_key(_flex_fill())
+        assert key == "UXXXXXXX|TSLA|buy|100|335"
+
+    def test_flex_exchtrade_not_classified(self) -> None:
+        fill = _flex_fill(raw={
+            "accountId": "UXXXXXXX", "transactionType": "ExchTrade",
+        })
+        assert _book_trade_key(fill) is None
+
+    def test_flex_notes_assignment_code(self) -> None:
+        fill = _flex_fill(raw={"accountId": "UXXXXXXX", "notes": "A"})
+        assert _book_trade_key(fill) is not None
+
+    def test_flex_notes_compound_codes(self) -> None:
+        fill = _flex_fill(raw={"accountId": "UXXXXXXX", "notes": "C;Ep"})
+        assert _book_trade_key(fill) is not None
+
+    def test_flex_code_attr_trade_confirmation(self) -> None:
+        fill = _flex_fill(raw={"accountId": "UXXXXXXX", "code": "Ex"})
+        assert _book_trade_key(fill) is not None
+
+    def test_flex_notes_exact_token_no_substring_match(self) -> None:
+        # "Adj" must not match "A"; "AEx" is its own token, not "Ex".
+        for notes in ("Adj", "Al", "Aw", "Ca", "O;P"):
+            fill = _flex_fill(raw={"accountId": "UXXXXXXX", "notes": notes})
+            assert _book_trade_key(fill) is None, notes
+        fill = _flex_fill(raw={"accountId": "UXXXXXXX", "notes": "AEx"})
+        assert _book_trade_key(fill) is not None
+
+    def test_flex_missing_account_fails_open(self) -> None:
+        fill = _flex_fill(raw={"transactionType": "BookTrade"})
+        assert _book_trade_key(fill) is None
+
+    def test_flex_sell_side_call_assignment(self) -> None:
+        # Call assignment delivers shares away: SELL. The Fill validator
+        # signs volume negative / cost positive; the key uses magnitudes.
+        fill = _flex_fill(side=BuySell.SELL, volume=-100.0)
+        assert fill.volume < 0
+        assert _book_trade_key(fill) == "UXXXXXXX|TSLA|sell|100|335"
+
+    def test_bridge_booktrade_tag(self) -> None:
+        envelope = _make_envelope(book_trade=True, shares=100.0, price=335.0)
+        fill = _map_fill(envelope, _TEST_TZ)
+        # _DEFAULT_EXECUTION.acctNumber is "UXXXXXXX"; symbol AAPL.
+        assert _book_trade_key(fill) == "UXXXXXXX|AAPL|buy|100|335"
+
+    def test_bridge_untagged_not_classified(self) -> None:
+        fill = _map_fill(_make_envelope(), _TEST_TZ)
+        assert _book_trade_key(fill) is None
+
+    def test_bridge_old_envelope_without_field_not_classified(self) -> None:
+        # Envelopes from bridge versions predating isBookTrade parse fine
+        # and are never classified.
+        data = _make_envelope().model_dump()
+        del data["isBookTrade"]
+        fill = _map_fill(WsFillEnvelope.model_validate(data), _TEST_TZ)
+        assert _book_trade_key(fill) is None
+
+    def test_cross_path_keys_identical_production_assignment(self) -> None:
+        # The invariant the whole layer rests on: both paths produce the
+        # SAME key for the same event (2026-07-30 TSLA 335P assignment).
+        flex_stock = _flex_fill()
+        bridge_env = _make_envelope(
+            book_trade=True, shares=100.0, price=335.0,
+            contract=_DEFAULT_CONTRACT.model_copy(update={"symbol": "TSLA"}),
+        )
+        bridge_stock = _map_fill(bridge_env, _TEST_TZ)
+        k1, k2 = _book_trade_key(flex_stock), _book_trade_key(bridge_stock)
+        assert k1 is not None
+        assert k1 == k2
+
+    def test_cross_path_keys_identical_option_leg(self) -> None:
+        flex_option = _flex_fill(
+            symbol="TSLA260731P00335000", volume=1.0, price=0.0,
+            raw={"accountId": "UXXXXXXX", "transactionType": "BookTrade"},
+        )
+        option_contract = _DEFAULT_CONTRACT.model_copy(update={
+            "secType": "OPT", "symbol": "TSLA",
+            "localSymbol": "TSLA  260731P00335000",
+            "lastTradeDateOrContractMonth": "20260731",
+            "strike": 335.0, "right": "P", "multiplier": "100",
+        })
+        bridge_env = _make_envelope(
+            book_trade=True, shares=1.0, price=0.0, contract=option_contract,
+        )
+        bridge_option = _map_fill(bridge_env, _TEST_TZ)
+        k1, k2 = _book_trade_key(flex_option), _book_trade_key(bridge_option)
+        assert k1 == "UXXXXXXX|TSLA260731P00335000|buy|1|0"
+        assert k1 == k2
+
+    def test_build_relay_wires_book_trade_key(self) -> None:
+        relay = build_relay(notifiers=[])
+        assert relay.book_trade_key is _book_trade_key

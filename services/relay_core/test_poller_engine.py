@@ -10,6 +10,7 @@ import pytest
 from relay_core.context import get_relay
 from relay_core.dedup import (
     get_processed_ids,
+    mark_book_trade_keys,
     mark_processed_batch,
     mark_processed_batch_with_orders,
 )
@@ -839,3 +840,145 @@ class TestInFlightDeferral:
         poll_once("ibkr", dedup_conn=dedup_db, meta_conn=meta_db)
 
         assert get_last_poll_ts(meta_db, "ibkr") == to_epoch("2025-04-03T10:00:00")
+
+
+# ═════════════════════════════════════════════════════════════════════
+#  Book-trade cross-path dedup (poller side)
+# ═════════════════════════════════════════════════════════════════════
+
+
+def _bt_key(f: Fill) -> str | None:
+    """Test classifier: fills tagged in raw get an economic key."""
+    if not f.raw.get("isBookTrade"):
+        return None
+    return f"ACCT|{f.symbol}|{f.side.value}|{abs(f.volume):.10g}|{f.price:.10g}"
+
+
+_TSLA_KEY = "ACCT|TSLA|buy|100|335"
+
+
+def _assignment_fill(**overrides: Any) -> Fill:
+    defaults: dict[str, Any] = {
+        "execId": "1526509190",
+        "orderId": "6405307307",
+        "symbol": "TSLA",
+        "volume": 100.0,
+        "price": 335.0,
+        "raw": {"isBookTrade": True},
+    }
+    defaults.update(overrides)
+    return _make_fill(**defaults)
+
+
+class TestBookTradeCrossPathDedup:
+    @patch("relay_core.poller_engine.notify")
+    def test_consumes_listener_key_and_suppresses(
+        self, mock_notify: MagicMock,
+        dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
+    ) -> None:
+        # Listener notified the assignment first (bridge-first ordering).
+        mark_book_trade_keys(dedup_db, "ibkr", "ws", [_TSLA_KEY])
+        get_relay("ibkr").book_trade_key = _bt_key
+        cfg = _MockPollerConfig(parse=lambda _: ([_assignment_fill()], []))
+        _set_poller(cfg)
+
+        result = poll_once("ibkr", dedup_conn=dedup_db, meta_conn=meta_db)
+
+        assert result == []
+        mock_notify.assert_not_called()
+        # Consumed fill is exec-marked so it never re-arrives.
+        assert get_processed_ids(dedup_db, {"ibkr:1526509190"}) == {
+            "ibkr:1526509190",
+        }
+        # The key row is consumed — a later identical event must notify.
+        assert get_processed_ids(dedup_db, {f"ibkr:bt:ws:{_TSLA_KEY}"}) == set()
+
+    @patch("relay_core.poller_engine.notify")
+    def test_notifies_and_records_key_when_first(
+        self, mock_notify: MagicMock,
+        dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
+    ) -> None:
+        # Poller-first ordering (the production incident): fill must
+        # notify normally and leave a poll-source key for the listener.
+        get_relay("ibkr").book_trade_key = _bt_key
+        cfg = _MockPollerConfig(parse=lambda _: ([_assignment_fill()], []))
+        _set_poller(cfg)
+
+        result = poll_once("ibkr", dedup_conn=dedup_db, meta_conn=meta_db)
+
+        assert len(result) == 1
+        mock_notify.assert_called_once()
+        assert get_processed_ids(dedup_db, {f"ibkr:bt:poll:{_TSLA_KEY}"}) == {
+            f"ibkr:bt:poll:{_TSLA_KEY}",
+        }
+
+    @patch("relay_core.poller_engine.notify")
+    def test_own_poll_key_never_self_consumes(
+        self, mock_notify: MagicMock,
+        dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
+    ) -> None:
+        # Two identical single-path events (partial assignment tranches)
+        # must both notify — a poll key must not suppress a poll fill.
+        mark_book_trade_keys(dedup_db, "ibkr", "poll", [_TSLA_KEY])
+        get_relay("ibkr").book_trade_key = _bt_key
+        cfg = _MockPollerConfig(parse=lambda _: ([_assignment_fill()], []))
+        _set_poller(cfg)
+
+        result = poll_once("ibkr", dedup_conn=dedup_db, meta_conn=meta_db)
+
+        assert len(result) == 1
+        mock_notify.assert_called_once()
+
+    @patch("relay_core.poller_engine.notify")
+    def test_unclassified_fill_unaffected(
+        self, mock_notify: MagicMock,
+        dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
+    ) -> None:
+        mark_book_trade_keys(dedup_db, "ibkr", "ws", [_TSLA_KEY])
+        get_relay("ibkr").book_trade_key = _bt_key
+        normal = _make_fill(execId="N1", symbol="TSLA", volume=100.0, price=335.0)
+        cfg = _MockPollerConfig(parse=lambda _: ([normal], []))
+        _set_poller(cfg)
+
+        result = poll_once("ibkr", dedup_conn=dedup_db, meta_conn=meta_db)
+
+        # Normal fill (no book-trade marker) never touches the key —
+        # notified, key row untouched.
+        assert len(result) == 1
+        mock_notify.assert_called_once()
+        assert get_processed_ids(dedup_db, {f"ibkr:bt:ws:{_TSLA_KEY}"}) == {
+            f"ibkr:bt:ws:{_TSLA_KEY}",
+        }
+
+    @patch("relay_core.poller_engine.notify")
+    def test_mixed_batch_consumes_only_matching(
+        self, mock_notify: MagicMock,
+        dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
+    ) -> None:
+        mark_book_trade_keys(dedup_db, "ibkr", "ws", [_TSLA_KEY])
+        get_relay("ibkr").book_trade_key = _bt_key
+        bt = _assignment_fill()
+        normal = _make_fill(execId="N1", symbol="MSFT")
+        cfg = _MockPollerConfig(parse=lambda _: ([bt, normal], []))
+        _set_poller(cfg)
+
+        result = poll_once("ibkr", dedup_conn=dedup_db, meta_conn=meta_db)
+
+        assert [t.symbol for t in result] == ["MSFT"]
+        mock_notify.assert_called_once()
+
+    @patch("relay_core.poller_engine.notify")
+    def test_no_classifier_configured_is_noop(
+        self, mock_notify: MagicMock,
+        dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
+    ) -> None:
+        # Default relay (book_trade_key=None): tagged fills flow through
+        # untouched even when a matching ws key exists.
+        mark_book_trade_keys(dedup_db, "ibkr", "ws", [_TSLA_KEY])
+        cfg = _MockPollerConfig(parse=lambda _: ([_assignment_fill()], []))
+        _set_poller(cfg)
+
+        result = poll_once("ibkr", dedup_conn=dedup_db, meta_conn=meta_db)
+
+        assert len(result) == 1
+        mock_notify.assert_called_once()

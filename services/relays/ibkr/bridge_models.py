@@ -162,6 +162,13 @@ class WsFillEnvelope(BaseModel):
     timestamp: str
     fill: WsFill
     source: WsEventSource
+    # True when the bridge surfaced this execution via reconcile and no
+    # CommissionReport ever arrived for it — IBKR books assignments,
+    # exercises, and expiries this way. Defaults False so envelopes from
+    # bridge versions predating the field parse unchanged (those fills
+    # are simply never book-trade-classified, which fails open to a
+    # duplicate webhook).
+    isBookTrade: bool = False
 
 
 # Discriminated union over the ``type`` field. Pydantic uses the

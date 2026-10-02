@@ -17,6 +17,7 @@ from relay_core.dedup import (
     get_processed_ids,
     get_processed_rows,
     init_db,
+    mark_book_trade_keys,
     mark_processed_batch,
 )
 from relay_core.inflight import INFLIGHT_ORDERS
@@ -1649,3 +1650,92 @@ class TestDebounceBuffer(unittest.IsolatedAsyncioTestCase):
         mock_send.assert_called_once()
         call_args = mock_send.call_args[0]
         self.assertEqual(call_args[3], ["error one", "error two", "error three"])
+
+
+# ── Book-trade cross-path dedup (listener side) ─────────────────────
+
+
+def _bt_key(f: Fill) -> str | None:
+    """Test classifier: fills tagged in raw get an economic key."""
+    if not f.raw.get("isBookTrade"):
+        return None
+    return f"ACCT|{f.symbol}|{f.side.value}|{abs(f.volume):.10g}|{f.price:.10g}"
+
+
+class TestSendAndMarkBookTrade(unittest.TestCase):
+    """Cross-path consume/record semantics inside _send_and_mark."""
+
+    KEY = "ACCT|TSLA|buy|100|335"
+
+    def setUp(self) -> None:
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self._db_path = str(Path(self._tmp_dir.name) / "test.db")
+        get_relay("ibkr").book_trade_key = _bt_key
+
+    def tearDown(self) -> None:
+        self._tmp_dir.cleanup()
+
+    def _bt_fill(self) -> Fill:
+        fill = _make_fill(
+            exec_id="000310dd.6a6aee05.02.01", symbol="TSLA",
+            volume=100.0, price=335.0, fee=0.0, order_id="1544644409",
+        )
+        fill.raw["isBookTrade"] = True
+        return fill
+
+    @patch("relay_core.listener_engine.notify")
+    def test_consumes_poller_key_and_suppresses(
+        self, mock_notify: MagicMock,
+    ) -> None:
+        # Poller notified the assignment first (the production ordering).
+        conn = init_db(Path(self._db_path))
+        try:
+            mark_book_trade_keys(conn, "ibkr", "poll", [self.KEY])
+        finally:
+            conn.close()
+
+        _send_and_mark("ibkr", [self._bt_fill()], self._db_path)
+
+        mock_notify.assert_not_called()
+        conn = init_db(Path(self._db_path))
+        try:
+            # Consumed fill exec-marked; poll key row gone.
+            self.assertEqual(
+                get_processed_ids(conn, {"ibkr:000310dd.6a6aee05.02.01"}),
+                {"ibkr:000310dd.6a6aee05.02.01"},
+            )
+            self.assertEqual(
+                get_processed_ids(conn, {f"ibkr:bt:poll:{self.KEY}"}), set(),
+            )
+        finally:
+            conn.close()
+
+    @patch("relay_core.listener_engine.notify")
+    def test_notifies_and_records_ws_key_when_first(
+        self, mock_notify: MagicMock,
+    ) -> None:
+        _send_and_mark("ibkr", [self._bt_fill()], self._db_path)
+
+        mock_notify.assert_called_once()
+        conn = init_db(Path(self._db_path))
+        try:
+            self.assertEqual(
+                get_processed_ids(conn, {f"ibkr:bt:ws:{self.KEY}"}),
+                {f"ibkr:bt:ws:{self.KEY}"},
+            )
+        finally:
+            conn.close()
+
+    @patch("relay_core.listener_engine.notify")
+    def test_own_ws_key_never_self_consumes(
+        self, mock_notify: MagicMock,
+    ) -> None:
+        conn = init_db(Path(self._db_path))
+        try:
+            mark_book_trade_keys(conn, "ibkr", "ws", [self.KEY])
+        finally:
+            conn.close()
+
+        _send_and_mark("ibkr", [self._bt_fill()], self._db_path)
+
+        mock_notify.assert_called_once()

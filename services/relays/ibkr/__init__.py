@@ -399,6 +399,66 @@ def _build_option_contract(contract: WsContract, exec_id: str) -> OptionContract
     )
 
 
+# ── Book-trade classification (cross-path dedup) ────────────────────
+
+# Flex codes marking fills that IBKR books outside normal execution flow:
+# A (assignment), Ex (exercise), Ep (expired), AEx (auto-exercise),
+# MEx (manual exercise), GEA (expiration/assignment from offsetting
+# positions). Matched as exact tokens after splitting on ";" — substring
+# matching would confuse e.g. "A" with "Adj"/"Al"/"Aw" or "Ex" with "AEx".
+_BOOK_TRADE_CODES: frozenset[str] = frozenset({"A", "Ex", "Ep", "AEx", "MEx", "GEA"})
+
+
+def _is_flex_book_trade(raw: dict[str, Any]) -> bool:
+    """True when a Flex row is a book trade (assignment/exercise/expiry).
+
+    Primary marker: ``transactionType="BookTrade"`` (verified on live
+    assignment rows; normal fills carry ``ExchTrade``). Fallback: exact
+    book-trade code tokens in ``notes`` (Activity Flex) or ``code``
+    (Trade Confirmation). Both are user-selected query columns — when a
+    query omits them, classification fails open to a duplicate webhook.
+    """
+    if str(raw.get("transactionType", "")).strip() == "BookTrade":
+        return True
+    joined = f"{raw.get('notes', '')};{raw.get('code', '')}"
+    tokens = {token.strip() for token in joined.split(";") if token.strip()}
+    return bool(tokens & _BOOK_TRADE_CODES)
+
+
+def _book_trade_key(fill: Fill) -> str | None:
+    """Economic key for book-trade fills; None for every other fill.
+
+    Book trades reach the relay through both paths with disjoint
+    identifiers, so the engines reconcile them on this key instead (see
+    ``relay_core.dedup``). The key is account-scoped — without the
+    account, two accounts assigned on the same contract the same night
+    would consume each other's keys. It embeds the account id and must
+    therefore never be logged.
+
+    A classified fill whose account cannot be resolved returns None
+    (fail open to a duplicate) rather than building an account-blind key.
+    """
+    if fill.source == "flex":
+        if not _is_flex_book_trade(fill.raw):
+            return None
+        account = str(fill.raw.get("accountId", "")).strip()
+    else:
+        # Bridge WS fill — raw is the WsFillEnvelope dump. isBookTrade is
+        # set by ibkr_bridge for reconciled executions that never got a
+        # CommissionReport; envelopes from older bridge versions lack
+        # the field and are never classified.
+        if not fill.raw.get("isBookTrade"):
+            return None
+        execution = fill.raw.get("fill", {}).get("execution", {})
+        account = str(execution.get("acctNumber", "")).strip()
+    if not account:
+        return None
+    return (
+        f"{account}|{fill.symbol}|{fill.side.value}"
+        f"|{abs(fill.volume):.10g}|{fill.price:.10g}"
+    )
+
+
 def _event_filter(data: dict[str, Any]) -> bool:
     """Return True for events the IBKR adapter handles."""
     event_type = data.get("type")
@@ -641,4 +701,5 @@ def build_relay(notifiers: list[BaseNotifier]) -> BrokerRelay:
         listener_config=listener_config,
         on_start=_on_start,
         dedup_aliases=_dedup_aliases,
+        book_trade_key=_book_trade_key,
     )
