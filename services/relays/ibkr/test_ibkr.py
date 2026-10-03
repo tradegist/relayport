@@ -2,13 +2,16 @@
 
 import json
 import os
+import tempfile
 import unittest
 from typing import Any, Literal
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 from relay_core import get_debounce_ms, get_poll_interval, is_listener_enabled
+from relay_core.poller_engine import init_meta_db
 from relays.ibkr import (
+    _advance_bridge_cursor,
     _book_trade_key,
     _build_connect,
     _build_poller_configs,
@@ -23,6 +26,7 @@ from relays.ibkr import (
     _is_exec_events_enabled,
     _map_fill,
     _on_message_factory,
+    _resume_query,
     build_relay,
 )
 from shared import BuySell, Fill
@@ -765,6 +769,85 @@ class TestBuildConnect(unittest.IsolatedAsyncioTestCase):
 
         _, kwargs = session.ws_connect.call_args
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer my-secret")
+
+
+class TestBridgeCursor(unittest.TestCase):
+    """Pure cursor logic: (last seq, bridgeId that issued it)."""
+
+    def test_seq_moves_forward_within_one_bridge(self) -> None:
+        self.assertEqual(_advance_bridge_cursor((5, "a"), {"seq": 6, "bridgeId": "a"}), (6, "a"))
+        self.assertIsNone(_advance_bridge_cursor((5, "a"), {"seq": 5, "bridgeId": "a"}))
+        self.assertIsNone(_advance_bridge_cursor((5, "a"), {"seq": 3, "bridgeId": "a"}))
+
+    def test_new_bridge_id_resets_to_its_lower_seq(self) -> None:
+        # 2026-10-02: relays held seq=240 from the old bridge while the
+        # restarted bridge counted from 1.
+        self.assertEqual(_advance_bridge_cursor((240, "old"), {"seq": 3, "bridgeId": "new"}), (3, "new"))
+        self.assertEqual(_advance_bridge_cursor((240, None), {"seq": 3, "bridgeId": "new"}), (3, "new"))
+
+    def test_bridge_without_id_only_moves_forward(self) -> None:
+        self.assertEqual(_advance_bridge_cursor((5, None), {"seq": 6}), (6, None))
+        self.assertIsNone(_advance_bridge_cursor((240, None), {"seq": 3}))
+
+    def test_ignores_events_without_int_seq(self) -> None:
+        for data in ({"seq": "7"}, {}, ["seq", 7], None, {"seq": None, "bridgeId": "b"}):
+            with self.subTest(data=data):
+                self.assertIsNone(_advance_bridge_cursor((5, "a"), data))
+
+    def test_resume_query(self) -> None:
+        self.assertEqual(_resume_query((0, None)), "")
+        self.assertEqual(_resume_query((0, "a")), "")
+        self.assertEqual(_resume_query((7, None)), "last_seq=7")
+        self.assertEqual(_resume_query((7, "a1b2")), "last_seq=7&bridge_id=a1b2")
+
+
+class TestBuildConnectBridgeId(unittest.IsolatedAsyncioTestCase):
+    async def _receive_then_reconnect(
+        self, connect: Any, events: list[dict[str, Any]],
+    ) -> str:
+        """Feed *events* through one connection, reconnect, return the new URL."""
+        session = AsyncMock()
+        session.ws_connect = AsyncMock(
+            return_value=_make_mock_ws([json.dumps(e) for e in events]),
+        )
+        ws = await connect(session)
+        for _ in events:
+            await ws.receive()
+        session.ws_connect = AsyncMock(return_value=_make_mock_ws([]))
+        await connect(session)
+        url: str = session.ws_connect.call_args[0][0]
+        return url
+
+    async def test_reconnect_sends_bridge_id(self) -> None:
+        connect = _build_connect("ws://bridge/ws", "tok")
+        url = await self._receive_then_reconnect(
+            connect, [{"type": "connected", "seq": 5, "bridgeId": "a1b2"}],
+        )
+        self.assertEqual(url, "ws://bridge/ws?last_seq=5&bridge_id=a1b2")
+
+    async def test_bridge_restart_resets_seq(self) -> None:
+        connect = _build_connect("ws://bridge/ws", "tok")
+        await self._receive_then_reconnect(connect, [{"seq": 240, "bridgeId": "old"}])
+        url = await self._receive_then_reconnect(connect, [{"seq": 2, "bridgeId": "new"}])
+        self.assertEqual(url, "ws://bridge/ws?last_seq=2&bridge_id=new")
+
+    async def test_cursor_survives_relay_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = os.path.join(tmp, "meta.db")
+            init_meta_db(db_path=db_path).close()
+
+            first = _build_connect("ws://bridge/ws", "tok", meta_db_path=db_path)
+            await self._receive_then_reconnect(first, [{"seq": 9, "bridgeId": "a1b2"}])
+
+            # A fresh process reads the persisted cursor on startup.
+            restarted = _build_connect("ws://bridge/ws", "tok", meta_db_path=db_path)
+            session = AsyncMock()
+            session.ws_connect = AsyncMock(return_value=_make_mock_ws([]))
+            await restarted(session)
+            self.assertEqual(
+                session.ws_connect.call_args[0][0],
+                "ws://bridge/ws?last_seq=9&bridge_id=a1b2",
+            )
 
 
 # ── build_relay integration test ─────────────────────────────────────

@@ -22,7 +22,9 @@ from relay_core import (
     OnMessageResult,
     PollerConfig,
     get_debounce_ms,
+    get_max_fill_age_s,
     get_poll_interval,
+    get_retry_delays_s,
     is_listener_enabled,
     is_poller_enabled,
 )
@@ -371,6 +373,8 @@ def _build_listener_config(client: KrakenClient | None = None) -> ListenerConfig
         on_message=_on_message,
         event_filter=_event_filter,
         debounce_ms=get_debounce_ms("kraken"),
+        max_fill_age_s=get_max_fill_age_s("kraken"),
+        retry_delays_s=get_retry_delays_s("kraken"),
     )
 
 

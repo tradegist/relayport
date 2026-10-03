@@ -13,6 +13,7 @@ from pathlib import Path
 
 from relay_core.context import get_relay
 from relay_core.dedup import (
+    DEFAULT_RETENTION_DAYS,
     consume_book_trade_keys,
     get_processed_ids,
     get_recently_processed_order_ids,
@@ -33,6 +34,7 @@ log = logging.getLogger(__name__)
 
 WATERMARK_KEY_SUFFIX = "last_poll_ts"
 BRIDGE_SEQ_KEY_SUFFIX = "bridge_last_seq"
+BRIDGE_ID_KEY_SUFFIX = "bridge_id"
 
 
 # ── Poller configuration ─────────────────────────────────────────────
@@ -160,15 +162,41 @@ def get_last_bridge_seq(meta_conn: sqlite3.Connection, relay_name: str) -> int:
         return 0
 
 
-def set_last_bridge_seq(
-    meta_conn: sqlite3.Connection, relay_name: str, seq: int,
+def get_last_bridge_id(meta_conn: sqlite3.Connection, relay_name: str) -> str | None:
+    """Return the bridgeId that issued the persisted bridge seq, or None if unknown."""
+    key = f"{relay_name}:{BRIDGE_ID_KEY_SUFFIX}"
+    row = meta_conn.execute(
+        "SELECT value FROM metadata WHERE key = ?", (key,),
+    ).fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
+def set_bridge_cursor(
+    meta_conn: sqlite3.Connection,
+    relay_name: str,
+    seq: int,
+    bridge_id: str | None,
 ) -> None:
-    """Persist the last delivered bridge WS sequence number."""
-    key = f"{relay_name}:{BRIDGE_SEQ_KEY_SUFFIX}"
+    """Persist the bridge WS resume cursor: last seq + the bridgeId that issued it.
+
+    A seq is only meaningful together with its bridgeId (seq restarts at 1
+    whenever the bridge restarts), so both keys are written in a single
+    transaction. ``bridge_id=None`` — a bridge that predates bridgeId —
+    clears the stored id.
+    """
+    seq_key = f"{relay_name}:{BRIDGE_SEQ_KEY_SUFFIX}"
+    id_key = f"{relay_name}:{BRIDGE_ID_KEY_SUFFIX}"
     meta_conn.execute(
         "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
-        (key, str(seq)),
+        (seq_key, str(seq)),
     )
+    if bridge_id:
+        meta_conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+            (id_key, bridge_id),
+        )
+    else:
+        meta_conn.execute("DELETE FROM metadata WHERE key = ?", (id_key,))
     meta_conn.commit()
 
 
@@ -188,7 +216,7 @@ def _strip_prefix(relay_name: str, prefixed_ids: set[str]) -> set[str]:
     return {pid[len(prefix):] for pid in prefixed_ids}
 
 
-def prune_old(dedup_conn: sqlite3.Connection, days: int = 30) -> None:
+def prune_old(dedup_conn: sqlite3.Connection, days: int = DEFAULT_RETENTION_DAYS) -> None:
     prune(dedup_conn, days=days)
 
 

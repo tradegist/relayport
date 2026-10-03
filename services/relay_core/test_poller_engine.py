@@ -21,11 +21,14 @@ from relay_core.poller_engine import (
     _meta_key,
     _prefix_ids,
     _strip_prefix,
+    get_last_bridge_id,
+    get_last_bridge_seq,
     get_last_poll_ts,
     init_dedup_db,
     init_meta_db,
     poll_once,
     prune_old,
+    set_bridge_cursor,
     set_last_poll_ts,
 )
 from shared import BuySell, Fill, Trade, to_epoch
@@ -191,6 +194,28 @@ class TestInitDb:
         }
         assert "metadata" in tables
         db.close()
+
+
+class TestBridgeCursor:
+    def test_unset(self, meta_db: sqlite3.Connection) -> None:
+        assert get_last_bridge_seq(meta_db, "ibkr") == 0
+        assert get_last_bridge_id(meta_db, "ibkr") is None
+
+    def test_set_and_get(self, meta_db: sqlite3.Connection) -> None:
+        set_bridge_cursor(meta_db, "ibkr", 42, "bridge-a")
+        assert get_last_bridge_seq(meta_db, "ibkr") == 42
+        assert get_last_bridge_id(meta_db, "ibkr") == "bridge-a"
+
+    def test_none_id_clears_stored_id(self, meta_db: sqlite3.Connection) -> None:
+        set_bridge_cursor(meta_db, "ibkr", 42, "bridge-a")
+        set_bridge_cursor(meta_db, "ibkr", 43, None)
+        assert get_last_bridge_seq(meta_db, "ibkr") == 43
+        assert get_last_bridge_id(meta_db, "ibkr") is None
+
+    def test_relays_are_isolated(self, meta_db: sqlite3.Connection) -> None:
+        set_bridge_cursor(meta_db, "ibkr", 42, "bridge-a")
+        assert get_last_bridge_seq(meta_db, "kraken") == 0
+        assert get_last_bridge_id(meta_db, "kraken") is None
 
 
 class TestTimestampWatermark:

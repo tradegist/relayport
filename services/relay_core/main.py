@@ -13,6 +13,7 @@ import sys
 
 from . import BrokerRelay, StartupContext
 from .context import init_relays
+from .dedup import get_retention_days
 from .listener_engine import start_listener
 from .poller_engine import init_dedup_db, poll_once, prune_old
 from .registry import load_relays
@@ -93,7 +94,7 @@ async def amain() -> None:
     if relays:
         # One-time startup prune
         dedup_conn = init_dedup_db()
-        prune_old(dedup_conn)
+        prune_old(dedup_conn, days=get_retention_days())
         dedup_conn.close()
 
     # Initialize per-poller locks before the API server so handle_poll()

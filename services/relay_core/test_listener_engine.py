@@ -2,14 +2,18 @@
 
 import asyncio
 import contextlib
+import json
 import os
 import tempfile
+import time
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import aiohttp
+import httpx
 
 from relay_core import BrokerRelay, ListenerConfig, OnMessageResult
 from relay_core.context import _reset, get_relay, init_relays
@@ -23,12 +27,19 @@ from relay_core.dedup import (
 from relay_core.inflight import INFLIGHT_ORDERS
 from relay_core.listener_engine import (
     DebounceBuffer,
+    FatalListenerError,
     _handle_event,
+    _listen,
+    _merge_fills,
     _prefix_ids,
     _send_and_mark,
     _send_no_mark,
+    _split_stale,
+    get_max_fill_age_s,
+    get_retry_delays_s,
 )
-from shared import BuySell, Fill
+from relay_core.notifier import NotificationError, is_transient_failure
+from shared import BuySell, Fill, to_epoch
 
 # ── Module-level FX guard ────────────────────────────────────────────
 # _send_and_mark / _send_no_mark call enrich_if_enabled(), which reads
@@ -79,6 +90,7 @@ def _make_fill(
     volume: float = 100.0,
     fee: float = 1.05,
     order_id: str = "12345",
+    timestamp: str = "20260411-10:30:00",
 ) -> Fill:
     return Fill(
         execId=exec_id,
@@ -91,7 +103,7 @@ def _make_fill(
         volume=volume,
         cost=price * volume,
         fee=fee,
-        timestamp="20260411-10:30:00",
+        timestamp=timestamp,
         source="commissionReportEvent",
         raw={},
     )
@@ -102,6 +114,11 @@ async def _noop_on_message(
 ) -> list[OnMessageResult]:
     """Default no-op on_message for tests that don't need it."""
     return []
+
+
+def _immediate_buffer() -> DebounceBuffer:
+    """Buffer with debouncing disabled — every fill is flushed on add()."""
+    return DebounceBuffer(relay_name="ibkr", debounce_ms=0, db_path="/tmp/test.db")
 
 
 # ── Namespace helper tests ───────────────────────────────────────────
@@ -691,7 +708,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", {"type": "x"},
-            debounce_buf=None, db_path="/tmp/test.db",
+            debounce_buf=_immediate_buffer(),
         )
         self.assertFalse(called)
 
@@ -713,7 +730,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", data,
-            debounce_buf=None, db_path="/tmp/test.db",
+            debounce_buf=_immediate_buffer(),
         )
         self.assertEqual(captured["data"], data)
 
@@ -736,7 +753,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", {"type": "x"},
-            debounce_buf=None, db_path="/tmp/test.db",
+            debounce_buf=_immediate_buffer(),
         )
         mock_send.assert_called_once()
         call_args = mock_send.call_args[0]
@@ -762,7 +779,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", {"type": "x"},
-            debounce_buf=None, db_path="/tmp/test.db",
+            debounce_buf=_immediate_buffer(),
         )
         mock_send.assert_called_once()
 
@@ -789,7 +806,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", {"type": "x"},
-            debounce_buf=buf, db_path="/tmp/test.db",
+            debounce_buf=buf,
         )
         # Fill should be in its orderId bucket, not dispatched directly
         self.assertEqual(buf._buffers[fill.orderId], [fill])
@@ -816,7 +833,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", {"type": "x"},
-            debounce_buf=None, db_path="/tmp/test.db",
+            debounce_buf=_immediate_buffer(),
         )
 
     @patch("relay_core.listener_engine._send_no_mark")
@@ -846,7 +863,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", {"type": "x"},
-            debounce_buf=None, db_path="/tmp/test.db",
+            debounce_buf=_immediate_buffer(),
         )
 
         # mark=True fills dispatched together via _send_and_mark
@@ -892,7 +909,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", {"type": "x"},
-            debounce_buf=buf, db_path="/tmp/test.db",
+            debounce_buf=buf,
         )
 
         # mark=True fills buffered in their (shared) orderId bucket
@@ -933,7 +950,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", "just a string",
-            debounce_buf=None, db_path="/tmp/test.db",
+            debounce_buf=_immediate_buffer(),
         )
         self.assertFalse(called)
 
@@ -955,7 +972,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", [1, 2, 3],
-            debounce_buf=None, db_path="/tmp/test.db",
+            debounce_buf=_immediate_buffer(),
         )
         self.assertFalse(called)
 
@@ -977,7 +994,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", 42,
-            debounce_buf=None, db_path="/tmp/test.db",
+            debounce_buf=_immediate_buffer(),
         )
         self.assertFalse(called)
 
@@ -999,7 +1016,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", None,
-            debounce_buf=None, db_path="/tmp/test.db",
+            debounce_buf=_immediate_buffer(),
         )
         self.assertFalse(called)
 
@@ -1021,7 +1038,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", {"type": "test"},
-            debounce_buf=None, db_path="/tmp/test.db",
+            debounce_buf=_immediate_buffer(),
         )
         self.assertTrue(called)
 
@@ -1048,7 +1065,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         # Must not propagate
         await _handle_event(
             "ibkr", {"type": "x"},
-            debounce_buf=None, db_path="/tmp/test.db",
+            debounce_buf=_immediate_buffer(),
         )
         mock_send.assert_called_once()
 
@@ -1074,7 +1091,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", {"type": "x"},
-            debounce_buf=None, db_path="/tmp/test.db",
+            debounce_buf=_immediate_buffer(),
         )
         mock_send.assert_called_once()
 
@@ -1100,7 +1117,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", {"type": "x"},
-            debounce_buf=None, db_path="/tmp/test.db",
+            debounce_buf=_immediate_buffer(),
         )
 
         mock_send.assert_called_once()
@@ -1125,7 +1142,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", {"type": "x"},
-            debounce_buf=None, db_path="/tmp/test.db",
+            debounce_buf=_immediate_buffer(),
         )
 
         mock_send.assert_not_called()
@@ -1153,7 +1170,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", {"type": "x"},
-            debounce_buf=buf, db_path="/tmp/test.db",
+            debounce_buf=buf,
         )
 
         self.assertEqual(buf._buffers[fill.orderId], [fill])
@@ -1184,7 +1201,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", {"type": "x"},
-            debounce_buf=buf, db_path="/tmp/test.db",
+            debounce_buf=buf,
         )
 
         self.assertEqual(buf._buffers, {})
@@ -1209,7 +1226,7 @@ class TestHandleEvent(unittest.IsolatedAsyncioTestCase):
         _set_listener(config)
         await _handle_event(
             "ibkr", {"type": "x"},
-            debounce_buf=buf, db_path="/tmp/test.db",
+            debounce_buf=buf,
         )
 
         self.assertEqual(buf._parse_errors, [])
@@ -1739,3 +1756,400 @@ class TestSendAndMarkBookTrade(unittest.TestCase):
         _send_and_mark("ibkr", [self._bt_fill()], self._db_path)
 
         mock_notify.assert_called_once()
+
+
+# ── Delivery policy: stale fills, retries, drops (R1/R2/R6) ──────────
+
+_NOW = float(to_epoch("2026-10-02T14:30:00"))
+_FRESH = "2026-10-02T14:00:00"
+_STALE = "2026-05-21T08:27:00"
+
+
+def _http_error(status: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://hooks.example.com/x")
+    return httpx.HTTPStatusError(
+        f"HTTP {status}", request=request,
+        response=httpx.Response(status, request=request),
+    )
+
+
+def _notification_error(*statuses: int) -> NotificationError:
+    return NotificationError(
+        [(f"Notifier{i}", _http_error(s)) for i, s in enumerate(statuses)],
+    )
+
+
+def _policy_buffer(
+    debounce_ms: int = 5000,
+    delays: tuple[float, ...] = (0.01, 0.01),
+    clock: Any = None,
+) -> DebounceBuffer:
+    return DebounceBuffer(
+        relay_name="ibkr", debounce_ms=debounce_ms, db_path="/tmp/test.db",
+        max_fill_age_s=24 * 3600, retry_delays_s=delays,
+        clock=clock or (lambda: _NOW),
+    )
+
+
+async def _drain(buf: DebounceBuffer) -> None:
+    """Wait for the buffer's fire-and-forget alert tasks."""
+    await asyncio.gather(*buf._background_tasks)
+
+
+class TestSplitStale(unittest.TestCase):
+    def test_partitions_on_cutoff(self) -> None:
+        fresh = _make_fill(exec_id="F", timestamp=_FRESH)
+        stale = _make_fill(exec_id="S", timestamp=_STALE)
+        self.assertEqual(_split_stale([fresh, stale], 24 * 3600, _NOW), ([fresh], [stale]))
+
+    def test_exactly_max_age_is_fresh(self) -> None:
+        fill = _make_fill(timestamp="2026-10-01T14:30:00")
+        self.assertEqual(_split_stale([fill], 24 * 3600, _NOW), ([fill], []))
+
+    def test_undatable_fills_are_kept_and_logged(self) -> None:
+        bad = _make_fill(exec_id="BAD", timestamp="20260411-10:30:00")
+        empty = _make_fill(exec_id="EMPTY", timestamp="")
+        with self.assertLogs("relay_core.listener_engine", level="ERROR") as logs:
+            fresh, stale = _split_stale([bad, empty], 24 * 3600, _NOW)
+        self.assertEqual((fresh, stale), ([bad, empty], []))
+        self.assertEqual(len(logs.records), 2)
+
+
+class TestMergeFills(unittest.TestCase):
+    def test_newer_copy_wins_at_first_position(self) -> None:
+        a1 = _make_fill(exec_id="A", fee=1.0)
+        b = _make_fill(exec_id="B")
+        a2 = _make_fill(exec_id="A", fee=2.0)
+        self.assertEqual(_merge_fills([a1, b], [a2]), [a2, b])
+
+
+class TestListenerPolicyEnv(unittest.TestCase):
+    def test_defaults(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            for var in (
+                "IBKR_LISTENER_MAX_FILL_AGE_HOURS", "LISTENER_MAX_FILL_AGE_HOURS",
+                "IBKR_LISTENER_RETRY_DELAYS_S", "LISTENER_RETRY_DELAYS_S",
+            ):
+                os.environ.pop(var, None)
+            self.assertEqual(get_max_fill_age_s("ibkr"), 24 * 3600)
+            self.assertEqual(get_retry_delays_s("ibkr"), (60, 300, 900))
+
+    def test_prefixed_values_win(self) -> None:
+        with patch.dict(os.environ, {
+            "LISTENER_MAX_FILL_AGE_HOURS": "48",
+            "IBKR_LISTENER_MAX_FILL_AGE_HOURS": "12",
+            "LISTENER_RETRY_DELAYS_S": "1,2",
+            "IBKR_LISTENER_RETRY_DELAYS_S": " 10, 20 ",
+        }):
+            self.assertEqual(get_max_fill_age_s("ibkr"), 12 * 3600)
+            self.assertEqual(get_retry_delays_s("ibkr"), (10, 20))
+
+    def test_invalid_values_fail_fast(self) -> None:
+        cases = [
+            ("IBKR_LISTENER_MAX_FILL_AGE_HOURS", "0", get_max_fill_age_s),
+            ("IBKR_LISTENER_MAX_FILL_AGE_HOURS", "abc", get_max_fill_age_s),
+            ("IBKR_LISTENER_RETRY_DELAYS_S", "60,abc", get_retry_delays_s),
+            ("IBKR_LISTENER_RETRY_DELAYS_S", "60,0", get_retry_delays_s),
+        ]
+        for var, raw, getter in cases:
+            with self.subTest(var=var, raw=raw), patch.dict(os.environ, {var: raw}):
+                with self.assertRaises(SystemExit) as cm:
+                    getter("ibkr")
+                self.assertIn(var, str(cm.exception))
+
+
+@patch("relay_core.listener_engine.send_alert")
+class TestDebounceBufferStaleGuard(unittest.IsolatedAsyncioTestCase):
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_stale_fill_is_dropped_on_add(
+        self, mock_send: MagicMock, mock_alert: MagicMock,
+    ) -> None:
+        buf = _policy_buffer()
+        await buf.add(_make_fill(timestamp=_STALE, order_id="2117129829"))
+        await _drain(buf)
+        self.assertEqual(buf._buffers, {})
+        self.assertEqual(buf._flush_tasks, {})
+        mock_send.assert_not_called()
+        mock_alert.assert_called_once()
+        kwargs = mock_alert.call_args.kwargs
+        self.assertEqual(kwargs["key"], "listener-stale:ibkr")
+        self.assertIn("orderId=2117129829", kwargs["body"])
+
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_fill_aging_out_while_buffered_is_dropped_at_flush(
+        self, mock_send: MagicMock, mock_alert: MagicMock,
+    ) -> None:
+        now = [_NOW]
+        buf = _policy_buffer(clock=lambda: now[0])
+        await buf.add(_make_fill(timestamp=_FRESH))
+        now[0] += 2 * 24 * 3600
+        await buf.flush()
+        await _drain(buf)
+        mock_send.assert_not_called()
+        mock_alert.assert_called_once()
+
+    @patch("relay_core.listener_engine._send_no_mark")
+    async def test_stale_no_mark_fill_is_not_sent(
+        self, mock_send_no_mark: MagicMock, mock_alert: MagicMock,
+    ) -> None:
+        stale = _make_fill(timestamp=_STALE)
+
+        async def on_msg(data: dict[str, Any]) -> list[OnMessageResult]:
+            return [OnMessageResult(fill=stale, mark=False)]
+
+        _set_listener(ListenerConfig(
+            connect=_dummy_connect, on_message=on_msg, event_filter=lambda _: True,
+        ))
+        buf = _policy_buffer()
+        await _handle_event("ibkr", {"type": "x"}, debounce_buf=buf)
+        await _drain(buf)
+        mock_send_no_mark.assert_not_called()
+        mock_alert.assert_called_once()
+
+
+@patch("relay_core.listener_engine.send_alert")
+class TestDebounceBufferRetryPolicy(unittest.IsolatedAsyncioTestCase):
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_transient_failure_retries_then_succeeds(
+        self, mock_send: MagicMock, mock_alert: MagicMock,
+    ) -> None:
+        mock_send.side_effect = [_notification_error(503), None]
+        buf = _policy_buffer()
+        await buf.add(_make_fill(timestamp=_FRESH), order_complete=True)
+        self.assertEqual(buf._attempts, {"12345": 1})
+        self.assertEqual(len(buf._buffers["12345"]), 1)
+        self.assertIn("12345", buf._flush_tasks)
+
+        await asyncio.sleep(0.1)
+        self.assertEqual(mock_send.call_count, 2)
+        self.assertEqual(buf._buffers, {})
+        self.assertEqual(buf._attempts, {})
+        mock_alert.assert_not_called()
+
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_exhausted_retries_drop_and_alert(
+        self, mock_send: MagicMock, mock_alert: MagicMock,
+    ) -> None:
+        mock_send.side_effect = _notification_error(503)
+        buf = _policy_buffer(delays=(0.01, 0.01))
+        await buf.add(_make_fill(timestamp=_FRESH), order_complete=True)
+        await asyncio.sleep(0.15)
+        await _drain(buf)
+        self.assertEqual(mock_send.call_count, 3)  # first try + 2 retries
+        self.assertEqual(buf._buffers, {})
+        self.assertEqual(buf._attempts, {})
+        mock_alert.assert_called_once()
+        self.assertEqual(mock_alert.call_args.kwargs["key"], "listener-dropped:ibkr:12345")
+
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_4xx_drops_without_retry(
+        self, mock_send: MagicMock, mock_alert: MagicMock,
+    ) -> None:
+        # Pipedream answers 400 once the daily quota is spent.
+        mock_send.side_effect = _notification_error(400)
+        buf = _policy_buffer()
+        await buf.add(_make_fill(timestamp=_FRESH), order_complete=True)
+        await _drain(buf)
+        mock_send.assert_called_once()
+        self.assertEqual(buf._buffers, {})
+        self.assertEqual(buf._flush_tasks, {})
+        mock_alert.assert_called_once()
+        self.assertIn("4xx", mock_alert.call_args.kwargs["body"])
+
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_unexpected_error_is_retried(
+        self, mock_send: MagicMock, mock_alert: MagicMock,
+    ) -> None:
+        mock_send.side_effect = [RuntimeError("database is locked"), None]
+        buf = _policy_buffer()
+        await buf.add(_make_fill(timestamp=_FRESH), order_complete=True)
+        await asyncio.sleep(0.1)
+        self.assertEqual(mock_send.call_count, 2)
+        mock_alert.assert_not_called()
+
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_flush_leaves_orders_in_backoff_to_their_timer(
+        self, mock_send: MagicMock, mock_alert: MagicMock,
+    ) -> None:
+        mock_send.side_effect = _notification_error(503)
+        buf = _policy_buffer(delays=(3600,))
+        await buf.add(_make_fill(timestamp=_FRESH), order_complete=True)
+        await buf.flush()  # e.g. a WS reconnect
+        mock_send.assert_called_once()
+        self.assertEqual(buf._attempts, {"12345": 1})
+        buf._flush_tasks["12345"].cancel()
+
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_incident_replay_leaves_nothing_to_resend(
+        self, mock_send: MagicMock, mock_alert: MagicMock,
+    ) -> None:
+        """2026-10-02: fills rejected with 400 stayed buffered for months and
+        were re-sent on the next WS drop. Now a 4xx empties the buffer, so
+        a later disconnect flush sends nothing."""
+        mock_send.side_effect = _notification_error(400)
+        buf = _policy_buffer()
+        for order_id in ("1929947674", "2117129829", "53429659"):
+            await buf.add(
+                _make_fill(exec_id=order_id, order_id=order_id, timestamp=_FRESH),
+                order_complete=True,
+            )
+        await _drain(buf)
+        self.assertEqual(mock_send.call_count, 3)
+        self.assertEqual(buf._buffers, {})
+
+        await buf.flush()
+        self.assertEqual(mock_send.call_count, 3)
+
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_duplicate_exec_id_keeps_newer_copy(
+        self, mock_send: MagicMock, mock_alert: MagicMock,
+    ) -> None:
+        buf = _policy_buffer()
+        await buf.add(_make_fill(exec_id="A", fee=1.0, timestamp=_FRESH))
+        await buf.add(_make_fill(exec_id="A", fee=2.0, timestamp=_FRESH))
+        self.assertEqual([f.fee for f in buf._buffers["12345"]], [2.0])
+        await buf.flush()
+        self.assertEqual(len(mock_send.call_args[0][1]), 1)
+
+
+@patch("relay_core.listener_engine.send_alert")
+class TestDebounceBufferSendNow(unittest.IsolatedAsyncioTestCase):
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_one_batch_per_message(
+        self, mock_send: MagicMock, mock_alert: MagicMock,
+    ) -> None:
+        buf = _policy_buffer(debounce_ms=0)
+        fills = [
+            _make_fill(exec_id="A", order_id="1", timestamp=_FRESH),
+            _make_fill(exec_id="B", order_id="2", timestamp=_FRESH),
+        ]
+        await buf.send_now(fills, ["parse error"])
+        mock_send.assert_called_once()
+        self.assertEqual(mock_send.call_args[0][1], fills)
+        self.assertEqual(mock_send.call_args[0][3], ["parse error"])
+
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_drops_stale_before_sending(
+        self, mock_send: MagicMock, mock_alert: MagicMock,
+    ) -> None:
+        buf = _policy_buffer(debounce_ms=0)
+        fresh = _make_fill(exec_id="A", timestamp=_FRESH)
+        await buf.send_now([fresh, _make_fill(exec_id="B", timestamp=_STALE)], [])
+        await _drain(buf)
+        self.assertEqual(mock_send.call_args[0][1], [fresh])
+        mock_alert.assert_called_once()
+
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_all_stale_sends_nothing(
+        self, mock_send: MagicMock, mock_alert: MagicMock,
+    ) -> None:
+        buf = _policy_buffer(debounce_ms=0)
+        await buf.send_now([_make_fill(timestamp=_STALE)], ["parse error"])
+        await _drain(buf)
+        mock_send.assert_not_called()
+
+    @patch("relay_core.listener_engine._send_and_mark")
+    async def test_failure_retries_each_order_through_the_buffer(
+        self, mock_send: MagicMock, mock_alert: MagicMock,
+    ) -> None:
+        mock_send.side_effect = [_notification_error(503), None, None]
+        buf = _policy_buffer(debounce_ms=0)
+        await buf.send_now([
+            _make_fill(exec_id="A", order_id="1", timestamp=_FRESH),
+            _make_fill(exec_id="B", order_id="2", timestamp=_FRESH),
+        ], [])
+        self.assertEqual(buf._attempts, {"1": 1, "2": 1})
+        await asyncio.sleep(0.1)
+        self.assertEqual(mock_send.call_count, 3)  # batch + one retry per order
+        self.assertEqual(buf._buffers, {})
+        mock_alert.assert_not_called()
+
+
+class TestIsTransientFailure(unittest.TestCase):
+    def test_classification(self) -> None:
+        self.assertFalse(is_transient_failure(_notification_error(400)))
+        self.assertFalse(is_transient_failure(_notification_error(400, 404)))
+        self.assertTrue(is_transient_failure(_notification_error(503)))
+        self.assertTrue(is_transient_failure(_notification_error(400, 502)))
+        self.assertTrue(is_transient_failure(
+            NotificationError([("N", httpx.ReadTimeout("timed out"))]),
+        ))
+        self.assertTrue(is_transient_failure(RuntimeError("database is locked")))
+
+
+# ── Listen loop: close logging + background disconnect flush (R4/R5) ──
+
+
+class _FakeWs:
+    """Minimal stand-in for ClientWebSocketResponse: yields then closes."""
+
+    def __init__(self, messages: list[aiohttp.WSMessage], close_code: int) -> None:
+        self._messages = messages
+        self.close_code = close_code
+        self.closed = False
+
+    def __aiter__(self) -> Any:
+        return self._iterate()
+
+    async def _iterate(self) -> Any:
+        for msg in self._messages:
+            yield msg
+        self.closed = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+    def exception(self) -> None:
+        return None
+
+
+class TestListenLoop(unittest.IsolatedAsyncioTestCase):
+    def _run_config(
+        self, ws: _FakeWs, events: list[str], fill: Fill | None = None,
+    ) -> ListenerConfig:
+        calls = 0
+
+        async def connect(session: aiohttp.ClientSession) -> aiohttp.ClientWebSocketResponse:
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                events.append("reconnect")
+                raise FatalListenerError("stop the test loop")
+            return cast(aiohttp.ClientWebSocketResponse, ws)
+
+        async def on_msg(data: dict[str, Any]) -> list[OnMessageResult]:
+            return [OnMessageResult(fill=fill, mark=True)] if fill else []
+
+        return ListenerConfig(
+            connect=connect, on_message=on_msg, event_filter=lambda _: True,
+            debounce_ms=60_000,
+        )
+
+    @patch("relay_core.listener_engine.INITIAL_RETRY_DELAY", 0)
+    async def test_server_close_is_logged(self) -> None:
+        ws = _FakeWs([], close_code=1001)
+        _set_listener(self._run_config(ws, []))
+        with self.assertLogs("relay_core.listener_engine", level="WARNING") as logs:
+            await _listen("ibkr", "/tmp/test.db")
+        self.assertTrue(
+            any("WS connection closed (code=1001)" in r.getMessage() for r in logs.records),
+        )
+
+    @patch("relay_core.listener_engine.INITIAL_RETRY_DELAY", 0)
+    async def test_disconnect_flush_does_not_delay_reconnect(self) -> None:
+        events: list[str] = []
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
+        message = aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps({"type": "x"}), None)
+        ws = _FakeWs([message], close_code=1001)
+        _set_listener(self._run_config(ws, events, fill=_make_fill(timestamp=now)))
+
+        def slow_send(*args: Any) -> None:
+            events.append("send-start")
+            time.sleep(0.3)
+            events.append("send-end")
+
+        with patch("relay_core.listener_engine._send_and_mark", side_effect=slow_send):
+            await _listen("ibkr", "/tmp/test.db")
+            await asyncio.sleep(0.5)  # let the background flush finish
+        self.assertIn("send-start", events)
+        self.assertLess(events.index("reconnect"), events.index("send-end"))
