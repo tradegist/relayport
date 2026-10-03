@@ -17,9 +17,26 @@ import sqlite3
 from pathlib import Path
 from typing import Literal
 
+from relay_core.env import get_env_int
+
 log = logging.getLogger(__name__)
 
 DEDUP_DB_PATH = "/data/dedup/fills.db"
+
+# How long processed-fill rows are kept. A fill replayed after its row was
+# pruned looks new and is re-sent — keep this well beyond any feed's
+# replay horizon (the listener's max fill age, the Flex query period).
+DEFAULT_RETENTION_DAYS = 90
+
+
+def get_retention_days() -> int:
+    """Read DEDUP_RETENTION_DAYS (default 90)."""
+    var_name, days = get_env_int(
+        "DEDUP_RETENTION_DAYS", default=str(DEFAULT_RETENTION_DAYS),
+    )
+    if days < 1:
+        raise SystemExit(f"Invalid {var_name}={days} — must be >= 1")
+    return days
 
 # ── Book-trade cross-path dedup ──────────────────────────────────────
 #
@@ -263,7 +280,7 @@ def get_recently_processed_order_ids(
     return {r[0] for r in rows}
 
 
-def prune(conn: sqlite3.Connection, days: int = 30) -> int:
+def prune(conn: sqlite3.Connection, days: int = DEFAULT_RETENTION_DAYS) -> int:
     """Delete entries older than *days*. Returns count deleted."""
     cur = conn.execute(
         "DELETE FROM processed_fills "

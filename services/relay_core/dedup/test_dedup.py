@@ -9,10 +9,12 @@ from typing import Any
 
 from relay_core.dedup import (
     BOOK_TRADE_WINDOW_SECONDS,
+    DEFAULT_RETENTION_DAYS,
     consume_book_trade_keys,
     get_processed_ids,
     get_processed_rows,
     get_recently_processed_order_ids,
+    get_retention_days,
     init_db,
     is_processed,
     mark_book_trade_keys,
@@ -92,6 +94,27 @@ class TestDedup(unittest.TestCase):
         mark_processed(self.conn, "TX001")
         deleted = prune(self.conn, days=30)
         assert deleted == 0
+
+
+class TestRetentionDays(unittest.TestCase):
+    def test_default_is_90_days(self) -> None:
+        with unittest.mock.patch.dict("os.environ", {}, clear=False) as env:
+            env.pop("DEDUP_RETENTION_DAYS", None)
+            assert get_retention_days() == DEFAULT_RETENTION_DAYS == 90
+
+    def test_override(self) -> None:
+        with unittest.mock.patch.dict("os.environ", {"DEDUP_RETENTION_DAYS": "120"}):
+            assert get_retention_days() == 120
+
+    def test_invalid_values_fail_fast(self) -> None:
+        for raw in ("0", "-5", "ninety"):
+            with (
+                self.subTest(raw=raw),
+                unittest.mock.patch.dict("os.environ", {"DEDUP_RETENTION_DAYS": raw}),
+                self.assertRaises(SystemExit) as cm,
+            ):
+                get_retention_days()
+            assert "DEDUP_RETENTION_DAYS" in str(cm.exception)
 
 
 class TestMarkProcessedBatchWithOrders(unittest.TestCase):

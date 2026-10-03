@@ -10,12 +10,14 @@ import asyncio
 import functools
 import json
 import logging
-from collections.abc import Awaitable, Callable
+import time
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
 
+from relay_core.alerter import send_alert
 from relay_core.context import get_relay
 from relay_core.dedup import (
     consume_book_trade_keys,
@@ -27,10 +29,10 @@ from relay_core.dedup import init_db as _init_dedup_db
 from relay_core.env import get_env, get_env_int
 from relay_core.fx import enrich_if_enabled
 from relay_core.inflight import INFLIGHT_ORDERS
-from relay_core.notifier import notify
+from relay_core.notifier import NotificationError, is_transient_failure, notify
 from relay_core.notifier.audit import log_fills
 from relay_core.notifier.models import WebhookPayloadTrades
-from shared import Fill, RelayName, aggregate_fills
+from shared import Fill, RelayName, aggregate_fills, to_epoch
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +73,9 @@ class OnMessageResult:
 
 # ── Listener configuration ───────────────────────────────────────────
 
+DEFAULT_MAX_FILL_AGE_HOURS = 24
+DEFAULT_RETRY_DELAYS_S: tuple[int, ...] = (60, 300, 900)
+
 
 @dataclass(frozen=True, slots=True)
 class ListenerConfig:
@@ -84,6 +89,13 @@ class ListenerConfig:
         routes through dedup+notify+mark, ``mark=False`` is fire-and-forget.
     *event_filter*: return True if the event should be processed, False to skip.
     *debounce_ms*: milliseconds to buffer fills before flushing (0 = disabled).
+    *max_fill_age_s*: fills whose execution time is older than this are
+        dropped (logged + alerted) instead of being sent — on receipt and
+        again right before each send. Guards against a WS replaying old
+        fills, which would otherwise reach the webhook as new trades.
+    *retry_delays_s*: backoff before each retry of a send that failed
+        transiently (5xx / timeout / network). ``len()`` is the retry
+        budget; after it, or on a 4xx, the fills are dropped and alerted.
     """
 
     connect: Callable[
@@ -95,6 +107,8 @@ class ListenerConfig:
     ]
     event_filter: Callable[[dict[str, Any]], bool]
     debounce_ms: int = 0
+    max_fill_age_s: int = DEFAULT_MAX_FILL_AGE_HOURS * 3600
+    retry_delays_s: tuple[int, ...] = DEFAULT_RETRY_DELAYS_S
 
 
 # ── Relay-agnostic listener env var getters ──────────────────────────
@@ -114,6 +128,47 @@ def get_debounce_ms(relay_name: RelayName) -> int:
     if val < 0:
         raise SystemExit(f"Invalid {var_name}={val} — must be >= 0")
     return val
+
+
+def get_max_fill_age_s(relay_name: RelayName) -> int:
+    """Read {RELAY}_LISTENER_MAX_FILL_AGE_HOURS (fallback LISTENER_MAX_FILL_AGE_HOURS).
+
+    Returns seconds. Default 24 hours.
+    """
+    prefix = f"{relay_name.upper()}_"
+    var_name, hours = get_env_int(
+        "LISTENER_MAX_FILL_AGE_HOURS", prefix,
+        default=str(DEFAULT_MAX_FILL_AGE_HOURS),
+    )
+    if hours < 1:
+        raise SystemExit(f"Invalid {var_name}={hours} — must be >= 1")
+    return hours * 3600
+
+
+def get_retry_delays_s(relay_name: RelayName) -> tuple[int, ...]:
+    """Read {RELAY}_LISTENER_RETRY_DELAYS_S (fallback LISTENER_RETRY_DELAYS_S).
+
+    Comma-separated seconds to wait before each retry of a failed send,
+    e.g. ``60,300,900`` (the default) — three retries, after 1, 5 and
+    15 minutes.
+    """
+    prefix = f"{relay_name.upper()}_"
+    raw = get_env("LISTENER_RETRY_DELAYS_S", prefix)
+    if not raw:
+        return DEFAULT_RETRY_DELAYS_S
+    # Name the variable that actually supplied the value in error messages.
+    prefixed = f"{prefix}LISTENER_RETRY_DELAYS_S"
+    var_name = prefixed if get_env(prefixed) else "LISTENER_RETRY_DELAYS_S"
+    try:
+        delays = tuple(int(part.strip()) for part in raw.split(","))
+    except ValueError:
+        raise SystemExit(
+            f"Invalid {var_name}={raw!r} — must be comma-separated whole "
+            f"seconds, e.g. 60,300,900"
+        ) from None
+    if any(d < 1 for d in delays):
+        raise SystemExit(f"Invalid {var_name}={raw!r} — every delay must be >= 1")
+    return delays
 
 # ── Reconnection constants ───────────────────────────────────────────
 INITIAL_RETRY_DELAY = 5
@@ -322,6 +377,64 @@ def _send_no_mark(
     )
 
 
+# ── Fill helpers (pure) ──────────────────────────────────────────────
+
+def _split_stale(
+    fills: list[Fill], max_age_s: int, now: float,
+) -> tuple[list[Fill], list[Fill]]:
+    """Partition *fills* into ``(fresh, stale)`` by execution age at *now*.
+
+    A fill whose timestamp cannot be parsed is kept as fresh (and logged):
+    every adapter normalises timestamps upstream, so this is a contract
+    violation — a possible duplicate webhook beats silently dropping a fill.
+    """
+    cutoff = now - max_age_s
+    fresh: list[Fill] = []
+    stale: list[Fill] = []
+    for fill in fills:
+        try:
+            # to_epoch("") returns 0 (the poller's "no watermark"); here an
+            # empty timestamp is as undatable as a malformed one.
+            if not fill.timestamp:
+                raise ValueError("empty timestamp")
+            executed_at = to_epoch(fill.timestamp)
+        except ValueError as exc:
+            log.error(
+                "Cannot check the age of execId=%s (%s) — keeping it",
+                fill.execId, exc,
+            )
+            fresh.append(fill)
+            continue
+        (stale if executed_at < cutoff else fresh).append(fill)
+    return fresh, stale
+
+
+def _merge_fills(older: list[Fill], newer: list[Fill]) -> list[Fill]:
+    """Concatenate two batches, keeping one fill per ``execId``.
+
+    The newer copy of a duplicated execId wins but keeps the position of
+    its first occurrence. A fill can reach the buffer twice (e.g. a WS
+    replay of a fill still waiting for a retry); aggregating both copies
+    would double its volume.
+    """
+    merged: dict[str, Fill] = {}
+    for fill in (*older, *newer):
+        merged[fill.execId] = fill
+    return list(merged.values())
+
+
+def _describe_fills(fills: list[Fill]) -> str:
+    """One line per fill for logs and alerts.
+
+    Deliberately omits ``Fill.raw``, which carries the account id.
+    """
+    return "\n".join(
+        f"- {f.timestamp} {f.side.value} {f.symbol} vol={f.volume} @ {f.price} "
+        f"orderId={f.orderId} execId={f.execId}"
+        for f in fills
+    )
+
+
 # ── Debounce buffer ──────────────────────────────────────────────────
 
 class DebounceBuffer:
@@ -330,8 +443,21 @@ class DebounceBuffer:
     Each orderId has its own timer that resets on every new fill for
     that order. A fill arriving on order B never delays a flush for
     order A. When the broker signals that an order is fully filled
-    (``order_complete=True``), that order's buffer is flushed
-    immediately and its timer is cancelled.
+    (``order_complete=True``) — or when ``debounce_ms`` is 0 — that
+    order's buffer is flushed immediately and its timer is cancelled.
+
+    Delivery policy — no fill stays in the buffer indefinitely:
+
+    - **Stale fills are dropped.** A fill executed more than
+      ``max_fill_age_s`` ago is dropped (logged + alerted) instead of
+      sent — when it arrives, and again right before every send.
+    - **Transient failures are retried** (5xx / timeout / network) after
+      each delay in ``retry_delays_s``. A retry timer occupies the
+      order's timer slot, so a new fill for that order re-arms the
+      debounce timer and the retry happens sooner.
+    - **Everything else is dropped and alerted**: a 4xx from every
+      notifier (the payload was rejected, resending cannot help) or an
+      exhausted retry budget. Dropped fills are not marked processed.
 
     Parse errors are not associated with any particular orderId. They
     accumulate in a flat list and are emitted with whichever order
@@ -347,46 +473,135 @@ class DebounceBuffer:
         relay_name: RelayName,
         debounce_ms: int,
         db_path: str | None,
+        *,
+        max_fill_age_s: int = DEFAULT_MAX_FILL_AGE_HOURS * 3600,
+        retry_delays_s: tuple[float, ...] = DEFAULT_RETRY_DELAYS_S,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         self._relay_name = relay_name
         self._debounce_s = debounce_ms / 1000.0
         self._db_path = db_path
+        self._max_fill_age_s = max_fill_age_s
+        self._retry_delays_s = retry_delays_s
+        self._clock = clock
         self._buffers: dict[str, list[Fill]] = {}
         self._flush_tasks: dict[str, asyncio.Task[None]] = {}
         self._flushing: set[str] = set()
         self._parse_errors: list[str] = []
+        # Failed send attempts per orderId; present only while a retry is
+        # scheduled. Cleared on success and on drop.
+        self._attempts: dict[str, int] = {}
+        # Fire-and-forget alert sends (blocking HTTP, run in a thread).
+        self._background_tasks: set[asyncio.Task[None]] = set()
+
+    @property
+    def debouncing(self) -> bool:
+        """False when ``debounce_ms`` is 0 — callers then use :meth:`send_now`."""
+        return self._debounce_s > 0
+
+    async def send_now(self, fills: list[Fill], parse_errors: list[str]) -> None:
+        """Send one WS message's fills immediately, as a single batch.
+
+        The no-debounce path: one webhook per message, as without a
+        buffer. The delivery policy still applies — stale fills are
+        dropped first, and on failure each order's fills are handed to
+        the retry / drop logic (retries then go through the buffer).
+        """
+        fills = _merge_fills([], self.drop_stale(fills))
+        if not fills:
+            # Parse errors were already logged by the caller; an
+            # errors-only webhook is not sent (same as before buffering).
+            return
+        try:
+            await asyncio.to_thread(
+                _send_and_mark, self._relay_name, fills,
+                self._db_path, parse_errors,
+            )
+        except Exception as exc:
+            if not isinstance(exc, NotificationError):
+                log.exception(
+                    "[%s] Unexpected error dispatching %d fill(s)",
+                    self._relay_name, len(fills),
+                )
+            by_order: dict[str, list[Fill]] = {}
+            for fill in fills:
+                by_order.setdefault(fill.orderId, []).append(fill)
+            errors = parse_errors
+            for order_id, order_fills in by_order.items():
+                self._on_flush_failure(order_id, order_fills, errors, exc)
+                errors = []  # parse errors ride with the first order only
+
+    def drop_stale(self, fills: list[Fill]) -> list[Fill]:
+        """Return the fresh fills; drop (log + alert) the stale ones."""
+        fresh, stale = _split_stale(fills, self._max_fill_age_s, self._clock())
+        if stale:
+            hours = self._max_fill_age_s // 3600
+            self._report_dropped(
+                stale,
+                headline=f"{len(stale)} stale fill(s) ignored",
+                detail=(
+                    f"These fills were executed more than {hours}h ago, so the "
+                    f"listener did not send them — a WS feed replaying old "
+                    f"events usually causes this (e.g. after a reconnect). "
+                    f"If one was genuinely never delivered, resend it manually."
+                ),
+                # One key per relay: a replay burst produces one email per
+                # cooldown window, and every fill is still logged.
+                alert_key=f"listener-stale:{self._relay_name}",
+            )
+        return fresh
 
     async def add(self, fill: Fill, order_complete: bool = False) -> None:
         """Add a fill to its orderId bucket.
 
-        If ``order_complete`` is True the buffer for that orderId is
-        flushed immediately and its timer cancelled. Otherwise a fresh
-        quiet-window timer is started (cancelling any pending one for
-        the same orderId).
+        Stale fills are dropped instead (see :meth:`drop_stale`). If
+        ``order_complete`` is True or debouncing is disabled, the buffer
+        for that orderId is flushed immediately and its timer cancelled.
+        Otherwise a fresh quiet-window timer is started (cancelling any
+        pending one for the same orderId).
         """
-        order_id = fill.orderId
-        self._buffers.setdefault(order_id, []).append(fill)
+        if not self.drop_stale([fill]):
+            return
 
-        # Cancel the orderId's pending timer if any. ``_delayed_flush``
-        # removes its own entry from ``_flush_tasks`` before entering
-        # ``_flush_order``, so anything we find here is guaranteed to
-        # still be in its sleep phase — safe to cancel.
+        order_id = fill.orderId
+        bucket = self._buffers.get(order_id, [])
+        if any(f.execId == fill.execId for f in bucket):
+            log.info(
+                "[%s] execId=%s is already buffered for orderId=%s — "
+                "keeping the newer copy",
+                self._relay_name, fill.execId, order_id,
+            )
+        self._buffers[order_id] = _merge_fills(bucket, [fill])
+
+        # Cancel the orderId's pending timer if any (debounce or retry).
+        # ``_delayed_flush`` removes its own entry from ``_flush_tasks``
+        # before entering ``_flush_order``, so anything we find here is
+        # guaranteed to still be in its sleep phase — safe to cancel.
         existing = self._flush_tasks.get(order_id)
         if existing is not None and not existing.done():
             existing.cancel()
 
-        if order_complete:
+        if order_complete or self._debounce_s == 0:
             self._flush_tasks.pop(order_id, None)
             await self._flush_order(order_id)
             return
 
-        task = asyncio.create_task(self._delayed_flush(order_id))
+        self._schedule_flush(order_id, self._debounce_s)
+
+    def _schedule_flush(self, order_id: str, delay_s: float) -> None:
+        task = asyncio.get_running_loop().create_task(
+            self._delayed_flush(order_id, delay_s),
+        )
         # Drop the entry once the timer task finishes so completed
         # orderIds don't pile up in the dict (each Kraken order has a
         # fresh orderId, so without this every settled order would
         # leak ~one Task reference forever).
         task.add_done_callback(functools.partial(self._cleanup_flush_task, order_id))
         self._flush_tasks[order_id] = task
+
+    def _has_pending_timer(self, order_id: str) -> bool:
+        timer = self._flush_tasks.get(order_id)
+        return timer is not None and not timer.done()
 
     def _cleanup_flush_task(
         self, order_id: str, task: asyncio.Task[None],
@@ -402,8 +617,8 @@ class DebounceBuffer:
         """Accumulate parse errors to be flushed with the next batch of fills."""
         self._parse_errors.extend(errors)
 
-    async def _delayed_flush(self, order_id: str) -> None:
-        await asyncio.sleep(self._debounce_s)
+    async def _delayed_flush(self, order_id: str, delay_s: float) -> None:
+        await asyncio.sleep(delay_s)
         # Remove ourselves from the timer slot *before* starting the
         # flush so a concurrent ``add()`` arriving mid-flush can create
         # and cancel new timers without ever finding (and inadvertently
@@ -423,10 +638,11 @@ class DebounceBuffer:
         flush — they belong to no particular order so we attach them
         opportunistically.
         """
-        fills = self._buffers.pop(order_id, [])
+        fills = self.drop_stale(self._buffers.pop(order_id, []))
         parse_errors = self._parse_errors.copy()
         self._parse_errors.clear()
         if not fills and not parse_errors:
+            self._attempts.pop(order_id, None)
             return
         self._flushing.add(order_id)
         try:
@@ -439,30 +655,111 @@ class DebounceBuffer:
                 "Flush cancelled (orderId=%s) — restoring %d fill(s) to buffer",
                 order_id, len(fills),
             )
-            self._buffers.setdefault(order_id, [])
-            self._buffers[order_id] = fills + self._buffers[order_id]
-            self._parse_errors = parse_errors + self._parse_errors
+            self._restore(order_id, fills, parse_errors)
             raise
-        except Exception:
-            log.exception(
-                "Failed to dispatch %d buffered fill(s) for orderId=%s",
-                len(fills), order_id,
-            )
-            self._buffers.setdefault(order_id, [])
-            self._buffers[order_id] = fills + self._buffers[order_id]
-            self._parse_errors = parse_errors + self._parse_errors
+        except Exception as exc:
+            # notify() has already logged a NotificationError per backend;
+            # anything else is unexpected and needs its traceback.
+            if not isinstance(exc, NotificationError):
+                log.exception(
+                    "[%s] Unexpected error dispatching %d fill(s) for orderId=%s",
+                    self._relay_name, len(fills), order_id,
+                )
+            self._on_flush_failure(order_id, fills, parse_errors, exc)
+        else:
+            self._attempts.pop(order_id, None)
         finally:
             self._flushing.discard(order_id)
+
+    def _restore(
+        self, order_id: str, fills: list[Fill], parse_errors: list[str],
+    ) -> None:
+        """Put a failed batch back, merged with fills added meanwhile."""
+        self._buffers[order_id] = _merge_fills(fills, self._buffers.get(order_id, []))
+        self._parse_errors = parse_errors + self._parse_errors
+
+    def _on_flush_failure(
+        self,
+        order_id: str,
+        fills: list[Fill],
+        parse_errors: list[str],
+        exc: Exception,
+    ) -> None:
+        """Schedule a retry for a transient failure, or drop + alert."""
+        attempt = self._attempts.get(order_id, 0) + 1
+        transient = is_transient_failure(exc)
+        if transient and attempt <= len(self._retry_delays_s):
+            delay_s = self._retry_delays_s[attempt - 1]
+            self._attempts[order_id] = attempt
+            self._restore(order_id, fills, parse_errors)
+            log.warning(
+                "[%s] Failed to dispatch %d fill(s) for orderId=%s "
+                "(attempt %d/%d): %s — retrying in %gs",
+                self._relay_name, len(fills), order_id,
+                attempt, len(self._retry_delays_s) + 1, exc, delay_s,
+            )
+            # A fill added while the send was in flight has already armed
+            # a debounce timer that will flush the restored fills too.
+            if not self._has_pending_timer(order_id):
+                self._schedule_flush(order_id, delay_s)
+            return
+
+        self._attempts.pop(order_id, None)
+        if parse_errors:
+            log.error(
+                "[%s] Discarding %d parse error(s) sent with the dropped batch",
+                self._relay_name, len(parse_errors),
+            )
+        if not fills:
+            return
+        reason = (
+            f"delivery still failing after {attempt} attempt(s)"
+            if transient else
+            "every notifier rejected the payload (4xx), so it was not retried"
+        )
+        self._report_dropped(
+            fills,
+            headline=f"{len(fills)} fill(s) not delivered",
+            detail=(
+                f"Giving up on orderId={order_id}: {reason}. Last error: "
+                f"{exc}. These fills were NOT marked as processed — resend "
+                f"them manually if the receiver needs them."
+            ),
+            # Per order: every lost order gets its own email.
+            alert_key=f"listener-dropped:{self._relay_name}:{order_id}",
+        )
+
+    def _report_dropped(
+        self, fills: list[Fill], *, headline: str, detail: str, alert_key: str,
+    ) -> None:
+        """Log dropped fills and email the operator (fire-and-forget)."""
+        description = _describe_fills(fills)
+        log.error("[%s] %s — %s\n%s", self._relay_name, headline, detail, description)
+        self._spawn(asyncio.to_thread(
+            send_alert,
+            subject=f"[relayport] {self._relay_name}: {headline}",
+            body=f"{detail}\n\nFills:\n{description}\n",
+            key=alert_key,
+        ))
+
+    def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
+        task = asyncio.get_running_loop().create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     async def flush(self) -> None:
         """Flush every pending orderId — safe to call when empty.
 
         Used on listener shutdown / reconnect to drain the buffers. A
         snapshot of the keys is taken first so newly-added fills during
-        the loop do not affect iteration.
+        the loop do not affect iteration. Orders waiting out a retry
+        backoff are left to their timer: flushing them now would spend a
+        retry attempt early.
         """
         order_ids = list(self._buffers.keys())
         for order_id in order_ids:
+            if order_id in self._attempts and self._has_pending_timer(order_id):
+                continue
             timer = self._flush_tasks.pop(order_id, None)
             if (
                 timer is not None
@@ -490,10 +787,14 @@ class DebounceBuffer:
 async def _handle_event(
     relay_name: RelayName,
     data: Any,
-    debounce_buf: DebounceBuffer | None,
-    db_path: str | None,
+    debounce_buf: DebounceBuffer,
 ) -> None:
-    """Process a single parsed WS message using adapter callbacks."""
+    """Process a single parsed WS message using adapter callbacks.
+
+    Every ``mark=True`` fill goes through *debounce_buf* — buffered, or
+    sent at once via ``send_now`` when debouncing is disabled — so the
+    stale-fill guard and the retry / drop policy apply uniformly.
+    """
     relay = get_relay(relay_name)
     config = relay.listener_config
     if config is None:
@@ -538,27 +839,20 @@ async def _handle_event(
             no_mark_fills.append(fill)
 
     if mark_fills:
-        if debounce_buf is not None:
+        if debounce_buf.debouncing:
             for fill, order_complete in mark_fills:
                 await debounce_buf.add(fill, order_complete=order_complete)
             if parse_errors:
                 debounce_buf.extend_errors(parse_errors)
         else:
-            try:
-                await asyncio.to_thread(
-                    _send_and_mark, relay_name,
-                    [f for f, _ in mark_fills], db_path, parse_errors,
-                )
-            except Exception:
-                log.exception(
-                    "[%s] Failed to dispatch %d fill(s)",
-                    relay_name, len(mark_fills),
-                )
+            await debounce_buf.send_now([f for f, _ in mark_fills], parse_errors)
     elif parse_errors:
         # TODO: route to a dedicated error notifier (email, configurable cadence)
         # once that system exists. For now, errors are visible in server logs only.
         pass
 
+    # Fire-and-forget fills skip the buffer but not the stale-fill guard.
+    no_mark_fills = debounce_buf.drop_stale(no_mark_fills)
     if no_mark_fills:
         try:
             await asyncio.to_thread(
@@ -573,6 +867,23 @@ async def _handle_event(
 
 # ── WebSocket listener loop ─────────────────────────────────────────
 
+def _on_disconnect_flush_done(
+    relay_name: RelayName,
+    tasks: set[asyncio.Task[None]],
+    task: asyncio.Task[None],
+) -> None:
+    """Done-callback of a background disconnect flush: untrack, surface errors."""
+    tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.error(
+            "[%s] Failed to flush debounce buffer on disconnect",
+            relay_name, exc_info=exc,
+        )
+
+
 async def _listen(
     relay_name: RelayName,
     db_path: str | None,
@@ -585,11 +896,14 @@ async def _listen(
 
     retry_delay = INITIAL_RETRY_DELAY
 
-    debounce_buf: DebounceBuffer | None = None
-    if config.debounce_ms > 0:
-        debounce_buf = DebounceBuffer(
-            relay_name, config.debounce_ms, db_path,
-        )
+    debounce_buf = DebounceBuffer(
+        relay_name, config.debounce_ms, db_path,
+        max_fill_age_s=config.max_fill_age_s,
+        retry_delays_s=config.retry_delays_s,
+    )
+    # Disconnect flushes run in the background (see below); retained here
+    # so they are not garbage-collected mid-run.
+    flush_tasks: set[asyncio.Task[None]] = set()
 
     while True:
         try:
@@ -612,23 +926,19 @@ async def _listen(
                                 )
                                 continue
 
-                            await _handle_event(
-                                relay_name, event_data,
-                                debounce_buf, db_path,
-                            )
+                            await _handle_event(relay_name, event_data, debounce_buf)
                         elif msg.type == aiohttp.WSMsgType.ERROR:
                             log.error("[%s] WS error: %s", relay_name, ws.exception())
                             break
-                        elif msg.type in (
-                            aiohttp.WSMsgType.CLOSE,
-                            aiohttp.WSMsgType.CLOSING,
-                            aiohttp.WSMsgType.CLOSED,
-                        ):
-                            log.warning(
-                                "[%s] WS closed by server (code=%s)",
-                                relay_name, msg.data,
-                            )
-                            break
+                    else:
+                        # aiohttp ends the iteration silently when the
+                        # connection closes (server close frame, heartbeat
+                        # timeout) — CLOSE messages never reach the loop
+                        # body. Log it, or a bridge restart leaves no trace.
+                        log.warning(
+                            "[%s] WS connection closed (code=%s)",
+                            relay_name, ws.close_code,
+                        )
                 finally:
                     if not ws.closed:
                         await ws.close()
@@ -640,21 +950,18 @@ async def _listen(
             log.error("[%s] WS connection error: %s", relay_name, exc)
         except asyncio.CancelledError:
             log.info("[%s] Listener cancelled — shutting down", relay_name)
-            if debounce_buf is not None:
-                await debounce_buf.flush()
+            await debounce_buf.flush()
             raise
         except Exception:
             log.exception("[%s] Unexpected error in listener", relay_name)
 
-        # Flush buffered fills before reconnect
-        if debounce_buf is not None:
-            try:
-                await debounce_buf.flush()
-            except Exception:
-                log.exception(
-                    "[%s] Failed to flush debounce buffer on disconnect",
-                    relay_name,
-                )
+        # Flush buffered fills in the background: sending them can take
+        # several seconds per webhook and must not hold up the reconnect.
+        flush_task = asyncio.get_running_loop().create_task(debounce_buf.flush())
+        flush_tasks.add(flush_task)
+        flush_task.add_done_callback(
+            functools.partial(_on_disconnect_flush_done, relay_name, flush_tasks),
+        )
 
         log.info("[%s] Reconnecting in %ds...", relay_name, retry_delay)
         await asyncio.sleep(retry_delay)

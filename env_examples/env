@@ -62,6 +62,22 @@ POLL_INTERVAL=600
 # request (which gets deduped against previous executions). Default: 0 (disabled).
 #LISTENER_DEBOUNCE_MS=2000
 
+# Fills executed longer ago than this are dropped (logged + alerted) instead
+# of being sent — protects the webhook from WS replays of old fills.
+# Whole hours, >= 1. Default: 24.
+#LISTENER_MAX_FILL_AGE_HOURS=24
+
+# Seconds to wait before each retry of a webhook send that failed with
+# 5xx / timeout / network error. A 4xx, or a failure after the last retry,
+# drops the fills and sends an alert. Default: 60,300,900 (1, 5, 15 min).
+#LISTENER_RETRY_DELAYS_S=60,300,900
+
+# ── Dedup ────────────────────────────────────────────────────────────
+
+# Days processed-fill rows are kept (pruned at startup). A fill replayed
+# after its row is pruned looks new and is re-sent. Default: 90.
+#DEDUP_RETENTION_DAYS=90
+
 # ── FX rate enrichment (optional) ────────────────────────────────────
 
 # When enabled, each outbound Trade is augmented with fxRate, fxRateBase,

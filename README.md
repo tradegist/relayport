@@ -363,6 +363,9 @@ Configuration is split across three environment files. Templates are in `env_exa
 | `POLLER_ENABLED`                    | No       | `true`                  | Set to `false` to disable the poller globally (relay override: `{RELAY}_POLLER_ENABLED`)                                       |
 | `LISTENER_ENABLED`                  | No       | —                       | Set to `true` to enable real-time WS listeners globally; IBKR requires `ibkr_bridge`, Kraken does not                          |
 | `LISTENER_DEBOUNCE_MS`              | No       | `0`                     | Milliseconds to buffer fills before flushing                                                                                   |
+| `LISTENER_MAX_FILL_AGE_HOURS`       | No       | `24`                    | Listener drops (logs + alerts) fills executed longer ago than this instead of sending them — guards against WS replays. Relay override: `{RELAY}_LISTENER_MAX_FILL_AGE_HOURS` |
+| `LISTENER_RETRY_DELAYS_S`           | No       | `60,300,900`            | Seconds before each listener retry of a send that failed with 5xx / timeout. A 4xx or exhausted retries drop the fills + alert. Relay override: `{RELAY}_LISTENER_RETRY_DELAYS_S` |
+| `DEDUP_RETENTION_DAYS`              | No       | `90`                    | Days processed-fill dedup rows are kept (pruned at startup). A fill replayed after its row is pruned looks new               |
 | `IBKR_LISTENER_EXEC_EVENTS_ENABLED` | No       | `false`                 | Enable `execDetailsEvent` webhooks (2x volume, lower latency)                                                                  |
 | `DEBUG_WEBHOOK_PATH`                | No       | —                       | Route webhooks to debug inbox instead of `TARGET_WEBHOOK_URL` (see [Debug Webhook Inbox](#debug-webhook-inbox))                |
 | `MAX_DEBUG_WEBHOOK_PAYLOADS`        | No       | `100`                   | Max payloads stored in the debug inbox (hard max: 150, FIFO eviction)                                                          |
@@ -762,7 +765,12 @@ ALERT_REPORT_EMAIL_TO=ops@example.com
 - Attempt count and the underlying exception message — including the receiver's response body excerpt (e.g. `"You've exceeded your daily quota"`)
 - Timestamp and a CTA pointing the operator at logs
 
-**What does NOT go in the email.** The trade payload itself is intentionally omitted — it can contain account IDs and execution data.
+**Listener drop alerts.** The IBKR/Kraken listener also emails when it drops fills instead of delivering them (see [Operational notes](#operational-notes)):
+
+- **Stale fills ignored** — fills executed more than `LISTENER_MAX_FILL_AGE_HOURS` ago (typically a WS feed replaying old events). One email per relay per cooldown window; every dropped fill is logged.
+- **Fills not delivered** — a send rejected with 4xx by every notifier (e.g. a quota-exhausted Pipedream answers 400), or still failing after the `LISTENER_RETRY_DELAYS_S` retries. One email per order. The fills are **not** marked processed, so resend them manually if the receiver needs them.
+
+**What does NOT go in the email.** The trade payload itself is intentionally omitted — it can contain account IDs and execution data. Listener drop alerts list one summary line per dropped fill (time, side, symbol, volume, price, `orderId`, `execId`) and never the raw broker data.
 
 **Throttling.** The first failure for a given destination fires immediately. Subsequent failures within `ALERT_COOLDOWN_MINUTES` (default 60) are suppressed. State is in-memory: a container restart with a still-broken destination re-fires once, which is itself useful signal.
 
@@ -827,7 +835,9 @@ The listener processes two event types from the bridge stream:
 
 - **Dedup is shared with the Flex poller.** Both the listener and the Flex poller write to the same SQLite dedup database. A fill delivered by the listener will be silently skipped if the Flex poller later sees the same `execId`, and vice versa. Combo-leg executions — whose TWS execId carries an extra 5th segment that Flex omits — are reconciled through dedup aliases: the listener marks and checks the 4-segment Flex form alongside the real ID, in both directions.
 - **Option assignments, exercises, and expiries are deduped by economic key.** IBKR books these outside normal execution flow, so the two paths report them with completely different identifiers (Flex has no `ibExecID` for them; the bridge reports them via an overnight reconcile). The relay reconciles the two reports on an account-scoped economic key (contract, side, quantity, price) within an 18-hour window, so the consumer receives **one** webhook. Two caveats: (1) your Flex query must include the `transactionType` column (and ideally `notes`/`code`) — without it these fills cannot be classified and both webhooks are sent; (2) whichever path reports first wins — when that is the bridge, the surviving webhook carries the reconcile timestamp (typically ~3 AM the next day) and `fee=0` rather than the true assignment time. Requires an ibkr_bridge version that sets the `isBookTrade` envelope field; older bridges simply keep today's duplicate behavior.
-- **Auto-reconnect with backoff.** On disconnect or error the listener waits (starting at 5 s, up to 5 min) and reconnects automatically. The last seen sequence number is sent on reconnect so the bridge can replay any missed events.
+- **Auto-reconnect with backoff.** On disconnect or error the listener waits (starting at 5 s, up to 5 min) and reconnects automatically. The last seen sequence number and the bridge's `bridgeId` are sent on reconnect (and persisted across relay restarts), so the bridge replays exactly the events the relay missed — or, if the bridge itself restarted (new `bridgeId`, sequence numbers restarted at 1), everything the new bridge process has emitted. Requires an ibkr_bridge version that sends `bridgeId`; with an older bridge only the sequence number is used.
+- **Stale-fill guard.** Fills whose execution time is more than `LISTENER_MAX_FILL_AGE_HOURS` (default 24) in the past are dropped and alerted instead of being sent — checked when they arrive and again right before every send. A WS replay of old fills therefore never reaches your webhook as new trades. Missed fills older than the limit are still delivered by the Flex poller.
+- **Failed sends are retried, never parked.** A send that fails with 5xx / timeout / network error is retried after each delay in `LISTENER_RETRY_DELAYS_S` (default 1, 5 and 15 minutes). A 4xx from every notifier, or a failure after the last retry, drops the fills and sends an alert listing them — nothing waits in memory for the next reconnect.
 - **Debounce (optional).** Set `LISTENER_DEBOUNCE_MS` (milliseconds, default `0`) to buffer rapid partial fills before dispatching a single batched webhook. Useful when a large order fills in many small lots within a short window.
 
 #### Disabling the listener

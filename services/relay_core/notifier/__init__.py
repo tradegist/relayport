@@ -160,6 +160,22 @@ def _is_retryable(exc: Exception) -> bool:
     return isinstance(exc, httpx.HTTPError)
 
 
+def is_transient_failure(exc: Exception) -> bool:
+    """Return True if a failed dispatch is worth retrying later.
+
+    A ``NotificationError`` is transient when at least one backend failed
+    with a retryable error (5xx, timeout, network). When every backend
+    answered 4xx the payload itself was rejected, and resending it cannot
+    help — e.g. Pipedream returns 400 once its daily quota is spent.
+
+    Any other exception (SQLite, FX enrichment, …) happened before a
+    receiver judged the payload, so it counts as transient.
+    """
+    if isinstance(exc, NotificationError):
+        return any(_is_retryable(failure) for _, failure in exc.failures)
+    return True
+
+
 def _short_reason(exc: Exception) -> str:
     """Return a brief, subject-line-friendly reason from an exception."""
     if isinstance(exc, httpx.HTTPStatusError):

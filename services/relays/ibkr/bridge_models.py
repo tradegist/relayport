@@ -145,6 +145,10 @@ class WsStatusEnvelope(BaseModel):
 
     type: Literal["connected", "disconnected"]
     seq: int
+    # Per-process ID — seq restarts at 1 whenever the bridge restarts.
+    # Optional here (required upstream) so envelopes from bridge versions
+    # predating the field still parse.
+    bridgeId: str | None = None
     timestamp: str
 
 
@@ -159,6 +163,8 @@ class WsFillEnvelope(BaseModel):
 
     type: Literal["execDetailsEvent", "commissionReportEvent"]
     seq: int
+    # See WsStatusEnvelope.bridgeId.
+    bridgeId: str | None = None
     timestamp: str
     fill: WsFill
     source: WsEventSource

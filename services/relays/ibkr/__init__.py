@@ -6,11 +6,13 @@ env var getters, Flex fetch, XML parsing, WS envelope mapping.
 """
 
 import asyncio
+import json
 import logging
 import os
 import sqlite3
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal, cast
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -24,15 +26,18 @@ from relay_core import (
     PollerConfig,
     StartupContext,
     get_debounce_ms,
+    get_max_fill_age_s,
     get_poll_interval,
+    get_retry_delays_s,
     is_listener_enabled,
     is_poller_enabled,
 )
 from relay_core.poller_engine import (
     META_DB_PATH,
+    get_last_bridge_id,
     get_last_bridge_seq,
     init_meta_db,
-    set_last_bridge_seq,
+    set_bridge_cursor,
 )
 from shared import (
     BuySell,
@@ -522,18 +527,63 @@ def _on_message_factory(
     return handler
 
 
-def _persist_bridge_seq(db_path: str, seq: int) -> None:
-    """Write bridge last_seq using a fresh thread-local connection.
+# Bridge WS resume cursor: (last seq received, bridgeId that issued it).
+BridgeCursor = tuple[int, str | None]
+
+
+def _advance_bridge_cursor(cursor: BridgeCursor, data: object) -> BridgeCursor | None:
+    """Return the cursor after receiving event *data*, or None if unchanged.
+
+    ibkr_bridge restarts ``seq`` at 1 in every process and stamps each
+    event with a per-process ``bridgeId``. An event from a different
+    bridgeId therefore resets the cursor to that event's seq even though
+    it is lower — otherwise a stale high seq would make every later
+    reconnect ask the new bridge for events it will never number that
+    high. Events without a bridgeId (bridges that predate it) only ever
+    move seq forward.
+    """
+    if not isinstance(data, dict):
+        return None
+    seq = data.get("seq")
+    if not isinstance(seq, int):
+        return None
+    raw_id = data.get("bridgeId")
+    bridge_id = raw_id if isinstance(raw_id, str) and raw_id else None
+    last_seq, last_id = cursor
+    if bridge_id is not None and bridge_id != last_id:
+        return seq, bridge_id
+    if seq > last_seq:
+        return seq, last_id
+    return None
+
+
+def _resume_query(cursor: BridgeCursor) -> str:
+    """Query string asking the bridge to replay what follows *cursor* ("" for none).
+
+    Without ``last_seq`` the bridge replays nothing (live events only).
+    """
+    last_seq, bridge_id = cursor
+    if last_seq <= 0:
+        return ""
+    params: dict[str, str | int] = {"last_seq": last_seq}
+    if bridge_id is not None:
+        params["bridge_id"] = bridge_id
+    return urlencode(params)
+
+
+def _persist_bridge_cursor(db_path: str, cursor: BridgeCursor) -> None:
+    """Write the bridge cursor using a fresh thread-local connection.
 
     Called exclusively inside ``asyncio.to_thread`` so each invocation owns
     its connection — no cross-thread sharing of sqlite3.Connection objects.
     Persistence is best-effort: a transient write failure is logged as a
-    warning and the seq falls back to in-memory tracking for that message.
+    warning and the cursor falls back to in-memory tracking for that message.
     """
+    seq, bridge_id = cursor
     try:
         conn = sqlite3.connect(db_path)
         try:
-            set_last_bridge_seq(conn, "ibkr", seq)
+            set_bridge_cursor(conn, "ibkr", seq, bridge_id)
         finally:
             conn.close()
     except (OSError, sqlite3.Error) as exc:
@@ -547,64 +597,75 @@ def _build_connect(
 ) -> Callable[[aiohttp.ClientSession], Awaitable[aiohttp.ClientWebSocketResponse]]:
     """Build a connect callback that opens an authenticated WS connection.
 
-    Tracks ``last_seq`` across reconnects AND across process restarts.
-    On startup the last persisted seq is read from the meta DB (if supplied),
-    so the bridge resumes from where the relay left off instead of replaying
-    its full event buffer from seq=0.
+    Tracks the bridge cursor (``last_seq`` + ``bridgeId``) across reconnects
+    AND across process restarts. On startup the persisted cursor is read
+    from the meta DB (if supplied) and sent back on every connect, so the
+    bridge replays exactly the events the relay missed — and, when the
+    bridgeId no longer matches (the bridge restarted), everything the new
+    bridge process has emitted.
     """
-    initial = 0
+    cursor: BridgeCursor = (0, None)
     if meta_db_path is not None:
         try:
             conn = sqlite3.connect(meta_db_path)
             try:
-                initial = get_last_bridge_seq(conn, "ibkr")
+                cursor = (
+                    get_last_bridge_seq(conn, "ibkr"),
+                    get_last_bridge_id(conn, "ibkr"),
+                )
             finally:
                 conn.close()
         except (OSError, sqlite3.Error) as exc:
             log.warning("[ibkr] Could not read persisted bridge seq — starting from 0: %s", exc)
-    if initial > 0:
-        log.info("[ibkr] Resuming bridge WS from persisted last_seq=%d", initial)
-    state = {"last_seq": initial}
+    if cursor[0] > 0:
+        log.info("[ibkr] Resuming bridge WS from persisted last_seq=%d", cursor[0])
+    state = {"cursor": cursor}
 
     async def connect(
         session: aiohttp.ClientSession,
     ) -> aiohttp.ClientWebSocketResponse:
         url = ws_url
-        if state["last_seq"] > 0:
+        query = _resume_query(state["cursor"])
+        if query:
             sep = "&" if "?" in url else "?"
-            url = f"{url}{sep}last_seq={state['last_seq']}"
+            url = f"{url}{sep}{query}"
 
         headers = {"Authorization": f"Bearer {api_token}"}
         log.debug("[ibkr] WS URL: %s", url)
         ws = await session.ws_connect(url, headers=headers, heartbeat=30.0)
 
-        # Wrap the original receive method to track seq numbers.
+        # Wrap the original receive method to track the cursor.
         _orig_receive = ws.receive
 
         async def _tracking_receive() -> aiohttp.WSMessage:
             msg = await _orig_receive()
             if msg.type == aiohttp.WSMsgType.TEXT:
-                import json
                 try:
                     data = json.loads(msg.data)
-                    seq = data.get("seq")
-                    if isinstance(seq, int) and seq > state["last_seq"]:
-                        state["last_seq"] = seq
-                        if meta_db_path is not None:
-                            # Persist off the event loop — each to_thread call
-                            # opens its own connection so no connection is shared
-                            # across threads.
-                            await asyncio.to_thread(
-                                _persist_bridge_seq, meta_db_path, seq,
-                            )
                 except (ValueError, TypeError) as exc:
                     log.debug("[ibkr] Could not parse seq from WS message: %s", exc)
+                    return msg
+                advanced = _advance_bridge_cursor(state["cursor"], data)
+                if advanced is not None:
+                    if advanced[1] != state["cursor"][1]:
+                        log.info(
+                            "[ibkr] Bridge process changed (new bridgeId) — "
+                            "tracking its seq from %d", advanced[0],
+                        )
+                    state["cursor"] = advanced
+                    if meta_db_path is not None:
+                        # Persist off the event loop — each to_thread call
+                        # opens its own connection so no connection is shared
+                        # across threads.
+                        await asyncio.to_thread(
+                            _persist_bridge_cursor, meta_db_path, advanced,
+                        )
             return msg
 
         # `receive` is a regular async method on ClientWebSocketResponse (no
         # __slots__), so attribute assignment is safe at runtime.  We patch at
-        # this level — rather than inside on_message — so that seq is tracked
-        # for every incoming WS message, including status events
+        # this level — rather than inside on_message — so that the cursor is
+        # tracked for every incoming WS message, including status events
         # ("connected"/"disconnected") that event_filter discards before
         # on_message is invoked.
         ws.receive = _tracking_receive  # type: ignore[assignment] # aiohttp stubs mark receive as non-assignable; runtime monkey-patch is intentional
@@ -640,6 +701,8 @@ def _build_listener_config(tz: ZoneInfo) -> ListenerConfig | None:
         on_message=_on_message_factory(exec_events_enabled, tz),
         event_filter=_event_filter,
         debounce_ms=get_debounce_ms("ibkr"),
+        max_fill_age_s=get_max_fill_age_s("ibkr"),
+        retry_delays_s=get_retry_delays_s("ibkr"),
     )
 
 

@@ -57,7 +57,10 @@ def send_alert(*, subject: str, body: str, key: str) -> None:
 
     Args:
         subject: Inbox-friendly subject line.
-        body: Plain-text body. Must NOT include trade payloads or secrets.
+        body: Plain-text body. Must NOT include raw trade payloads, account
+              IDs or secrets. A short per-fill summary (symbol, side,
+              volume, orderId, execId) is fine — the listener's drop
+              alerts rely on it so the operator can resend lost fills.
         key: Throttling key (e.g. ``"WebhookNotifier:ibkr:-"``). Callers
              with the same key share a cooldown window.
     """
