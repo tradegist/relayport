@@ -35,7 +35,8 @@ Controlled by `DEPLOY_MODE` in `.env.droplet` (required, validated before any de
 ### Standalone Mode (`DEPLOY_MODE=standalone`)
 
 - Set `DO_API_TOKEN` in `.env.droplet`. `make deploy` runs Terraform to create a droplet + firewall + reserved IP, then the CLI rsyncs project files, pushes `.env` + `.env.relays`, and runs `docker compose up -d --build`.
-- Terraform only creates infrastructure — cloud-init installs Docker and creates the project directory. The CLI handles all file transfer and service startup.
+- Terraform only creates infrastructure — cloud-init creates a 2 GB swap file, installs Docker and creates the project directory. The CLI handles all file transfer and service startup.
+- **`cloud-init.sh` only runs when a droplet is created.** The droplet resource sets `lifecycle { ignore_changes = [user_data] }` because DigitalOcean can't change `user_data` in place — without it, any edit to `cloud-init.sh` would make the next `make deploy` (`terraform apply -auto-approve`) destroy and recreate the droplet. Apply cloud-init changes to an existing droplet by hand over SSH.
 - After deploy, add `DROPLET_IP` from terraform output to `.env.droplet` for `make sync`.
 - `DO_API_TOKEN` can be removed after first deploy. Mode is determined by `DEPLOY_MODE`, not by token presence.
 

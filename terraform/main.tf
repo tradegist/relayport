@@ -57,6 +57,15 @@ resource "digitalocean_droplet" "relay" {
 
   user_data = file("${path.module}/cloud-init.sh")
 
+  # cloud-init only runs at creation, and DigitalOcean can't change
+  # user_data in place: without this, any edit to cloud-init.sh would make
+  # the next `make deploy` (terraform apply -auto-approve) destroy and
+  # recreate the droplet. Apply cloud-init changes to existing droplets
+  # by hand.
+  lifecycle {
+    ignore_changes = [user_data]
+  }
+
   connection {
     type        = "ssh"
     host        = self.ipv4_address

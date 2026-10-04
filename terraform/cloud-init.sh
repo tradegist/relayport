@@ -7,6 +7,24 @@ set -euo pipefail
 # separately by the CLI deploy command over SSH.
 # ---------------------------------------------------------------------------
 
+# Swap file — a safety net for the small droplet sizes. Without swap, a
+# memory spike makes the kernel OOM-kill the largest process (IB Gateway's
+# JVM when ibkr-bridge runs on the droplet) instead of paging idle memory
+# out to disk.
+SWAP_FILE=/swapfile
+if ! swapon --show=NAME --noheadings | grep -qx "$SWAP_FILE"; then
+  if [ ! -f "$SWAP_FILE" ]; then
+    fallocate -l 2G "$SWAP_FILE"
+    chmod 600 "$SWAP_FILE"
+    mkswap "$SWAP_FILE"
+  fi
+  swapon "$SWAP_FILE"
+fi
+grep -q "^$SWAP_FILE " /etc/fstab || echo "$SWAP_FILE none swap sw 0 0" >> /etc/fstab
+# Swap only under real memory pressure, keeping the JVM's working set in RAM.
+echo "vm.swappiness=10" > /etc/sysctl.d/99-swappiness.conf
+sysctl -p /etc/sysctl.d/99-swappiness.conf
+
 # Install Docker via official apt repository (deterministic, auditable)
 apt-get update
 apt-get install -y ca-certificates curl
