@@ -774,11 +774,16 @@ ALERT_REPORT_EMAIL_TO=ops@example.com
 
 **Outage alerts.** Every poller and listener reports each check to an outage tracker. A failure streak shorter than `OUTAGE_ALERT_MINUTES` (default 15) stays silent, so routine blips — IB Gateway's ~1-minute nightly restart, a single 503 — never alert. Past that, the relay emails the last error, then a reminder every `ALERT_COOLDOWN_MINUTES` for as long as the outage lasts, and a recovery email once it clears. What counts as a failure:
 
-- **Poller** — the broker fetch failed (e.g. `Flex SendRequest failed: [1012] Token has expired`) or the cycle crashed. A webhook delivery failure does not count: it has its own alert above.
+- **Poller** — the broker fetch failed (e.g. `Flex SendRequest failed: [1018] Too many requests`) or the cycle crashed. A webhook delivery failure does not count: it has its own alert above.
+- **Poller rejected — alerts at once.** When the broker rejects the configuration itself — expired or invalid token, invalid query, IP restriction, IBKR's `[1025] Too many failed attempts` lockout — no retry can fix it, so the first failure emails a "needs action" alert without waiting for `OUTAGE_ALERT_MINUTES`. Reminders and the recovery email work as above.
 - **Listener** — checked every minute: the WebSocket is down, or the relay's health probe of the broker side fails. For IBKR the probe is ibkr_bridge's `GET /health`, which reports whether the bridge is connected to IB Gateway; the relay's own WebSocket to the bridge stays up when the Gateway logs out, so without the probe that outage is silent.
 - **Listener stopped** — an unrecoverable listener error (e.g. a Kraken API key without WebSocket permission) alerts at once, since the listener will not reconnect.
 
+Outage state is in-memory. Restarting the relay mid-outage (e.g. `make sync`) restarts the clock — if the outage persists, a "needs action" failure alerts again on the first failed poll, any other outage `OUTAGE_ALERT_MINUTES` after the restart — and an outage that recovers after the restart sends no recovery email.
+
 **What does NOT go in the email.** The trade payload itself is intentionally omitted — it can contain account IDs and execution data. Listener drop alerts list one summary line per dropped fill (time, side, symbol, volume, price, `orderId`, `execId`) and never the raw broker data.
+
+**Recipient privacy.** Logs mask the recipient address (`ops@example.com` → `o***@e***.com`), including inside Resend error responses that echo it.
 
 **Throttling.** The first failure for a given destination fires immediately. Subsequent failures within `ALERT_COOLDOWN_MINUTES` (default 60) are suppressed. State is in-memory: a container restart with a still-broken destination re-fires once, which is itself useful signal.
 
@@ -803,6 +808,8 @@ Before deploying, create an Activity Flex Query in IBKR Client Portal:
 The IBKR poller calls the Flex Web Service at the configured interval (default: 600s). Override with `IBKR_POLL_INTERVAL` in `.env.relays`.
 
 > **Rate limit:** IBKR enforces a limit of **10 requests per minute per token** (and 1 per second), per [Flex Web Service error code 1018](https://www.ibkrguides.com/orgportal/performanceandstatements/flex3error.htm). The limit is scoped to the _token_, so multiple query IDs (e.g. `_2` suffixed pollers) share the same budget. Hitting it returns `ErrorCode 1018 — Too many requests`. The technical floor is ~6 seconds, but Flex report generation is slow (5–30 s typical), retries need headroom, and there's no benefit to polling faster than the broker generates data. We recommend `IBKR_POLL_INTERVAL` (or `POLL_INTERVAL`) at **420 seconds (7 minutes) minimum**; the default of 600 s (10 min) is a comfortable margin.
+
+> **Errors that need action.** Flex errors no retry can fix send an immediate "needs action" [outage alert](#operational-alerts): `1010` legacy query, `1011` inactive service account, `1012` token expired, `1013` IP restriction, `1014` invalid query, `1015` invalid token, `1016` invalid account, and `1025` *Too many failed attempts*. The last is undocumented by IBKR: in production it appeared after ~10 consecutive failures and lasted ~2 hours, and the first failure after it lapsed re-armed it — so an expired token re-locks the query every 2 hours until replaced. If a new token still returns `1025`, the lock armed by the old token has not lapsed yet; wait it out before concluding the new token is bad. Flex tokens expire — renew yours before its expiry date.
 
 > **Why Activity instead of Trade Confirmation?** Trade Confirmation queries are locked to "Today" only. Activity queries support a configurable lookback period, so if the droplet is offline for a few days the first poll after restart will catch all missed fills. The SQLite dedup prevents double-sending.
 

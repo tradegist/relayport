@@ -11,6 +11,7 @@ broken destination re-fires once, which is itself useful signal.
 """
 
 import logging
+import re
 import threading
 import time
 
@@ -40,12 +41,35 @@ def _get_alert_from() -> str:
     return get_env("ALERT_EMAIL_FROM") or _DEFAULT_FROM
 
 
-def _get_cooldown_seconds() -> int:
-    """Read ALERT_COOLDOWN_MINUTES (default 60) and return seconds."""
+def get_cooldown_minutes() -> int:
+    """Read ALERT_COOLDOWN_MINUTES (default 60).
+
+    Raises:
+        SystemExit: When the value is not a non-negative integer.
+    """
     name, minutes = get_env_int("ALERT_COOLDOWN_MINUTES", default="60")
     if minutes < 0:
         raise SystemExit(f"Invalid {name}={minutes} — must be >= 0")
-    return minutes * 60
+    return minutes
+
+
+def _mask_email(address: str) -> str:
+    """Obfuscate an address for logs: ``ops@example.com`` → ``o***@e***.com``."""
+    local, at, domain = address.partition("@")
+    if not at or not local or not domain:
+        return "***"
+    host, dot, tld = domain.rpartition(".")
+    masked_domain = f"{host[0]}***{dot}{tld}" if host else f"{domain[0]}***"
+    return f"{local[0]}***@{masked_domain}"
+
+
+def _mask_recipient(text: str, address: str) -> str:
+    """Replace every occurrence of *address* in *text* with its masked form.
+
+    Applied before any truncation, so a cut can never leave part of the
+    address behind.
+    """
+    return re.sub(re.escape(address), _mask_email(address), text, flags=re.IGNORECASE)
 
 
 def send_alert(*, subject: str, body: str, key: str) -> None:
@@ -70,7 +94,7 @@ def send_alert(*, subject: str, body: str, key: str) -> None:
         if not api_key or not to:
             return
 
-        cooldown_s = _get_cooldown_seconds()
+        cooldown_s = get_cooldown_minutes() * 60
         now = time.monotonic()
         with _lock:
             last = _last_alert_at.get(key, 0.0)
@@ -97,12 +121,13 @@ def send_alert(*, subject: str, body: str, key: str) -> None:
                 timeout=_HTTP_TIMEOUT_S,
             )
             if 200 <= resp.status_code < 300:
-                log.info("Alert sent to %s (HTTP %d)", to, resp.status_code)
+                log.info("Alert sent to %s (HTTP %d)", _mask_email(to), resp.status_code)
                 delivered = True
             else:
+                # Resend's validation errors can echo the recipient.
                 log.error(
                     "Alert delivery failed: HTTP %d body=%s",
-                    resp.status_code, resp.text[:200],
+                    resp.status_code, _mask_recipient(resp.text, to)[:200],
                 )
         finally:
             if not delivered:

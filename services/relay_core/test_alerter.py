@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from relay_core import alerter
-from relay_core.alerter import _reset_for_test, send_alert
+from relay_core.alerter import _mask_email, _reset_for_test, send_alert
 
 
 @pytest.fixture(autouse=True)
@@ -136,7 +136,7 @@ class TestCooldown:
     def test_invalid_cooldown_does_not_raise(self) -> None:
         """Invalid ALERT_COOLDOWN_MINUTES must not propagate to the caller.
 
-        ``_get_cooldown_seconds()`` raises SystemExit, but the alerter's
+        ``get_cooldown_minutes()`` raises SystemExit, but the alerter's
         outer try/except swallows it so a misconfigured env var can never
         crash the relay.
         """
@@ -144,6 +144,43 @@ class TestCooldown:
         with patch.dict("os.environ", env, clear=True), \
              patch("relay_core.alerter.httpx.post"):
             send_alert(subject="s", body="b", key="k")  # must not raise
+
+
+class TestRecipientMasking:
+    @pytest.mark.parametrize(("address", "expected"), [
+        ("ops@example.com", "o***@e***.com"),
+        ("first.last@mail.example.co.uk", "f***@m***.uk"),
+        ("root@localhost", "r***@l***"),
+        ("not-an-address", "***"),
+        ("@example.com", "***"),
+        ("ops@", "***"),
+    ])
+    def test_mask_email(self, address: str, expected: str) -> None:
+        assert _mask_email(address) == expected
+
+    def test_sent_log_masks_recipient(self, caplog: pytest.LogCaptureFixture) -> None:
+        with patch.dict("os.environ", _ENABLED_ENV, clear=True), \
+             patch("relay_core.alerter.httpx.post") as mock_post, \
+             caplog.at_level("INFO", logger="alerter"):
+            mock_post.return_value = MagicMock(status_code=200)
+            send_alert(subject="s", body="b", key="k")
+        assert "Alert sent to o***@e***.com (HTTP 200)" in caplog.text
+        assert "ops@example.com" not in caplog.text
+
+    def test_failure_log_masks_recipient_echoed_in_body(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Padding pushes the address across the 200-char truncation point:
+        # masking must happen first, or a partial address would survive.
+        body = "x" * 185 + '"OPS@example.com" is not a valid recipient'
+        with patch.dict("os.environ", _ENABLED_ENV, clear=True), \
+             patch("relay_core.alerter.httpx.post") as mock_post, \
+             caplog.at_level("ERROR", logger="alerter"):
+            mock_post.return_value = MagicMock(status_code=422, text=body)
+            send_alert(subject="s", body="b", key="k")
+        assert "Alert delivery failed: HTTP 422" in caplog.text
+        assert "ops@" not in caplog.text.lower()
+        assert "example.co" not in caplog.text
 
 
 class TestConcurrency:

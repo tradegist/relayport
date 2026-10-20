@@ -24,7 +24,7 @@ Use the existing `ibkr` and `kraken` relays as reference implementations. IBKR d
 - `name`: the relay name (must match `RelayName`).
 - `notifiers`: pass through from the argument.
 - `poller_configs`: list of `PollerConfig` (can be empty if listener-only). Each needs:
-  - `fetch: Callable[[], str]` — returns raw data (JSON string, XML, etc.); raises `relay_core.FetchError` on failure. The message reaches logs and the operator's outage alert verbatim, so name the failing step and the broker's error (`"Flex SendRequest failed: [1012] Token has expired"`) and never include credentials — redact any URL that carries them. Wrap only expected failures (HTTP, API errors, bad response shape); let programming errors propagate with their traceback.
+  - `fetch: Callable[[], str]` — returns raw data (JSON string, XML, etc.); raises `relay_core.FetchError` on failure. The message reaches logs and the operator's outage alert verbatim, so name the failing step and the broker's error (`"Flex SendRequest failed: [1012] Token has expired"`) and never include credentials — redact any URL that carries them. Wrap only expected failures (HTTP, API errors, bad response shape); let programming errors propagate with their traceback. Raise the subclass `relay_core.FetchConfigError` when the broker rejects the configuration itself (expired/invalid credentials, invalid query, IP restriction) — retrying cannot succeed, so the poller alerts the operator on the first one. Classify from the broker's documented error codes, not message text (see `_NEEDS_ACTION_CODES` in `relays/ibkr/flex_fetch.py`).
   - `parse: Callable[[str], tuple[list[Fill], list[str]]]` — parses raw data into (fills, errors).
   - `interval: int` — poll interval in seconds.
 - `listener_config`: a `ListenerConfig` or `None` (can be None if poller-only). Needs:
@@ -70,7 +70,7 @@ If the broker supports options, populate `Fill.option` (`OptionContract`) when `
 
 Colocate unit tests next to source: `test_<name>.py`. If you added `timestamps.py`, add `test_timestamps.py` with positive + negative cases — the helper's job is to reject typos that `datetime.fromisoformat` would silently accept.
 
-Cover the fetch failure contract: each expected failure (HTTP error, broker API error, malformed response) raises `FetchError` whose message names the broker's error, and an unexpected exception propagates with its own type. If the fetch URL carries a credential, assert it is absent from the message. If you added a `health_check`, test each outcome against a real local server (`aiohttp.test_utils.TestServer`): healthy → `None`; broker-side down, HTTP error, and malformed body → a reason. See `TestBridgeHealthCheck` in `relays/ibkr/test_ibkr.py`.
+Cover the fetch failure contract: each expected failure (HTTP error, broker API error, malformed response) raises `FetchError` whose message names the broker's error, configuration rejections raise `FetchConfigError` while transient errors do not, and an unexpected exception propagates with its own type. If the fetch URL carries a credential, assert it is absent from the message. If you added a `health_check`, test each outcome against a real local server (`aiohttp.test_utils.TestServer`): healthy → `None`; broker-side down, HTTP error, and malformed body → a reason. See `TestBridgeHealthCheck` in `relays/ibkr/test_ibkr.py`.
 
 ## 9. Understand the listener/poller dedup interaction
 

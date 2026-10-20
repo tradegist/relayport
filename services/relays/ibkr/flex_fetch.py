@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 
 import httpx
 
-from relay_core import FetchError
+from relay_core import FetchConfigError, FetchError
 
 log = logging.getLogger("relays.ibkr.flex_fetch")
 
@@ -49,6 +49,27 @@ USER_AGENT = "ibkr-relay/1.0"
 # Seconds to wait before each GetStatement attempt while IBKR generates the report.
 _GET_STATEMENT_WAITS_S = (5, 10, 15, 30)
 
+# Flex error codes no retry can fix — the operator must change the setup:
+# legacy query (1010), inactive service account (1011), expired token
+# (1012), IP restriction (1013), invalid query (1014), invalid token (1015),
+# invalid account (1016). Plus 1025 "Too many failed attempts", which is
+# undocumented — observed in production as a ~2 h lockout after ~10
+# consecutive failures, re-armed by the first failure after it lapses, so
+# it persists until the cause is fixed.
+# Every other code (1001-1009, 1018-1021: not ready, busy, rate limit) is
+# transient. Reference: ibkrguides.com flex3error.
+_NEEDS_ACTION_CODES = frozenset(
+    {"1010", "1011", "1012", "1013", "1014", "1015", "1016", "1025"},
+)
+
+
+def _flex_error(step: str, code: str, message: str) -> FetchError:
+    """Build the error for a Flex error response at *step*."""
+    text = f"Flex {step} failed: [{code}] {message}"
+    if code in _NEEDS_ACTION_CODES:
+        return FetchConfigError(text)
+    return FetchError(text)
+
 
 def fetch_flex_report(
     flex_token: str,
@@ -66,9 +87,12 @@ def fetch_flex_report(
     Returns the raw XML text on success.
 
     Raises:
-        FetchError: On any HTTP, XML or Flex-level error (expired token,
-            invalid query, generation timeout). The message names the
-            failing step and IBKR's error code, with the token redacted.
+        FetchConfigError: When IBKR rejects the setup (expired or invalid
+            token, invalid query, IP restriction, failed-attempts lockout)
+            — retrying cannot succeed.
+        FetchError: On any other HTTP, XML or Flex-level error (rate limit,
+            generation timeout). Messages name the failing step and IBKR's
+            error code, with the token redacted.
         ValueError: If *lookback_days* is outside 1-365.
     """
     if lookback_days is not None and not 1 <= lookback_days <= 365:
@@ -95,7 +119,7 @@ def fetch_flex_report(
         if root.findtext("Status") != "Success":
             code = root.findtext("ErrorCode", "?")
             msg = root.findtext("ErrorMessage", "Unknown error")
-            raise FetchError(f"Flex SendRequest failed: [{code}] {msg}")
+            raise _flex_error("SendRequest", code, msg)
 
         ref_code = root.findtext("ReferenceCode")
         if not ref_code:
@@ -121,7 +145,7 @@ def fetch_flex_report(
                     log.debug("Report still generating, retrying...")
                     continue
                 msg = err_root.findtext("ErrorMessage", "Unknown error")
-                raise FetchError(f"Flex GetStatement failed: [{err_code}] {msg}")
+                raise _flex_error("GetStatement", err_code, msg)
 
             return str(resp.text)
 

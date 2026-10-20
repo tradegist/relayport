@@ -816,7 +816,7 @@ def build_relay(notifiers: list[BaseNotifier]) -> BrokerRelay:
         )
 
     if not poller_configs:
-        log.info("IBKR: listener-only mode (no Flex credentials)")
+        log.info("IBKR: listener-only mode (poller disabled or no Flex credentials)")
     if listener_config is None:
         log.info("IBKR: poller-only mode (listener disabled)")
 

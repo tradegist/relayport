@@ -49,12 +49,22 @@ class FetchError(Exception):
     """
 
 
+class FetchConfigError(FetchError):
+    """A fetch failure no retry can fix: the broker rejected the configuration.
+
+    Expired or invalid credentials, an invalid query, an IP restriction.
+    The poll loop alerts the operator on the first one instead of waiting
+    for ``OUTAGE_ALERT_MINUTES`` of consecutive failures.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class PollerConfig:
     """Everything the generic poll engine needs from a broker adapter.
 
     *fetch*: callable that returns raw data (XML, JSON, …); raises
-        ``FetchError`` on failure.
+        ``FetchError`` on failure — ``FetchConfigError`` when the broker
+        rejected the configuration.
     *parse*: callable that turns the raw data into (fills, errors).
     *interval*: seconds between poll cycles.
     """
