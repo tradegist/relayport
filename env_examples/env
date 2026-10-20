@@ -108,8 +108,9 @@ POLL_INTERVAL=600
 #NOTIFY_RETRY_DELAY_MS=1000
 
 # ── Operational alerts (optional) ────────────────────────────────────
-# When a notifier fails to deliver (after retries), the operator is
-# emailed via Resend. Set RESEND_API_KEY and ALERT_REPORT_EMAIL_TO to
+# When a notifier fails to deliver (after retries), or a poller/listener
+# keeps failing (expired Flex token, logged-out IB Gateway), the operator
+# is emailed via Resend. Set RESEND_API_KEY and ALERT_REPORT_EMAIL_TO to
 # enable — otherwise alerting is silently disabled (opt-in only).
 
 #RESEND_API_KEY=re_xxxxxxxxxxxx
@@ -122,4 +123,10 @@ POLL_INTERVAL=600
 
 # Suppress duplicate alerts within this many minutes (default: 60).
 # Container restart re-fires once if the destination is still broken.
+# Also the reminder cadence while an outage lasts.
 #ALERT_COOLDOWN_MINUTES=60
+
+# Alert once a poller or listener has kept failing this many minutes
+# (default: 15; 0 disables). Short blips — IB Gateway's nightly restart —
+# stay silent. Relay override: {RELAY}_OUTAGE_ALERT_MINUTES.
+#OUTAGE_ALERT_MINUTES=15

@@ -1,10 +1,12 @@
-"""Tests for flex_fetch — error handling and None-return contract."""
+"""Tests for flex_fetch — error handling and FetchError contract."""
 
 import logging
 import unittest
 from unittest.mock import MagicMock, patch
 
 import httpx
+
+from relay_core import FetchError
 
 from .flex_fetch import RedactTokenFilter, fetch_flex_report
 
@@ -132,62 +134,78 @@ class TestFetchFlexReport(unittest.TestCase):
 
     # ── Step 1 errors ───────────────────────────────────────────────
 
-    def test_send_request_http_error_returns_none(
+    def test_send_request_http_error_raises(
         self, mock_get: MagicMock, _sleep: MagicMock,
     ) -> None:
         mock_get.return_value = _mock_response("", status_code=500)
-        result = fetch_flex_report("tok", "qid")
-        self.assertIsNone(result)
+        with self.assertRaisesRegex(FetchError, "Flex report fetch failed: error"):
+            fetch_flex_report("tok", "qid")
 
-    def test_send_request_status_fail_returns_none(
+    def test_send_request_status_fail_raises_with_ibkr_code(
         self, mock_get: MagicMock, _sleep: MagicMock,
     ) -> None:
         mock_get.return_value = _mock_response(_SEND_FAIL)
-        result = fetch_flex_report("tok", "qid")
-        self.assertIsNone(result)
+        with self.assertRaisesRegex(FetchError, r"Flex SendRequest failed: \[1001\] Invalid token"):
+            fetch_flex_report("tok", "qid")
 
-    def test_send_request_invalid_xml_returns_none(
+    def test_send_request_invalid_xml_raises(
         self, mock_get: MagicMock, _sleep: MagicMock,
     ) -> None:
         mock_get.return_value = _mock_response("not xml at all <<<")
-        result = fetch_flex_report("tok", "qid")
-        self.assertIsNone(result)
+        with self.assertRaisesRegex(FetchError, "Flex report fetch failed: syntax error"):
+            fetch_flex_report("tok", "qid")
 
-    def test_send_request_missing_reference_code_returns_none(
+    def test_send_request_missing_reference_code_raises(
         self, mock_get: MagicMock, _sleep: MagicMock,
     ) -> None:
         mock_get.return_value = _mock_response(_SEND_OK_NO_REF)
-        result = fetch_flex_report("tok", "qid")
-        self.assertIsNone(result)
+        with self.assertRaisesRegex(FetchError, "no ReferenceCode"):
+            fetch_flex_report("tok", "qid")
 
-    def test_send_request_network_error_returns_none(
+    def test_send_request_network_error_raises(
         self, mock_get: MagicMock, _sleep: MagicMock,
     ) -> None:
         mock_get.side_effect = httpx.ConnectError("connection refused")
-        result = fetch_flex_report("tok", "qid")
-        self.assertIsNone(result)
+        with self.assertRaisesRegex(FetchError, "Flex report fetch failed: connection refused"):
+            fetch_flex_report("tok", "qid")
+
+    def test_http_error_message_redacts_token_and_drops_cause(
+        self, mock_get: MagicMock, _sleep: MagicMock,
+    ) -> None:
+        url = (
+            "https://ndcdyn.interactivebrokers.com/AccountManagement/"
+            "FlexWebService/SendRequest?t=SECRET123&q=qid&v=3"
+        )
+        mock_get.side_effect = httpx.ConnectError(f"Failed to connect: {url}")
+        with self.assertRaises(FetchError) as ctx:
+            fetch_flex_report("SECRET123", "qid")
+        self.assertNotIn("SECRET123", str(ctx.exception))
+        self.assertIn("t=REDACTED", str(ctx.exception))
+        # A chained cause would print the unredacted URL in any traceback.
+        self.assertIsNone(ctx.exception.__cause__)
+        self.assertTrue(ctx.exception.__suppress_context__)
 
     # ── Step 2 errors ───────────────────────────────────────────────
 
-    def test_get_statement_http_error_returns_none(
+    def test_get_statement_http_error_raises(
         self, mock_get: MagicMock, _sleep: MagicMock,
     ) -> None:
         mock_get.side_effect = [
             _mock_response(_SEND_OK),
             _mock_response("", status_code=503),
         ]
-        result = fetch_flex_report("tok", "qid")
-        self.assertIsNone(result)
+        with self.assertRaisesRegex(FetchError, "Flex report fetch failed: error"):
+            fetch_flex_report("tok", "qid")
 
-    def test_get_statement_flex_error_returns_none(
+    def test_get_statement_flex_error_raises_with_ibkr_code(
         self, mock_get: MagicMock, _sleep: MagicMock,
     ) -> None:
         mock_get.side_effect = [
             _mock_response(_SEND_OK),
             _mock_response(_GET_ERROR),
         ]
-        result = fetch_flex_report("tok", "qid")
-        self.assertIsNone(result)
+        with self.assertRaisesRegex(FetchError, r"Flex GetStatement failed: \[1020\] Too many requests"):
+            fetch_flex_report("tok", "qid")
 
     def test_get_statement_retries_on_1019_then_succeeds(
         self, mock_get: MagicMock, _sleep: MagicMock,
@@ -210,8 +228,8 @@ class TestFetchFlexReport(unittest.TestCase):
             _mock_response(_GET_STILL_GENERATING),
             _mock_response(_GET_STILL_GENERATING),
         ]
-        result = fetch_flex_report("tok", "qid")
-        self.assertIsNone(result)
+        with self.assertRaisesRegex(FetchError, "still generating after 60s"):
+            fetch_flex_report("tok", "qid")
 
     # ── lookback_days override ──────────────────────────────────────
 

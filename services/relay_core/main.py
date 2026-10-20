@@ -12,10 +12,13 @@ import os
 import sys
 
 from . import BrokerRelay, StartupContext
+from .alerter import send_alert
 from .context import init_relays
 from .dedup import get_retention_days
+from .health import OutageAlert, OutageTracker
 from .listener_engine import start_listener
-from .poller_engine import init_dedup_db, poll_once, prune_old
+from .notifier import NotificationError
+from .poller_engine import FetchError, init_dedup_db, poll_once, prune_old
 from .registry import load_relays
 from .routes import start_api_server
 
@@ -41,14 +44,24 @@ async def _poll_loop(
     relay: BrokerRelay,
     poller_index: int,
 ) -> None:
-    """Run poll_once in a thread at regular intervals for one poller."""
+    """Run poll_once in a thread at regular intervals for one poller.
+
+    Every cycle reports to the poller's ``OutageTracker``, which emails the
+    operator once the broker fetch has kept failing for
+    ``relay.outage_alert_after_s``.
+    """
     config = relay.poller_configs[poller_index]
     poll_lock = relay.poll_locks[poller_index]
     relay_log = logging.getLogger(f"poller.{relay.name}")
     if poller_index > 0:
         relay_log = logging.getLogger(f"poller.{relay.name}.{poller_index}")
+    component = "poller"
+    if len(relay.poller_configs) > 1:
+        component = f"poller {poller_index + 1}"
+    outage = OutageTracker(relay.name, component, relay.outage_alert_after_s)
 
     while True:
+        alert: OutageAlert | None
         try:
             async with poll_lock:
                 await asyncio.to_thread(
@@ -56,8 +69,27 @@ async def _poll_loop(
                     relay_name=relay.name,
                     poller_index=poller_index,
                 )
-        except Exception:
+        except FetchError as exc:
+            relay_log.error("Poll fetch failed: %s", exc)
+            alert = outage.record_failure(str(exc))
+        except NotificationError:
+            # The broker fetch worked — delivery failures are alerted by
+            # the notifier itself, per destination.
             relay_log.exception("Poll cycle failed")
+            alert = outage.record_success()
+        except Exception as exc:
+            relay_log.exception("Poll cycle failed")
+            # Type only: an arbitrary exception message may carry a URL
+            # with credentials, and the alert leaves the host.
+            alert = outage.record_failure(
+                f"Poll cycle crashed with {type(exc).__name__} — see relay logs",
+            )
+        else:
+            alert = outage.record_success()
+        if alert is not None:
+            await asyncio.to_thread(
+                send_alert, subject=alert.subject, body=alert.body, key=alert.key,
+            )
 
         relay_log.debug("Next poll in %ds", config.interval)
         await asyncio.sleep(config.interval)

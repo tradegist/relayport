@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase
 
-from relay_core import BrokerRelay, PollerConfig
+from relay_core import BrokerRelay, FetchError, PollerConfig
 from relay_core.routes import _RELAYS_KEY, create_app
 from shared import RelayName
 
@@ -159,6 +159,23 @@ class TestPollHandler(AioHTTPTestCase):
         self.assertEqual(resp.status, 500)
         body = await resp.json()
         self.assertEqual(body["error"], "Internal server error")
+
+    @patch.dict(os.environ, {"API_TOKEN": _TEST_TOKEN})
+    @patch(
+        "relay_core.routes.poll_once",
+        side_effect=FetchError("Flex SendRequest failed: [1012] Token has expired"),
+    )
+    async def test_poll_fetch_error_returns_502_with_reason(self, _mock: MagicMock) -> None:
+        resp = await self.client.request(
+            "POST", "/relays/ibkr/poll/1",
+            headers={"Authorization": f"Bearer {_TEST_TOKEN}"},
+        )
+        self.assertEqual(resp.status, 502)
+        body = await resp.json()
+        self.assertEqual(
+            body["error"],
+            "Broker fetch failed: Flex SendRequest failed: [1012] Token has expired",
+        )
 
     @patch.dict(os.environ, {"API_TOKEN": _TEST_TOKEN})
     async def test_poll_idx_out_of_bounds(self) -> None:

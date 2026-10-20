@@ -13,11 +13,13 @@ from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 import aiohttp
+import httpx
 
 from relay_core import (
     BaseNotifier,
     BrokerRelay,
     FatalListenerError,
+    FetchError,
     ListenerConfig,
     OnMessageResult,
     PollerConfig,
@@ -113,13 +115,14 @@ def _parse_rest_trade(txid: str, data: KrakenRestTrade) -> Fill:
     )
 
 
-def _build_fetch(client: KrakenClient, lookback_days: int) -> Callable[[], str | None]:
+def _build_fetch(client: KrakenClient, lookback_days: int) -> Callable[[], str]:
     """Return a fetch callable for the generic poller engine.
 
-    Returns a JSON string of the raw trades dict, or None on failure.
+    Returns a JSON string of the raw trades dict; raises ``FetchError``
+    on any API, network or response-shape failure.
     """
 
-    def fetch() -> str | None:
+    def fetch() -> str:
         try:
             all_trades: dict[str, KrakenRestTrade] = {}
             offset = 0
@@ -163,9 +166,10 @@ def _build_fetch(client: KrakenClient, lookback_days: int) -> Callable[[], str |
                     "count": total_count if total_count is not None else len(all_trades),
                 }
             )
-        except Exception:
-            log.exception("Failed to fetch trades from Kraken")
-            return None
+        except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+            # Credentials travel in headers, never in the URL, so the
+            # message is safe to log and to email.
+            raise FetchError(f"Kraken TradesHistory fetch failed: {exc}") from exc
 
     return fetch
 

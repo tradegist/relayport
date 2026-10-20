@@ -24,17 +24,21 @@ from relay_core.dedup import (
     mark_book_trade_keys,
     mark_processed_batch,
 )
+from relay_core.health import OutageAlert
 from relay_core.inflight import INFLIGHT_ORDERS
 from relay_core.listener_engine import (
     DebounceBuffer,
     FatalListenerError,
     _handle_event,
     _listen,
+    _listen_loop,
+    _ListenerState,
     _merge_fills,
     _prefix_ids,
     _send_and_mark,
     _send_no_mark,
     _split_stale,
+    _watch_health,
     get_max_fill_age_s,
     get_retry_delays_s,
 )
@@ -2104,6 +2108,13 @@ class _FakeWs:
 
 
 class TestListenLoop(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        # _listen alerts when it stops on a FatalListenerError, which is
+        # how these tests end the loop.
+        patcher = patch("relay_core.listener_engine.send_alert")
+        self.mock_send_alert = patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _run_config(
         self, ws: _FakeWs, events: list[str], fill: Fill | None = None,
     ) -> ListenerConfig:
@@ -2153,3 +2164,165 @@ class TestListenLoop(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.5)  # let the background flush finish
         self.assertIn("send-start", events)
         self.assertLess(events.index("reconnect"), events.index("send-end"))
+
+    @patch("relay_core.listener_engine.INITIAL_RETRY_DELAY", 0)
+    async def test_fatal_error_alerts_immediately(self) -> None:
+        _set_listener(self._run_config(_FakeWs([], close_code=1000), []))
+        await _listen("ibkr", "/tmp/test.db")
+        self.mock_send_alert.assert_called_once()
+        kwargs = self.mock_send_alert.call_args.kwargs
+        self.assertEqual(kwargs["subject"], "[relayport] ibkr: listener stopped")
+        self.assertIn("stop the test loop", kwargs["body"])
+        self.assertEqual(kwargs["key"], "listener-fatal:ibkr")
+
+    @patch("relay_core.listener_engine.INITIAL_RETRY_DELAY", 0)
+    async def test_state_tracks_ws_close(self) -> None:
+        events: list[str] = []
+        config = self._run_config(_FakeWs([], close_code=1001), events)
+        state = _ListenerState()
+        await _listen_loop("ibkr", config, "/tmp/test.db", state)
+        self.assertEqual(state.ws_down_reason, "WebSocket closed (code=1001)")
+
+    @patch("relay_core.listener_engine.INITIAL_RETRY_DELAY", 0)
+    async def test_state_tracks_connection_failure_without_host(self) -> None:
+        calls = 0
+
+        async def connect(session: aiohttp.ClientSession) -> aiohttp.ClientWebSocketResponse:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise aiohttp.ClientConnectionError("Cannot connect to host bridge:5000")
+            raise FatalListenerError("stop the test loop")
+
+        async def on_msg(data: dict[str, Any]) -> list[OnMessageResult]:
+            return []
+
+        config = ListenerConfig(connect=connect, on_message=on_msg, event_filter=lambda _: True)
+        state = _ListenerState()
+        await _listen_loop("ibkr", config, "/tmp/test.db", state)
+        self.assertEqual(
+            state.ws_down_reason, "WebSocket connection failed (ClientConnectionError)",
+        )
+
+    async def test_watchdog_stops_with_listener(self) -> None:
+        _set_listener(self._run_config(_FakeWs([], close_code=1000), []))
+        before = asyncio.all_tasks()
+        await _listen("ibkr", "/tmp/test.db")
+        await asyncio.sleep(0)  # let the cancellation land
+        leftover = [
+            t for t in asyncio.all_tasks() - before
+            if not t.done() and t is not asyncio.current_task()
+        ]
+        self.assertEqual(leftover, [])
+
+
+# ── Health watchdog ──────────────────────────────────────────────────
+
+
+class _StopWatchdog(Exception):
+    """Raised by the fake tracker to end _watch_health's loop."""
+
+
+def _health_config(
+    health_check: Any = None,
+) -> ListenerConfig:
+    async def connect(session: aiohttp.ClientSession) -> aiohttp.ClientWebSocketResponse:
+        raise AssertionError("not used")
+
+    async def on_msg(data: dict[str, Any]) -> list[OnMessageResult]:
+        return []
+
+    return ListenerConfig(
+        connect=connect, on_message=on_msg, event_filter=lambda _: True,
+        health_check=health_check,
+    )
+
+
+def _fake_tracker(checks: int, alert: OutageAlert | None = None) -> MagicMock:
+    """Tracker that records *checks* observations, then stops the watchdog."""
+    tracker = MagicMock()
+    observations: list[object] = []
+
+    def observe(*args: object) -> OutageAlert | None:
+        observations.append(args)
+        if len(observations) > checks:
+            raise _StopWatchdog
+        return alert
+
+    tracker.record_failure.side_effect = observe
+    tracker.record_success.side_effect = observe
+    return tracker
+
+
+@patch("relay_core.listener_engine.HEALTH_CHECK_INTERVAL_S", 0)
+@patch("relay_core.listener_engine.send_alert")
+class TestWatchHealth(unittest.IsolatedAsyncioTestCase):
+    async def test_ws_down_is_a_failure_and_skips_probe(self, mock_send: MagicMock) -> None:
+        probe = MagicMock()
+        tracker = _fake_tracker(checks=1)
+        state = _ListenerState(ws_down_reason="WebSocket closed (code=1006)")
+        with self.assertRaises(_StopWatchdog):
+            await _watch_health("ibkr", _health_config(probe), state, tracker)
+        tracker.record_failure.assert_called_with("WebSocket closed (code=1006)")
+        probe.assert_not_called()
+
+    async def test_probe_reason_is_a_failure_while_ws_up(self, mock_send: MagicMock) -> None:
+        async def probe(session: aiohttp.ClientSession) -> str | None:
+            return "ibkr_bridge is not connected to IB Gateway"
+
+        tracker = _fake_tracker(checks=1)
+        state = _ListenerState(ws_down_reason=None)
+        with self.assertRaises(_StopWatchdog):
+            await _watch_health("ibkr", _health_config(probe), state, tracker)
+        tracker.record_failure.assert_called_with("ibkr_bridge is not connected to IB Gateway")
+        tracker.record_success.assert_not_called()
+
+    async def test_healthy_probe_is_a_success(self, mock_send: MagicMock) -> None:
+        async def probe(session: aiohttp.ClientSession) -> str | None:
+            return None
+
+        tracker = _fake_tracker(checks=1)
+        with self.assertRaises(_StopWatchdog):
+            await _watch_health(
+                "ibkr", _health_config(probe), _ListenerState(ws_down_reason=None), tracker,
+            )
+        tracker.record_success.assert_called()
+        tracker.record_failure.assert_not_called()
+
+    async def test_no_probe_and_ws_up_is_a_success(self, mock_send: MagicMock) -> None:
+        tracker = _fake_tracker(checks=1)
+        with self.assertRaises(_StopWatchdog):
+            await _watch_health(
+                "ibkr", _health_config(), _ListenerState(ws_down_reason=None), tracker,
+            )
+        tracker.record_success.assert_called()
+
+    async def test_probe_exception_is_a_failure(self, mock_send: MagicMock) -> None:
+        async def probe(session: aiohttp.ClientSession) -> str | None:
+            raise RuntimeError("bug")
+
+        tracker = _fake_tracker(checks=1)
+        with self.assertLogs("relay_core.listener_engine", level="ERROR"), \
+             self.assertRaises(_StopWatchdog):
+            await _watch_health(
+                "ibkr", _health_config(probe), _ListenerState(ws_down_reason=None), tracker,
+            )
+        tracker.record_failure.assert_called_with(
+            "Health check raised an unexpected error — see relay logs",
+        )
+
+    async def test_tracker_alert_is_sent(self, mock_send: MagicMock) -> None:
+        alert = OutageAlert(subject="s", body="b", key="outage:ibkr:listener")
+        tracker = _fake_tracker(checks=1, alert=alert)
+        with self.assertRaises(_StopWatchdog):
+            await _watch_health("ibkr", _health_config(), _ListenerState(), tracker)
+        mock_send.assert_called_once_with(subject="s", body="b", key="outage:ibkr:listener")
+
+    async def test_unhealthy_transition_logged_once(self, mock_send: MagicMock) -> None:
+        tracker = _fake_tracker(checks=3)
+        state = _ListenerState(ws_down_reason="WebSocket closed")
+        with self.assertLogs("relay_core.listener_engine", level="WARNING") as logs, \
+             self.assertRaises(_StopWatchdog):
+            await _watch_health("ibkr", _health_config(), state, tracker)
+        unhealthy = [r for r in logs.records if "Listener unhealthy" in r.getMessage()]
+        self.assertEqual(len(unhealthy), 1)

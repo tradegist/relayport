@@ -7,6 +7,8 @@ import xml.etree.ElementTree as ET
 
 import httpx
 
+from relay_core import FetchError
+
 log = logging.getLogger("relays.ibkr.flex_fetch")
 
 _FLEX_TOKEN_RE = re.compile(
@@ -44,6 +46,8 @@ class RedactTokenFilter(logging.Filter):
 
 FLEX_BASE = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"
 USER_AGENT = "ibkr-relay/1.0"
+# Seconds to wait before each GetStatement attempt while IBKR generates the report.
+_GET_STATEMENT_WAITS_S = (5, 10, 15, 30)
 
 
 def fetch_flex_report(
@@ -51,7 +55,7 @@ def fetch_flex_report(
     flex_query_id: str,
     *,
     lookback_days: int | None = None,
-) -> str | None:
+) -> str:
     """Two-step Flex Web Service: SendRequest -> GetStatement.
 
     *lookback_days* (1-365) overrides the saved query's Period via the
@@ -59,8 +63,13 @@ def fetch_flex_report(
     regardless of how the query is configured server-side.  ``None``
     (default) lets the saved query Period apply.
 
-    Returns the raw XML text on success, or ``None`` on any HTTP/XML
-    error.  Raises ``ValueError`` if *lookback_days* is outside 1-365.
+    Returns the raw XML text on success.
+
+    Raises:
+        FetchError: On any HTTP, XML or Flex-level error (expired token,
+            invalid query, generation timeout). The message names the
+            failing step and IBKR's error code, with the token redacted.
+        ValueError: If *lookback_days* is outside 1-365.
     """
     if lookback_days is not None and not 1 <= lookback_days <= 365:
         raise ValueError(
@@ -86,17 +95,15 @@ def fetch_flex_report(
         if root.findtext("Status") != "Success":
             code = root.findtext("ErrorCode", "?")
             msg = root.findtext("ErrorMessage", "Unknown error")
-            log.error("SendRequest failed: [%s] %s", code, msg)
-            return None
+            raise FetchError(f"Flex SendRequest failed: [{code}] {msg}")
 
         ref_code = root.findtext("ReferenceCode")
         if not ref_code:
-            log.error("SendRequest succeeded but no ReferenceCode in response")
-            return None
+            raise FetchError("Flex SendRequest succeeded but returned no ReferenceCode")
         log.debug("SendRequest OK — ref=%s, waiting for report...", ref_code)
 
         # Step 2: poll for the generated report
-        for wait in (5, 10, 15, 30):
+        for wait in _GET_STATEMENT_WAITS_S:
             time.sleep(wait)
             resp = httpx.get(
                 f"{FLEX_BASE}/GetStatement",
@@ -114,15 +121,19 @@ def fetch_flex_report(
                     log.debug("Report still generating, retrying...")
                     continue
                 msg = err_root.findtext("ErrorMessage", "Unknown error")
-                log.error("GetStatement failed: [%s] %s", err_code, msg)
-                return None
+                raise FetchError(f"Flex GetStatement failed: [{err_code}] {msg}")
 
             return str(resp.text)
 
-        log.error("Report generation timed out after retries")
-        return None
+        raise FetchError(
+            f"Flex report still generating after {sum(_GET_STATEMENT_WAITS_S)}s"
+            f" of GetStatement retries"
+        )
     except (httpx.HTTPError, ET.ParseError) as exc:
-        log.error("Flex report fetch failed: %s", _redact_token(str(exc)))
-        return None
+        # `from None`: the original exception's message carries the token
+        # in the request URL, and a chained traceback would print it.
+        raise FetchError(
+            f"Flex report fetch failed: {_redact_token(str(exc))}"
+        ) from None
 
 

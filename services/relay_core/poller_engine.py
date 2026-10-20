@@ -40,16 +40,26 @@ BRIDGE_ID_KEY_SUFFIX = "bridge_id"
 # ── Poller configuration ─────────────────────────────────────────────
 
 
+class FetchError(Exception):
+    """Raised by a ``PollerConfig.fetch`` callback when the broker fetch fails.
+
+    The message reaches logs and the operator's outage alert verbatim, so
+    it must say what failed and why (``"SendRequest failed: [1012] Token
+    has expired"``) and must never contain credentials.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class PollerConfig:
     """Everything the generic poll engine needs from a broker adapter.
 
-    *fetch*: callable that returns raw data (XML, JSON, …) or None on failure.
+    *fetch*: callable that returns raw data (XML, JSON, …); raises
+        ``FetchError`` on failure.
     *parse*: callable that turns the raw data into (fills, errors).
     *interval*: seconds between poll cycles.
     """
 
-    fetch: Callable[[], str | None]
+    fetch: Callable[[], str]
     parse: Callable[[str], tuple[list[Fill], list[str]]]
     interval: int
 
@@ -234,6 +244,10 @@ def poll_once(
 
     Resolves ``PollerConfig``, notifiers, and retry config from the relay
     context via ``relay_name``.
+
+    Raises:
+        FetchError: The broker fetch failed — nothing was parsed or sent.
+        NotificationError: Every notifier failed — nothing was marked.
     """
     close_dedup = dedup_conn is None
     close_meta = meta_conn is None
@@ -255,8 +269,6 @@ def poll_once(
     try:
         relay_log.info("Polling...")
         raw_data = config.fetch()
-        if raw_data is None:
-            return []
 
         all_fills, parse_errors = config.parse(raw_data)
         relay_log.info("Parsed %d individual fill(s)", len(all_fills))
