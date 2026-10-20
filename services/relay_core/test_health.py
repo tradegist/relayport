@@ -101,6 +101,24 @@ class TestOutageTracker:
         assert "[1012] Token has expired" in alert.body
         assert "2 failed checks in a row" in alert.body
 
+    @pytest.mark.parametrize(("cooldown", "cadence"), [
+        (None, "about every 60 minutes"),
+        ("30", "about every 30 minutes"),
+        ("1", "about every 1 minute "),
+        ("0", "on every failed check"),
+        ("-5", "periodically"),
+    ])
+    def test_body_renders_reminder_cadence(self, cooldown: str | None, cadence: str) -> None:
+        env = {} if cooldown is None else {"ALERT_COOLDOWN_MINUTES": cooldown}
+        tracker, clock = _tracker(alert_after_s=900)
+        tracker.record_failure("down")
+        clock.now += 900
+        with patch.dict(os.environ, env, clear=True):
+            alert = tracker.record_failure("down")
+        assert alert is not None
+        assert f"You will get a reminder {cadence}" in alert.body
+        assert "ALERT_COOLDOWN_MINUTES" not in alert.body
+
     def test_keeps_alerting_while_down(self) -> None:
         """Every failure past the threshold re-emits; send_alert's cooldown throttles."""
         tracker, clock = _tracker(alert_after_s=900)

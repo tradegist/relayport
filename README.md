@@ -778,6 +778,8 @@ ALERT_REPORT_EMAIL_TO=ops@example.com
 - **Listener** — checked every minute: the WebSocket is down, or the relay's health probe of the broker side fails. For IBKR the probe is ibkr_bridge's `GET /health`, which reports whether the bridge is connected to IB Gateway; the relay's own WebSocket to the bridge stays up when the Gateway logs out, so without the probe that outage is silent.
 - **Listener stopped** — an unrecoverable listener error (e.g. a Kraken API key without WebSocket permission) alerts at once, since the listener will not reconnect.
 
+Outage state is in-memory. Restarting the relay mid-outage (e.g. `make sync`) restarts the clock — the next alert comes `OUTAGE_ALERT_MINUTES` after the restart if the outage persists — and an outage that recovers after the restart sends no recovery email.
+
 **What does NOT go in the email.** The trade payload itself is intentionally omitted — it can contain account IDs and execution data. Listener drop alerts list one summary line per dropped fill (time, side, symbol, volume, price, `orderId`, `execId`) and never the raw broker data.
 
 **Throttling.** The first failure for a given destination fires immediately. Subsequent failures within `ALERT_COOLDOWN_MINUTES` (default 60) are suppressed. State is in-memory: a container restart with a still-broken destination re-fires once, which is itself useful signal.

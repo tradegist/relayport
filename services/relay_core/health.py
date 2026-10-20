@@ -13,6 +13,10 @@ success after an alerted outage returns a recovery alert.
 
 Trackers decide, callers dispatch: ``send_alert`` blocks on HTTP, so async
 callers send from ``asyncio.to_thread``.
+
+State is in-memory. A relay restart mid-outage restarts the streak clock
+(another ``alert_after_s`` before the next alert) and forgets that an
+alert was sent, so that outage's recovery sends no email.
 """
 
 import logging
@@ -22,6 +26,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from relay_core.alerter import get_cooldown_minutes
 from relay_core.env import get_env_int
 from shared import RelayName
 
@@ -56,6 +61,20 @@ def format_duration(seconds: float) -> str:
     if hours:
         return f"{hours}h {minutes:02d}m"
     return f"{minutes}m"
+
+
+def _reminder_cadence() -> str:
+    """How often reminders arrive — ``send_alert``'s cooldown sets the pace."""
+    try:
+        minutes = get_cooldown_minutes()
+    except SystemExit as exc:
+        # send_alert rejects the same value and skips delivery (logging
+        # why), so this text never reaches anyone — any wording will do.
+        log.debug("Cannot render the reminder cadence: %s", exc)
+        return "periodically"
+    if minutes == 0:
+        return "on every failed check"
+    return f"about every {minutes} minute{'' if minutes == 1 else 's'}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,7 +146,7 @@ class OutageTracker:
                 f"{since} ({duration}, {failures} failed checks in a row).\n\n"
                 f"Last error: {reason}\n\n"
                 f"Fills that depend on it are not being relayed until it "
-                f"recovers. You will get a reminder every ALERT_COOLDOWN_MINUTES "
+                f"recovers. You will get a reminder {_reminder_cadence()} "
                 f"while the outage lasts, and an email when it recovers. Check "
                 f"the relay container logs for details.\n"
             ),
