@@ -39,6 +39,9 @@ from .listener_engine import (
 from .parsing import require_float as require_float
 from .parsing import require_str as require_str
 from .poller_engine import (
+    FetchConfigError as FetchConfigError,
+)
+from .poller_engine import (
     FetchError as FetchError,
 )
 from .poller_engine import (

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 
-from relay_core import FetchError
+from relay_core import FetchConfigError, FetchError
 
 from .flex_fetch import RedactTokenFilter, fetch_flex_report
 
@@ -48,6 +48,16 @@ _GET_ERROR = (
 )
 
 _REPORT_XML = "<FlexQueryResponse><Trades></Trades></FlexQueryResponse>"
+
+
+def _send_fail(code: str, message: str) -> str:
+    return (
+        "<FlexStatementResponse>"
+        "<Status>Fail</Status>"
+        f"<ErrorCode>{code}</ErrorCode>"
+        f"<ErrorMessage>{message}</ErrorMessage>"
+        "</FlexStatementResponse>"
+    )
 
 
 def _mock_response(text: str, status_code: int = 200) -> MagicMock:
@@ -169,6 +179,32 @@ class TestFetchFlexReport(unittest.TestCase):
         with self.assertRaisesRegex(FetchError, "Flex report fetch failed: connection refused"):
             fetch_flex_report("tok", "qid")
 
+    def test_transient_send_error_is_not_config_error(
+        self, mock_get: MagicMock, _sleep: MagicMock,
+    ) -> None:
+        mock_get.return_value = _mock_response(_send_fail("1018", "Too many requests"))
+        with self.assertRaises(FetchError) as ctx:
+            fetch_flex_report("tok", "qid")
+        self.assertNotIsInstance(ctx.exception, FetchConfigError)
+
+    def test_needs_action_send_errors_raise_config_error(
+        self, mock_get: MagicMock, _sleep: MagicMock,
+    ) -> None:
+        for code, message in [
+            ("1012", "Token has expired."),
+            ("1013", "IP restriction."),
+            ("1014", "Query is invalid."),
+            ("1015", "Token is invalid."),
+            ("1025", "Too many failed attempts. Please review your configuration."),
+        ]:
+            with self.subTest(code=code):
+                mock_get.return_value = _mock_response(_send_fail(code, message))
+                with self.assertRaises(FetchConfigError) as ctx:
+                    fetch_flex_report("tok", "qid")
+                self.assertEqual(
+                    str(ctx.exception), f"Flex SendRequest failed: [{code}] {message}",
+                )
+
     def test_http_error_message_redacts_token_and_drops_cause(
         self, mock_get: MagicMock, _sleep: MagicMock,
     ) -> None:
@@ -205,6 +241,26 @@ class TestFetchFlexReport(unittest.TestCase):
             _mock_response(_GET_ERROR),
         ]
         with self.assertRaisesRegex(FetchError, r"Flex GetStatement failed: \[1020\] Too many requests"):
+            fetch_flex_report("tok", "qid")
+
+    def test_get_statement_transient_error_is_not_config_error(
+        self, mock_get: MagicMock, _sleep: MagicMock,
+    ) -> None:
+        mock_get.side_effect = [_mock_response(_SEND_OK), _mock_response(_GET_ERROR)]
+        with self.assertRaises(FetchError) as ctx:
+            fetch_flex_report("tok", "qid")
+        self.assertNotIsInstance(ctx.exception, FetchConfigError)
+
+    def test_get_statement_needs_action_error_raises_config_error(
+        self, mock_get: MagicMock, _sleep: MagicMock,
+    ) -> None:
+        mock_get.side_effect = [
+            _mock_response(_SEND_OK),
+            _mock_response(_send_fail("1015", "Token is invalid.")),
+        ]
+        with self.assertRaisesRegex(
+            FetchConfigError, r"Flex GetStatement failed: \[1015\] Token is invalid\.",
+        ):
             fetch_flex_report("tok", "qid")
 
     def test_get_statement_retries_on_1019_then_succeeds(

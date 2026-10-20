@@ -128,5 +128,7 @@ POLL_INTERVAL=600
 
 # Alert once a poller or listener has kept failing this many minutes
 # (default: 15; 0 disables). Short blips — IB Gateway's nightly restart —
-# stay silent. Relay override: {RELAY}_OUTAGE_ALERT_MINUTES.
+# stay silent. Errors no retry can fix (expired/invalid token, invalid
+# query) alert on the first failure. Relay override:
+# {RELAY}_OUTAGE_ALERT_MINUTES.
 #OUTAGE_ALERT_MINUTES=15

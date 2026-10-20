@@ -4,7 +4,7 @@ import asyncio
 import unittest
 from unittest.mock import MagicMock, call, patch
 
-from relay_core import BrokerRelay, FetchError, PollerConfig
+from relay_core import BrokerRelay, FetchConfigError, FetchError, PollerConfig
 from relay_core.health import OutageAlert
 from relay_core.main import _poll_loop
 from relay_core.notifier import NotificationError
@@ -44,12 +44,25 @@ class TestPollLoopOutageReporting(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         tracker = mock_tracker_cls.return_value
         tracker.record_failure.return_value = None
-        await self._run(mock_poll, FetchError("Flex SendRequest failed: [1012] Token has expired"))
+        await self._run(mock_poll, FetchError("Flex SendRequest failed: [1018] Too many requests"))
         mock_tracker_cls.assert_called_once_with("ibkr", "poller", 900)
         tracker.record_failure.assert_called_once_with(
-            "Flex SendRequest failed: [1012] Token has expired",
+            "Flex SendRequest failed: [1018] Too many requests", needs_action=False,
         )
         mock_send.assert_not_called()
+
+    async def test_fetch_config_error_needs_action(
+        self, mock_poll: MagicMock, mock_tracker_cls: MagicMock, mock_send: MagicMock,
+    ) -> None:
+        tracker = mock_tracker_cls.return_value
+        tracker.record_failure.return_value = _ALERT
+        await self._run(
+            mock_poll, FetchConfigError("Flex SendRequest failed: [1015] Token is invalid."),
+        )
+        tracker.record_failure.assert_called_once_with(
+            "Flex SendRequest failed: [1015] Token is invalid.", needs_action=True,
+        )
+        mock_send.assert_called_once_with(subject="s", body="b", key="outage:ibkr:poller")
 
     async def test_success_records_success(
         self, mock_poll: MagicMock, mock_tracker_cls: MagicMock, mock_send: MagicMock,

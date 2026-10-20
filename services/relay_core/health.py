@@ -6,7 +6,8 @@ and reports every health observation to it: ``record_failure(reason)`` or
 silent, so routine blips (a broker's nightly restart, one 503) never alert.
 
 Once the streak reaches ``alert_after_s``, every further failure returns an
-``OutageAlert``. ``send_alert``'s per-key cooldown (``ALERT_COOLDOWN_MINUTES``)
+``OutageAlert``. A failure flagged ``needs_action`` (the broker rejected the
+configuration — no retry can fix it) skips the wait and alerts at once. ``send_alert``'s per-key cooldown (``ALERT_COOLDOWN_MINUTES``)
 turns those into periodic reminders for as long as the outage lasts — and
 retries on the next failure if an email could not be delivered. The first
 success after an alerted outage returns a recovery alert.
@@ -112,8 +113,14 @@ class OutageTracker:
         self._failures = 0
         self._alerted = False
 
-    def record_failure(self, reason: str) -> OutageAlert | None:
+    def record_failure(
+        self, reason: str, *, needs_action: bool = False,
+    ) -> OutageAlert | None:
         """Count a failed check; return an alert once the streak is long enough.
+
+        *needs_action* marks a failure no retry can fix (expired token,
+        invalid query): it alerts at once instead of after ``alert_after_s``,
+        unless outage alerts are disabled (``alert_after_s == 0``).
 
         *reason* goes into the email verbatim — it must not contain
         secrets, account ids or raw payloads.
@@ -126,12 +133,35 @@ class OutageTracker:
                 self._failures = 0
             self._failures += 1
             elapsed = now - self._down_since
-            if not self._alert_after_s or elapsed < self._alert_after_s:
+            if not self._alert_after_s:
+                return None
+            if not needs_action and elapsed < self._alert_after_s:
                 return None
             first_alert = not self._alerted
             self._alerted = True
             failures = self._failures
             since = self._down_since_utc
+
+        if needs_action:
+            if first_alert:
+                log.error(
+                    "[%s] %s needs action: %s", self._relay_name, self._component, reason,
+                )
+            return OutageAlert(
+                subject=f"[relayport] {self._relay_name}: {self._component} needs action",
+                body=(
+                    f"The broker rejected the {self._relay_name} {self._component}: "
+                    f"{reason}\n\n"
+                    f"Retrying will not fix this. Update the relay's configuration "
+                    f"(e.g. renew the API token) and redeploy. Failing since "
+                    f"{since} ({failures} failed check{'' if failures == 1 else 's'}"
+                    f" in a row).\n\n"
+                    f"Fills that depend on it are not being relayed until it "
+                    f"recovers. You will get a reminder {_reminder_cadence()} "
+                    f"while it keeps failing, and an email when it recovers.\n"
+                ),
+                key=self._key,
+            )
 
         duration = format_duration(elapsed)
         if first_alert:

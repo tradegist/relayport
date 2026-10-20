@@ -169,6 +169,54 @@ class TestOutageTracker:
         assert tracker.record_failure("down again") is None
         assert tracker.record_success() is None
 
+    def test_needs_action_alerts_on_first_failure(self) -> None:
+        tracker, _ = _tracker(alert_after_s=900)
+        alert = tracker.record_failure(
+            "Flex SendRequest failed: [1012] Token has expired.", needs_action=True,
+        )
+        assert alert is not None
+        assert alert.subject == "[relayport] ibkr: listener needs action"
+        assert alert.key == "outage:ibkr:listener"
+        assert "[1012] Token has expired." in alert.body
+        assert "Retrying will not fix this" in alert.body
+        assert "(1 failed check in a row)" in alert.body
+
+    def test_needs_action_keeps_alerting_with_same_key(self) -> None:
+        """Reminders share the key, so send_alert's cooldown throttles them."""
+        tracker, clock = _tracker(alert_after_s=900)
+        tracker.record_failure("expired", needs_action=True)
+        clock.now += 600
+        reminder = tracker.record_failure("expired", needs_action=True)
+        assert reminder is not None
+        assert reminder.key == "outage:ibkr:listener"
+        assert "(2 failed checks in a row)" in reminder.body
+
+    def test_needs_action_after_plain_failures_alerts_at_once(self) -> None:
+        tracker, clock = _tracker(alert_after_s=900)
+        assert tracker.record_failure("503") is None
+        clock.now += 60
+        assert tracker.record_failure("expired", needs_action=True) is not None
+
+    def test_needs_action_outage_sends_recovery(self) -> None:
+        tracker, clock = _tracker(alert_after_s=900)
+        tracker.record_failure("expired", needs_action=True)
+        clock.now += 120
+        recovery = tracker.record_success()
+        assert recovery is not None
+        assert recovery.subject == "[relayport] ibkr: listener recovered"
+
+    def test_needs_action_respects_disabled_alerts(self) -> None:
+        tracker, _ = _tracker(alert_after_s=0)
+        assert tracker.record_failure("expired", needs_action=True) is None
+        assert tracker.record_success() is None
+
+    def test_needs_action_logged_once(self, caplog: pytest.LogCaptureFixture) -> None:
+        tracker, _ = _tracker(alert_after_s=900)
+        with caplog.at_level("ERROR", logger="relay_core.health"):
+            tracker.record_failure("expired", needs_action=True)
+            tracker.record_failure("expired", needs_action=True)
+        assert sum("needs action" in r.getMessage() for r in caplog.records) == 1
+
     def test_zero_threshold_never_alerts(self) -> None:
         tracker, clock = _tracker(alert_after_s=0)
         tracker.record_failure("down")

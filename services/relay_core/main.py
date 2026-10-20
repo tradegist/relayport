@@ -18,7 +18,13 @@ from .dedup import get_retention_days
 from .health import OutageAlert, OutageTracker
 from .listener_engine import start_listener
 from .notifier import NotificationError
-from .poller_engine import FetchError, init_dedup_db, poll_once, prune_old
+from .poller_engine import (
+    FetchConfigError,
+    FetchError,
+    init_dedup_db,
+    poll_once,
+    prune_old,
+)
 from .registry import load_relays
 from .routes import start_api_server
 
@@ -71,7 +77,9 @@ async def _poll_loop(
                 )
         except FetchError as exc:
             relay_log.error("Poll fetch failed: %s", exc)
-            alert = outage.record_failure(str(exc))
+            alert = outage.record_failure(
+                str(exc), needs_action=isinstance(exc, FetchConfigError),
+            )
         except NotificationError:
             # The broker fetch worked — delivery failures are alerted by
             # the notifier itself, per destination.

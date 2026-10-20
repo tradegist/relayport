@@ -26,7 +26,7 @@ These are the **always-on rules**. Path-scoped rules live in `.github/instructio
 - **No hardcoded domains.** Use `example.com` variants in docs and code; runtime via `SITE_DOMAIN`.
 - **No email addresses or personal info.** Use `UXXXXXXX` for IBKR account examples.
 - **No developer-machine paths.** Never `/Users/john/…` or `C:\Users\john\…` in committed files. Reference sibling projects by name only.
-- **No logging of secrets or sensitive operational data.** Never `log.info()` tokens, passwords, keys, account IDs, account aliases, IPs, or domains. Never log full model dumps at `info` — use `log.debug` with field exclusion: `log.debug("Trade: %s", trade.model_dump_json(exclude={"accountId", "acctAlias"}))`. Prefer counts, symbols, statuses.
+- **No logging of secrets or sensitive operational data.** Never `log.info()` tokens, passwords, keys, account IDs, account aliases, IPs, domains, or email addresses (mask them — see `alerter._mask_email`). Never log full model dumps at `info` — use `log.debug` with field exclusion: `log.debug("Trade: %s", trade.model_dump_json(exclude={"accountId", "acctAlias"}))`. Prefer counts, symbols, statuses.
 - **`.env`, `.env.droplet`, `.env.relays`, `*.tfvars`, `.env.test` are gitignored.** Never commit them.
 - **Raw Flex XML dumps must never be committed.** Sanitize via `make ibkr-flex-refresh` (or `services/relays/ibkr/fixtures/sanitize.py`). Intermediate `services/relays/ibkr/fixtures/raw.xml` is gitignored. Only `activity_flex_sample.xml` and `trade_confirm_sample.xml` are committed.
 - **Terraform state is gitignored** — `terraform.tfstate` contains SSH keys and IPs.
