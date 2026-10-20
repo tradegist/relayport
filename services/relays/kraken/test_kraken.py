@@ -7,7 +7,10 @@ import unittest
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
+import httpx
+
 from relay_core import (
+    FetchError,
     OnMessageResult,
     get_debounce_ms,
     get_poll_interval,
@@ -582,10 +585,7 @@ class TestBuildFetchPagination(unittest.TestCase):
 
     def _fetch_and_parse(self, client: MagicMock) -> dict[str, Any]:
         fetch = _build_fetch(client, lookback_days=30)
-        raw = fetch()
-        self.assertIsNotNone(raw)
-        raw_str = cast(str, raw)
-        result: dict[str, Any] = json.loads(raw_str)
+        result: dict[str, Any] = json.loads(fetch())
         return result
 
     def test_single_page(self) -> None:
@@ -651,25 +651,49 @@ class TestBuildFetchPagination(unittest.TestCase):
         self.assertEqual(len(result["trades"]), 4)
         self.assertEqual(len(client.get_trades_history.call_args_list), 2)
 
-    def test_invalid_trades_type_returns_none(self) -> None:
-        """Non-dict 'trades' value causes fetch to return None (logged exception)."""
+    def test_invalid_trades_type_raises_fetch_error(self) -> None:
+        """Non-dict 'trades' value fails the fetch with the shape problem named."""
         pages = [{"trades": ["not", "a", "dict"], "count": 3}]
         client = self._make_client(pages)
         fetch = _build_fetch(client, lookback_days=30)
-        self.assertIsNone(fetch())
+        with self.assertRaisesRegex(FetchError, "'trades' must be a dict"):
+            fetch()
 
-    def test_invalid_count_type_returns_none(self) -> None:
-        """Non-integer 'count' value causes fetch to return None (logged exception)."""
+    def test_invalid_count_type_raises_fetch_error(self) -> None:
+        """Non-integer 'count' value fails the fetch with the shape problem named."""
         pages = [{"trades": {"T1": _make_rest_trade()}, "count": "abc"}]
         client = self._make_client(pages)
         fetch = _build_fetch(client, lookback_days=30)
-        self.assertIsNone(fetch())
+        with self.assertRaisesRegex(FetchError, "'count' must be an integer"):
+            fetch()
 
-    def test_api_exception_returns_none(self) -> None:
+    def test_api_exception_raises_fetch_error(self) -> None:
         client = MagicMock()
         client.get_trades_history = MagicMock(side_effect=RuntimeError("network error"))
         fetch = _build_fetch(client, lookback_days=30)
-        self.assertIsNone(fetch())
+        with self.assertRaisesRegex(FetchError, "Kraken TradesHistory fetch failed: network error"):
+            fetch()
+
+    def test_http_error_raises_fetch_error(self) -> None:
+        request = httpx.Request("POST", "https://api.kraken.com/0/private/TradesHistory")
+        client = MagicMock()
+        client.get_trades_history = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "Server error '502 Bad Gateway'", request=request,
+                response=httpx.Response(502, request=request),
+            ),
+        )
+        fetch = _build_fetch(client, lookback_days=30)
+        with self.assertRaisesRegex(FetchError, "502 Bad Gateway"):
+            fetch()
+
+    def test_unexpected_exception_propagates(self) -> None:
+        """Programming errors keep their type (and traceback) — not a broker outage."""
+        client = MagicMock()
+        client.get_trades_history = MagicMock(side_effect=KeyError("bug"))
+        fetch = _build_fetch(client, lookback_days=30)
+        with self.assertRaises(KeyError):
+            fetch()
 
 
 # ── Lookback start timestamp tests ────────────────────────────────────────────

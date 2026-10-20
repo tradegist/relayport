@@ -8,6 +8,7 @@ import logging
 import sys
 from pathlib import Path
 
+from relay_core import FetchError
 from relays.ibkr.flex_fetch import RedactTokenFilter, fetch_flex_report
 
 _DEFAULT_DUMP_PATH = "services/relays/ibkr/fixtures/raw.xml"
@@ -43,13 +44,14 @@ def _main() -> None:
     for handler in logging.getLogger().handlers:
         handler.addFilter(redactor)
 
-    xml = fetch_flex_report(
-        flex_token=args.token,
-        flex_query_id=args.query_id,
-        lookback_days=args.lookback_days,
-    )
-    if xml is None:
-        sys.exit("Flex fetch failed — see log output above")
+    try:
+        xml = fetch_flex_report(
+            flex_token=args.token,
+            flex_query_id=args.query_id,
+            lookback_days=args.lookback_days,
+        )
+    except FetchError as exc:
+        sys.exit(str(exc))
 
     path = Path(args.dump)
     path.write_text(xml)

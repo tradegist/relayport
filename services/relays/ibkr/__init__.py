@@ -12,7 +12,7 @@ import os
 import sqlite3
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal, cast
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -108,6 +108,30 @@ def _get_bridge_ws_url() -> str:
     return val
 
 
+def _get_bridge_health_url() -> str:
+    """Read IBKR_BRIDGE_HEALTH_URL, defaulting to ``/health`` on the WS URL's host.
+
+    The default fits the in-network URL (``ws://bridge:5000/...`` →
+    ``http://bridge:5000/health``). Behind Caddy the bridge's health route
+    is ``/ibkr/health``, so a public WS URL needs this set explicitly.
+    """
+    key = "IBKR_BRIDGE_HEALTH_URL"
+    val = os.environ.get(key, "").strip()
+    if val:
+        parts = urlsplit(val)
+        if parts.scheme not in ("http", "https") or not parts.netloc:
+            raise SystemExit(f"Invalid {key}={val!r} — must be an http(s):// URL")
+        return val
+    ws = urlsplit(_get_bridge_ws_url())
+    scheme = {"ws": "http", "wss": "https"}.get(ws.scheme)
+    if scheme is None or not ws.netloc:
+        raise SystemExit(
+            f"Cannot derive {key} from IBKR_BRIDGE_WS_URL (scheme {ws.scheme!r}) "
+            f"— set {key} explicitly"
+        )
+    return urlunsplit((scheme, ws.netloc, "/health", "", ""))
+
+
 def _get_bridge_api_token() -> str:
     key = "IBKR_BRIDGE_API_TOKEN"
     val = os.environ.get(key, "").strip()
@@ -149,10 +173,10 @@ def _get_account_timezone() -> ZoneInfo:
 
 def _build_fetch(
     flex_token: str, flex_query_id: str, lookback_days: int | None,
-) -> Callable[[], str | None]:
+) -> Callable[[], str]:
     """Return a fetch callable for the generic poller engine."""
 
-    def fetch() -> str | None:
+    def fetch() -> str:
         return fetch_flex_report(
             flex_token=flex_token,
             flex_query_id=flex_query_id,
@@ -674,6 +698,44 @@ def _build_connect(
     return connect
 
 
+_BRIDGE_HEALTH_TIMEOUT = aiohttp.ClientTimeout(total=10)
+
+
+def _build_health_check(
+    health_url: str,
+) -> Callable[[aiohttp.ClientSession], Awaitable[str | None]]:
+    """Build a probe of ibkr_bridge's link to IB Gateway.
+
+    The relay's WebSocket to the bridge stays up when IB Gateway logs out
+    (nightly restart, weekly re-authentication waiting on 2FA): the
+    bridge announces ``disconnected`` once and then goes quiet. Its
+    ``GET /health`` reports the live state instead, including for a
+    relay or bridge that started mid-outage and never saw the event.
+    """
+
+    async def health_check(session: aiohttp.ClientSession) -> str | None:
+        try:
+            async with session.get(health_url, timeout=_BRIDGE_HEALTH_TIMEOUT) as resp:
+                if resp.status != 200:
+                    return f"ibkr_bridge /health returned HTTP {resp.status}"
+                body = await resp.json()
+        except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
+            # Type only: the message names the host, and alerts leave it.
+            return f"ibkr_bridge /health unreachable ({type(exc).__name__})"
+        connected = body.get("connected") if isinstance(body, dict) else None
+        if connected is True:
+            return None
+        if connected is False:
+            return (
+                "ibkr_bridge is not connected to IB Gateway — the Gateway may be"
+                " restarting or logged out (its weekly re-login can wait on a"
+                " 2FA approval)"
+            )
+        return "ibkr_bridge /health response has no boolean 'connected' field"
+
+    return health_check
+
+
 def _build_listener_config(tz: ZoneInfo) -> ListenerConfig | None:
     """Build ListenerConfig if listener is enabled, else return None."""
     if not is_listener_enabled("ibkr"):
@@ -703,6 +765,7 @@ def _build_listener_config(tz: ZoneInfo) -> ListenerConfig | None:
         debounce_ms=get_debounce_ms("ibkr"),
         max_fill_age_s=get_max_fill_age_s("ibkr"),
         retry_delays_s=get_retry_delays_s("ibkr"),
+        health_check=_build_health_check(_get_bridge_health_url()),
     )
 
 

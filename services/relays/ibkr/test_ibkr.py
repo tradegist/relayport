@@ -8,17 +8,23 @@ from typing import Any, Literal
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
+import aiohttp
+from aiohttp import web
+from aiohttp.test_utils import TestServer
+
 from relay_core import get_debounce_ms, get_poll_interval, is_listener_enabled
 from relay_core.poller_engine import init_meta_db
 from relays.ibkr import (
     _advance_bridge_cursor,
     _book_trade_key,
     _build_connect,
+    _build_health_check,
     _build_poller_configs,
     _dedup_aliases,
     _event_filter,
     _get_account_timezone,
     _get_bridge_api_token,
+    _get_bridge_health_url,
     _get_bridge_ws_url,
     _get_flex_lookback_days,
     _get_flex_query_id,
@@ -175,6 +181,33 @@ class TestEnvVarGetters(unittest.TestCase):
 
     def test_bridge_api_token(self) -> None:
         self.assertEqual(_get_bridge_api_token(), "bridge-token")
+
+    def test_bridge_health_url_derived_from_internal_ws_url(self) -> None:
+        self.assertEqual(_get_bridge_health_url(), "http://bridge:5000/health")
+
+    def test_bridge_health_url_derived_from_wss(self) -> None:
+        env = {"IBKR_BRIDGE_WS_URL": "wss://trade.example.com/ibkr/ws/events?x=1"}
+        with patch.dict(os.environ, env):
+            self.assertEqual(_get_bridge_health_url(), "https://trade.example.com/health")
+
+    def test_bridge_health_url_explicit(self) -> None:
+        env = {"IBKR_BRIDGE_HEALTH_URL": " https://trade.example.com/ibkr/health "}
+        with patch.dict(os.environ, env):
+            self.assertEqual(
+                _get_bridge_health_url(), "https://trade.example.com/ibkr/health",
+            )
+
+    def test_bridge_health_url_explicit_must_be_http(self) -> None:
+        with patch.dict(os.environ, {"IBKR_BRIDGE_HEALTH_URL": "bridge:5000/health"}), \
+             self.assertRaises(SystemExit) as cm:
+            _get_bridge_health_url()
+        self.assertIn("IBKR_BRIDGE_HEALTH_URL", str(cm.exception))
+
+    def test_bridge_health_url_underivable_scheme_fails_fast(self) -> None:
+        with patch.dict(os.environ, {"IBKR_BRIDGE_WS_URL": "tcp://bridge:5000/events"}), \
+             self.assertRaises(SystemExit) as cm:
+            _get_bridge_health_url()
+        self.assertIn("set IBKR_BRIDGE_HEALTH_URL explicitly", str(cm.exception))
 
     def test_listener_enabled(self) -> None:
         self.assertTrue(is_listener_enabled("ibkr"))
@@ -878,6 +911,58 @@ class TestDedupAliases(unittest.TestCase):
         self.assertEqual(_dedup_aliases(alias), [])
 
 
+class TestBridgeHealthCheck(unittest.IsolatedAsyncioTestCase):
+    """Probe a real local server standing in for ibkr_bridge's GET /health."""
+
+    async def _probe(self, handler: Any) -> str | None:
+        app = web.Application()
+        app.router.add_get("/health", handler)
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            check = _build_health_check(str(server.make_url("/health")))
+            async with aiohttp.ClientSession() as session:
+                return await check(session)
+        finally:
+            await server.close()
+
+    async def test_connected_is_healthy(self) -> None:
+        async def handler(request: web.Request) -> web.Response:
+            return web.json_response({"connected": True, "tradingMode": "live"})
+        self.assertIsNone(await self._probe(handler))
+
+    async def test_gateway_disconnected_is_unhealthy(self) -> None:
+        async def handler(request: web.Request) -> web.Response:
+            return web.json_response({"connected": False, "tradingMode": "live"})
+        reason = await self._probe(handler)
+        self.assertIsNotNone(reason)
+        self.assertIn("not connected to IB Gateway", str(reason))
+
+    async def test_http_error_is_unhealthy(self) -> None:
+        async def handler(request: web.Request) -> web.Response:
+            return web.Response(status=503)
+        self.assertEqual(await self._probe(handler), "ibkr_bridge /health returned HTTP 503")
+
+    async def test_non_json_is_unhealthy(self) -> None:
+        async def handler(request: web.Request) -> web.Response:
+            return web.Response(text="<html>ok</html>", content_type="text/html")
+        reason = await self._probe(handler)
+        self.assertEqual(reason, "ibkr_bridge /health unreachable (ContentTypeError)")
+
+    async def test_missing_connected_field_is_unhealthy(self) -> None:
+        async def handler(request: web.Request) -> web.Response:
+            return web.json_response({"status": "ok"})
+        reason = await self._probe(handler)
+        self.assertEqual(reason, "ibkr_bridge /health response has no boolean 'connected' field")
+
+    async def test_unreachable_reports_type_without_host(self) -> None:
+        # Port 1 on localhost refuses connections.
+        check = _build_health_check("http://127.0.0.1:1/health")
+        async with aiohttp.ClientSession() as session:
+            reason = await check(session)
+        self.assertEqual(reason, "ibkr_bridge /health unreachable (ClientConnectorError)")
+
+
 class TestBuildRelay(unittest.TestCase):
     """Test that build_relay wires everything together."""
 
@@ -893,6 +978,11 @@ class TestBuildRelay(unittest.TestCase):
         relay = build_relay(notifiers=[])
         self.assertGreaterEqual(len(relay.poller_configs), 1)
         self.assertIsNotNone(relay.listener_config)
+
+    def test_listener_has_bridge_health_check(self) -> None:
+        relay = build_relay(notifiers=[])
+        assert relay.listener_config is not None
+        self.assertIsNotNone(relay.listener_config.health_check)
 
     def test_listener_none_when_disabled(self) -> None:
         with patch.dict(os.environ, {"IBKR_LISTENER_ENABLED": "false"}):

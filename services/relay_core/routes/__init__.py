@@ -12,7 +12,7 @@ import os
 from aiohttp import web
 
 from .. import BrokerRelay
-from ..poller_engine import poll_once
+from ..poller_engine import FetchError, poll_once
 from ..relay_models import HealthResponse, RunPollResponse
 from .middlewares import AUTH_PREFIX, auth_middleware
 
@@ -109,6 +109,12 @@ async def handle_poll(request: web.Request) -> web.Response:
 
         resp = RunPollResponse(trades=trades)
         return web.json_response(resp.model_dump())
+    except FetchError as exc:
+        # Broker-side failure, not ours: the message is the adapter's
+        # credential-free description (e.g. an expired Flex token).
+        log.error("On-demand poll fetch failed for relay %s poller %s: %s",
+                  relay_name, poll_idx_raw, exc)
+        return web.json_response({"error": f"Broker fetch failed: {exc}"}, status=502)
     except Exception:
         log.exception("On-demand poll failed for relay %s poller %s", relay_name, poll_idx_raw)
         return web.json_response({"error": "Internal server error"}, status=500)

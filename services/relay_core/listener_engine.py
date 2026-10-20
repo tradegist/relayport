@@ -28,6 +28,7 @@ from relay_core.dedup import (
 from relay_core.dedup import init_db as _init_dedup_db
 from relay_core.env import get_env, get_env_int
 from relay_core.fx import enrich_if_enabled
+from relay_core.health import OutageTracker
 from relay_core.inflight import INFLIGHT_ORDERS
 from relay_core.notifier import NotificationError, is_transient_failure, notify
 from relay_core.notifier.audit import log_fills
@@ -96,6 +97,12 @@ class ListenerConfig:
     *retry_delays_s*: backoff before each retry of a send that failed
         transiently (5xx / timeout / network). ``len()`` is the retry
         budget; after it, or on a 4xx, the fills are dropped and alerted.
+    *health_check*: optional probe of the broker side of the feed, for
+        sources that relay another connection (ibkr_bridge relays IB
+        Gateway) and can lose it while the WebSocket itself stays up.
+        Returns None when healthy, else a credential-free reason. Called
+        every ``HEALTH_CHECK_INTERVAL_S`` while the WebSocket is connected;
+        a failure streak feeds the listener's outage alert.
     """
 
     connect: Callable[
@@ -109,6 +116,9 @@ class ListenerConfig:
     debounce_ms: int = 0
     max_fill_age_s: int = DEFAULT_MAX_FILL_AGE_HOURS * 3600
     retry_delays_s: tuple[int, ...] = DEFAULT_RETRY_DELAYS_S
+    health_check: Callable[
+        [aiohttp.ClientSession], Awaitable[str | None]
+    ] | None = None
 
 
 # ── Relay-agnostic listener env var getters ──────────────────────────
@@ -174,6 +184,9 @@ def get_retry_delays_s(relay_name: RelayName) -> tuple[int, ...]:
 INITIAL_RETRY_DELAY = 5
 MAX_RETRY_DELAY = 300
 RETRY_BACKOFF_FACTOR = 2
+
+# Seconds between listener health observations (see _watch_health).
+HEALTH_CHECK_INTERVAL_S = 60
 
 
 # ── Namespace helpers (mirror poller_engine pattern) ─────────────────
@@ -865,6 +878,58 @@ async def _handle_event(
             )
 
 
+# ── Health watchdog ──────────────────────────────────────────────────
+
+
+@dataclass(slots=True)
+class _ListenerState:
+    """Connection state ``_listen`` shares with its health watchdog.
+
+    *ws_down_reason* is None while the WebSocket is connected, else why
+    it is not.
+    """
+
+    ws_down_reason: str | None = "WebSocket not connected yet"
+
+
+async def _watch_health(
+    relay_name: RelayName,
+    config: ListenerConfig,
+    state: _ListenerState,
+    outage: OutageTracker,
+) -> None:
+    """Report the listener's health to *outage* every ``HEALTH_CHECK_INTERVAL_S``.
+
+    The WebSocket is unhealthy while it is down; while it is up, the
+    adapter's ``health_check`` (if any) decides. Polling on a timer rather
+    than reacting to events is what catches an outage that produces no
+    events at all — a broker session that dies while the relay's own
+    socket stays open, or a relay restarted mid-outage.
+    """
+    last_reason: str | None = None
+    async with aiohttp.ClientSession() as session:
+        while True:
+            await asyncio.sleep(HEALTH_CHECK_INTERVAL_S)
+            reason = state.ws_down_reason
+            if reason is None and config.health_check is not None:
+                try:
+                    reason = await config.health_check(session)
+                except Exception:
+                    log.exception("[%s] Listener health check raised", relay_name)
+                    reason = "Health check raised an unexpected error — see relay logs"
+            if reason is not None and reason != last_reason:
+                log.warning("[%s] Listener unhealthy: %s", relay_name, reason)
+            last_reason = reason
+            alert = (
+                outage.record_failure(reason) if reason is not None
+                else outage.record_success()
+            )
+            if alert is not None:
+                await asyncio.to_thread(
+                    send_alert, subject=alert.subject, body=alert.body, key=alert.key,
+                )
+
+
 # ── WebSocket listener loop ─────────────────────────────────────────
 
 def _on_disconnect_flush_done(
@@ -888,12 +953,37 @@ async def _listen(
     relay_name: RelayName,
     db_path: str | None,
 ) -> None:
-    """Connect, process events, reconnect with exponential backoff."""
+    """Connect, process events, reconnect with exponential backoff.
+
+    A background watchdog (``_watch_health``) alerts the operator when
+    the listener stays unhealthy for ``relay.outage_alert_after_s``.
+    """
     relay = get_relay(relay_name)
     config = relay.listener_config
     if config is None:
         raise RuntimeError(f"Relay {relay_name!r} has no listener configured")
 
+    state = _ListenerState()
+    watchdog = asyncio.get_running_loop().create_task(_watch_health(
+        relay_name, config, state,
+        OutageTracker(relay_name, "listener", relay.outage_alert_after_s),
+    ))
+    try:
+        await _listen_loop(relay_name, config, db_path, state)
+    finally:
+        watchdog.cancel()
+        # Let it close its HTTP session. asyncio.wait never raises the
+        # task's CancelledError, yet still propagates our own cancellation.
+        await asyncio.wait({watchdog})
+
+
+async def _listen_loop(
+    relay_name: RelayName,
+    config: ListenerConfig,
+    db_path: str | None,
+    state: _ListenerState,
+) -> None:
+    """The reconnect loop of ``_listen``; keeps *state* current for the watchdog."""
     retry_delay = INITIAL_RETRY_DELAY
 
     debounce_buf = DebounceBuffer(
@@ -906,6 +996,9 @@ async def _listen(
     flush_tasks: set[asyncio.Task[None]] = set()
 
     while True:
+        # Every path to the state update below must assign `down_reason`.
+        # mypy's possibly-undefined check (pyproject.toml) enforces it —
+        # a bare `down_reason: str` here would silence that check.
         try:
             async with aiohttp.ClientSession() as session:
                 log.info("[%s] Connecting to WS", relay_name)
@@ -913,6 +1006,7 @@ async def _listen(
                 ws = await config.connect(session)
                 try:
                     log.info("[%s] Connected to WS", relay_name)
+                    state.ws_down_reason = None
                     retry_delay = INITIAL_RETRY_DELAY
 
                     async for msg in ws:
@@ -929,6 +1023,7 @@ async def _listen(
                             await _handle_event(relay_name, event_data, debounce_buf)
                         elif msg.type == aiohttp.WSMsgType.ERROR:
                             log.error("[%s] WS error: %s", relay_name, ws.exception())
+                            down_reason = "WebSocket error"
                             break
                     else:
                         # aiohttp ends the iteration silently when the
@@ -939,21 +1034,39 @@ async def _listen(
                             "[%s] WS connection closed (code=%s)",
                             relay_name, ws.close_code,
                         )
+                        down_reason = f"WebSocket closed (code={ws.close_code})"
                 finally:
                     if not ws.closed:
                         await ws.close()
 
         except FatalListenerError as exc:
             log.error("[%s] Fatal error — stopping listener: %s", relay_name, exc)
+            # No reconnect will follow, so there is no outage to time —
+            # alert now.
+            await asyncio.to_thread(
+                send_alert,
+                subject=f"[relayport] {relay_name}: listener stopped",
+                body=(
+                    f"The {relay_name} listener hit an unrecoverable error and "
+                    f"stopped: {exc}\n\nIt will not reconnect until the relay "
+                    f"is restarted with a fixed configuration. Pollers, if any, "
+                    f"keep running.\n"
+                ),
+                key=f"listener-fatal:{relay_name}",
+            )
             return
         except aiohttp.ClientError as exc:
             log.error("[%s] WS connection error: %s", relay_name, exc)
+            # Type only: the message can name the host, and alerts leave it.
+            down_reason = f"WebSocket connection failed ({type(exc).__name__})"
         except asyncio.CancelledError:
             log.info("[%s] Listener cancelled — shutting down", relay_name)
             await debounce_buf.flush()
             raise
-        except Exception:
+        except Exception as exc:
             log.exception("[%s] Unexpected error in listener", relay_name)
+            down_reason = f"Listener error ({type(exc).__name__}) — see relay logs"
+        state.ws_down_reason = down_reason
 
         # Flush buffered fills in the background: sending them can take
         # several seconds per webhook and must not hold up the reconnect.

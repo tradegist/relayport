@@ -17,6 +17,7 @@ from relay_core.dedup import (
 from relay_core.inflight import INFLIGHT_ORDERS
 from relay_core.notifier.models import WebhookPayloadTrades
 from relay_core.poller_engine import (
+    FetchError,
     PollerConfig,
     _meta_key,
     _prefix_ids,
@@ -123,7 +124,7 @@ def _make_trade(**overrides: Any) -> Trade:
     return Trade(**defaults)
 
 
-def _noop_fetch() -> str | None:
+def _noop_fetch() -> str:
     return "<xml/>"
 
 
@@ -281,13 +282,21 @@ class TestPruneOld:
 # ═════════════════════════════════════════════════════════════════════
 
 class TestPollOnce:
-    def test_no_data_returns_empty(
-        self, dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
+    @patch("relay_core.poller_engine.notify")
+    def test_fetch_error_propagates_before_parse_or_notify(
+        self, mock_notify: MagicMock,
+        dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
     ) -> None:
-        cfg = _MockPollerConfig(fetch=lambda: None)
-        _set_poller(cfg)
-        result = poll_once("ibkr", dedup_conn=dedup_db, meta_conn=meta_db)
-        assert result == []
+        def failing_fetch() -> str:
+            raise FetchError("Flex SendRequest failed: [1012] Token has expired")
+
+        parse = MagicMock(return_value=([], []))
+        _set_poller(_MockPollerConfig(fetch=failing_fetch, parse=parse))
+        with pytest.raises(FetchError, match=r"\[1012\] Token has expired"):
+            poll_once("ibkr", dedup_conn=dedup_db, meta_conn=meta_db)
+        parse.assert_not_called()
+        mock_notify.assert_not_called()
+        assert get_last_poll_ts(meta_db, "ibkr") == 0
 
     def test_no_fills_returns_empty(
         self, dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,

@@ -1,6 +1,9 @@
 [tool.mypy]
 strict = true
 warn_return_any = true
+# Not part of strict: flags a variable read on a path that never assigned it.
+# A bare `x: T` declaration counts as an assignment and silences the check.
+enable_error_code = ["possibly-undefined"]
 warn_unused_configs = false  # mypy runs in 4 separate invocations; not all overrides apply to each
 explicit_package_bases = true
 

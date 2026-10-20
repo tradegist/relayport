@@ -375,9 +375,10 @@ Configuration is split across three environment files. Templates are in `env_exa
 | `FX_RATE_API_KEY`                   | No       | —                       | [exchangerate-api.com](https://www.exchangerate-api.com) key — enables historical rates                                        |
 | `FX_CACHE_RETENTION_DAYS`           | No       | `730`                   | Days to retain cached historical rates in the meta DB                                                                          |
 | `RESEND_API_KEY`                    | No\*     | —                       | Resend API key — enables [Operational Alerts](#operational-alerts) when set with `ALERT_REPORT_EMAIL_TO`                       |
-| `ALERT_REPORT_EMAIL_TO`             | No\*     | —                       | Recipient email for delivery-failure alerts (required to enable alerts)                                                        |
+| `ALERT_REPORT_EMAIL_TO`             | No\*     | —                       | Recipient email for operational alerts (required to enable alerts)                                                             |
 | `ALERT_EMAIL_FROM`                  | No       | `onboarding@resend.dev` | Optional sender address (must be verified in Resend for production use)                                                        |
-| `ALERT_COOLDOWN_MINUTES`            | No       | `60`                    | Suppress duplicate alerts for the same destination within this window                                                          |
+| `ALERT_COOLDOWN_MINUTES`            | No       | `60`                    | Suppress duplicate alerts with the same key within this window (also the reminder cadence of outage alerts)                    |
+| `OUTAGE_ALERT_MINUTES`              | No       | `15`                    | Email when a poller or listener keeps failing this long (see [Outage alerts](#operational-alerts)). `0` disables. Relay override: `{RELAY}_OUTAGE_ALERT_MINUTES` |
 
 ### `.env.droplet` — CLI-only (never pushed to containers)
 
@@ -404,6 +405,7 @@ Configuration is split across three environment files. Templates are in `env_exa
 | `IBKR_WEBHOOK_SECRET`          | No       | Override `WEBHOOK_SECRET` for IBKR relay only                                                                                                                                                                                                                                                        |
 | `IBKR_POLL_INTERVAL`           | No       | Override `POLL_INTERVAL` for IBKR relay only. **Minimum recommended: 420 (7 min) — see rate-limit note in `POLL_INTERVAL`**                                                                                                                                                                          |
 | `IBKR_POLLER_ENABLED`          | No       | Override `POLLER_ENABLED` for IBKR relay only                                                                                                                                                                                                                                                        |
+| `IBKR_BRIDGE_HEALTH_URL`       | No       | ibkr_bridge health endpoint the listener probes every minute (see [IBKR real-time listener](#ibkr-real-time-listener)). Default: `/health` on the `IBKR_BRIDGE_WS_URL` host — set `https://trade.example.com/ibkr/health` when the bridge is reached through Caddy                                   |
 | **Kraken**                     |          |                                                                                                                                                                                                                                                                                                      |
 | `KRAKEN_API_KEY`               | Yes\*    | Kraken API key (required when `kraken` is in `RELAYS`)                                                                                                                                                                                                                                               |
 | `KRAKEN_API_SECRET`            | Yes\*    | Kraken API secret, base64-encoded (required with API key)                                                                                                                                                                                                                                            |
@@ -748,7 +750,7 @@ To disable, remove or comment out `DEBUG_WEBHOOK_PATH` and run `make sync`. The 
 
 ### Operational Alerts
 
-When a notifier fails to deliver (after retries exhaust), the relay can email the operator via [Resend](https://resend.com/) so a broken destination — quota-exhausted webhook, dead URL, malformed receiver — surfaces immediately instead of being buried in `docker logs`.
+The relay can email the operator via [Resend](https://resend.com/) when fills stop flowing — a broken destination (quota-exhausted webhook, dead URL, malformed receiver) or a broken source (expired Flex token, logged-out IB Gateway) — so it surfaces immediately instead of being buried in `docker logs`.
 
 Alerting is **opt-in**. If `RESEND_API_KEY` or `ALERT_REPORT_EMAIL_TO` is unset, the alerter is a silent no-op. Enable it by setting both required vars in `.env`:
 
@@ -769,6 +771,12 @@ ALERT_REPORT_EMAIL_TO=ops@example.com
 
 - **Stale fills ignored** — fills executed more than `LISTENER_MAX_FILL_AGE_HOURS` ago (typically a WS feed replaying old events). One email per relay per cooldown window; every dropped fill is logged.
 - **Fills not delivered** — a send rejected with 4xx by every notifier (e.g. a quota-exhausted Pipedream answers 400), or still failing after the `LISTENER_RETRY_DELAYS_S` retries. One email per order. The fills are **not** marked processed, so resend them manually if the receiver needs them.
+
+**Outage alerts.** Every poller and listener reports each check to an outage tracker. A failure streak shorter than `OUTAGE_ALERT_MINUTES` (default 15) stays silent, so routine blips — IB Gateway's ~1-minute nightly restart, a single 503 — never alert. Past that, the relay emails the last error, then a reminder every `ALERT_COOLDOWN_MINUTES` for as long as the outage lasts, and a recovery email once it clears. What counts as a failure:
+
+- **Poller** — the broker fetch failed (e.g. `Flex SendRequest failed: [1012] Token has expired`) or the cycle crashed. A webhook delivery failure does not count: it has its own alert above.
+- **Listener** — checked every minute: the WebSocket is down, or the relay's health probe of the broker side fails. For IBKR the probe is ibkr_bridge's `GET /health`, which reports whether the bridge is connected to IB Gateway; the relay's own WebSocket to the bridge stays up when the Gateway logs out, so without the probe that outage is silent.
+- **Listener stopped** — an unrecoverable listener error (e.g. a Kraken API key without WebSocket permission) alerts at once, since the listener will not reconnect.
 
 **What does NOT go in the email.** The trade payload itself is intentionally omitted — it can contain account IDs and execution data. Listener drop alerts list one summary line per dropped fill (time, side, symbol, volume, price, `orderId`, `execId`) and never the raw broker data.
 
@@ -818,6 +826,7 @@ And set the bridge connection vars in `.env.relays`:
 IBKR_BRIDGE_WS_URL=ws://bridge:5000/ibkr/ws/events   # container-to-container (same Docker network)
 # IBKR_BRIDGE_WS_URL=wss://trade.example.com/ibkr/ws/events  # cross-droplet (TLS)
 IBKR_BRIDGE_API_TOKEN=your_bridge_api_token              # must match bridge's API_TOKEN
+# IBKR_BRIDGE_HEALTH_URL=https://trade.example.com/ibkr/health  # cross-droplet only — default derives http://bridge:5000/health
 ```
 
 Then run `make sync` to push the config and restart the `relays` container.
@@ -837,6 +846,7 @@ The listener processes two event types from the bridge stream:
 - **Option assignments, exercises, and expiries are deduped by economic key.** IBKR books these outside normal execution flow, so the two paths report them with completely different identifiers (Flex has no `ibExecID` for them; the bridge reports them via an overnight reconcile). The relay reconciles the two reports on an account-scoped economic key (contract, side, quantity, price) within an 18-hour window, so the consumer receives **one** webhook. Two caveats: (1) your Flex query must include the `transactionType` column (and ideally `notes`/`code`) — without it these fills cannot be classified and both webhooks are sent; (2) whichever path reports first wins — when that is the bridge, the surviving webhook carries the reconcile timestamp (typically ~3 AM the next day) and `fee=0` rather than the true assignment time. Requires an ibkr_bridge version that sets the `isBookTrade` envelope field; older bridges simply keep today's duplicate behavior.
 - **Auto-reconnect with backoff.** On disconnect or error the listener waits (starting at 5 s, up to 5 min) and reconnects automatically. The last seen sequence number and the bridge's `bridgeId` are sent on reconnect (and persisted across relay restarts), so the bridge replays exactly the events the relay missed — or, if the bridge itself restarted (new `bridgeId`, sequence numbers restarted at 1), everything the new bridge process has emitted. Requires an ibkr_bridge version that sends `bridgeId`; with an older bridge only the sequence number is used.
 - **Stale-fill guard.** Fills whose execution time is more than `LISTENER_MAX_FILL_AGE_HOURS` (default 24) in the past are dropped and alerted instead of being sent — checked when they arrive and again right before every send. A WS replay of old fills therefore never reaches your webhook as new trades. Missed fills older than the limit are still delivered by the Flex poller.
+- **IB Gateway health is probed every minute.** When the Gateway logs out (its nightly restart, or the weekly re-login waiting on a 2FA approval), the bridge stays reachable and the relay's WebSocket stays open — only a single `disconnected` event is sent. The listener therefore polls the bridge's `GET /health` and, once the Gateway has been disconnected for `OUTAGE_ALERT_MINUTES`, emails an [outage alert](#operational-alerts). Fills executed during the outage are recovered by the Flex poller (within its lookback period) — a valid Flex token is what makes that backstop work.
 - **Failed sends are retried, never parked.** A send that fails with 5xx / timeout / network error is retried after each delay in `LISTENER_RETRY_DELAYS_S` (default 1, 5 and 15 minutes). A 4xx from every notifier, or a failure after the last retry, drops the fills and sends an alert listing them — nothing waits in memory for the next reconnect.
 - **Debounce (optional).** Set `LISTENER_DEBOUNCE_MS` (milliseconds, default `0`) to buffer rapid partial fills before dispatching a single batched webhook. Useful when a large order fills in many small lots within a short window.
 

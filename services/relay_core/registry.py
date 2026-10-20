@@ -10,6 +10,7 @@ import logging
 import os
 from typing import cast, get_args
 
+from relay_core.health import get_outage_alert_after_s
 from relay_core.notifier import load_notifiers, load_retry_config
 from relay_core.notifier.base import BaseNotifier
 from shared import RelayName
@@ -96,6 +97,7 @@ def load_relays() -> list[BrokerRelay]:
         relay = _load_adapter(name, notifiers)
         relay.notify_retries = retries
         relay.notify_retry_delay_ms = retry_delay_ms
+        relay.outage_alert_after_s = get_outage_alert_after_s(name)
         relays.append(relay)
         log.info(
             "Relay %s: %d poller(s), listener=%s",

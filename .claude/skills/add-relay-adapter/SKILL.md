@@ -24,7 +24,7 @@ Use the existing `ibkr` and `kraken` relays as reference implementations. IBKR d
 - `name`: the relay name (must match `RelayName`).
 - `notifiers`: pass through from the argument.
 - `poller_configs`: list of `PollerConfig` (can be empty if listener-only). Each needs:
-  - `fetch: Callable[[], str | None]` — returns raw data (JSON string, XML, etc.) or `None` on failure.
+  - `fetch: Callable[[], str]` — returns raw data (JSON string, XML, etc.); raises `relay_core.FetchError` on failure. The message reaches logs and the operator's outage alert verbatim, so name the failing step and the broker's error (`"Flex SendRequest failed: [1012] Token has expired"`) and never include credentials — redact any URL that carries them. Wrap only expected failures (HTTP, API errors, bad response shape); let programming errors propagate with their traceback.
   - `parse: Callable[[str], tuple[list[Fill], list[str]]]` — parses raw data into (fills, errors).
   - `interval: int` — poll interval in seconds.
 - `listener_config`: a `ListenerConfig` or `None` (can be None if poller-only). Needs:
@@ -36,6 +36,7 @@ Use the existing `ibkr` and `kraken` relays as reference implementations. IBKR d
     - `order_complete: bool` — `True` on the fill event that closes its order. Debounce buffer flushes that orderId immediately. Leave `False` if the broker exposes no per-order lifecycle signal.
   - `event_filter: Callable[[dict], bool]` — return True for events that should reach `on_message`, False to skip (heartbeats, subscription acks).
   - `debounce_ms: int` — optional debounce buffer (0 = disabled). Per-orderId; one order's fills never delay another order's flush.
+  - `health_check: Callable[[aiohttp.ClientSession], Awaitable[str | None]] | None` — optional. Needed only when the WS source relays another connection it can lose while the socket stays open (ibkr_bridge → IB Gateway). Return `None` when healthy, else a credential-free reason. The engine already tracks its own WS state; outage alerts for pollers and listeners need no adapter code.
 
 ## 4. Environment variables — follow the prefix convention
 
@@ -68,6 +69,8 @@ If the broker supports options, populate `Fill.option` (`OptionContract`) when `
 ## 8. Write tests
 
 Colocate unit tests next to source: `test_<name>.py`. If you added `timestamps.py`, add `test_timestamps.py` with positive + negative cases — the helper's job is to reject typos that `datetime.fromisoformat` would silently accept.
+
+Cover the fetch failure contract: each expected failure (HTTP error, broker API error, malformed response) raises `FetchError` whose message names the broker's error, and an unexpected exception propagates with its own type. If the fetch URL carries a credential, assert it is absent from the message. If you added a `health_check`, test each outcome against a real local server (`aiohttp.test_utils.TestServer`): healthy → `None`; broker-side down, HTTP error, and malformed body → a reason. See `TestBridgeHealthCheck` in `relays/ibkr/test_ibkr.py`.
 
 ## 9. Understand the listener/poller dedup interaction
 

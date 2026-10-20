@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from relay_core.notifier.base import BaseNotifier as BaseNotifier
 from shared import Fill, RelayName
 
+from .health import DEFAULT_OUTAGE_ALERT_MINUTES
+
 # Re-export domain types so consumers can do ``from relay_core import X``.
 from .listener_engine import (
     FatalListenerError as FatalListenerError,
@@ -37,6 +39,9 @@ from .listener_engine import (
 from .parsing import require_float as require_float
 from .parsing import require_str as require_str
 from .poller_engine import (
+    FetchError as FetchError,
+)
+from .poller_engine import (
     PollerConfig as PollerConfig,
 )
 from .poller_engine import (
@@ -60,6 +65,9 @@ class BrokerRelay:
     notifiers: list[BaseNotifier]
     notify_retries: int = 0
     notify_retry_delay_ms: int = 1000
+    # Seconds a poller/listener may keep failing before the operator is
+    # alerted (0 = never). Set by the registry from OUTAGE_ALERT_MINUTES.
+    outage_alert_after_s: int = DEFAULT_OUTAGE_ALERT_MINUTES * 60
     poller_configs: list[PollerConfig] = field(default_factory=list)
     listener_config: ListenerConfig | None = None
 
