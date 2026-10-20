@@ -59,6 +59,7 @@ _TEST_ENV = {
     "IBKR_LISTENER_EXEC_EVENTS_ENABLED": "false",
     "IBKR_LISTENER_DEBOUNCE_MS": "0",
     "IBKR_POLL_INTERVAL": "300",
+    "IBKR_ACCOUNT_TIMEZONE": "America/New_York",
 }
 
 
@@ -250,14 +251,14 @@ class TestEnvVarGetters(unittest.TestCase):
 
     # ── IBKR_ACCOUNT_TIMEZONE ──
 
-    def test_account_timezone_defaults_to_utc(self) -> None:
+    def test_account_timezone_unset_returns_none(self) -> None:
         with patch.dict(os.environ, {"IBKR_ACCOUNT_TIMEZONE": ""}):
-            tz = _get_account_timezone()
-        self.assertEqual(tz.key, "UTC")
+            self.assertIsNone(_get_account_timezone())
 
     def test_account_timezone_valid_iana(self) -> None:
         with patch.dict(os.environ, {"IBKR_ACCOUNT_TIMEZONE": "America/New_York"}):
             tz = _get_account_timezone()
+        assert tz is not None
         self.assertEqual(tz.key, "America/New_York")
 
     def test_account_timezone_invalid_raises_system_exit(self) -> None:
@@ -983,6 +984,34 @@ class TestBuildRelay(unittest.TestCase):
         relay = build_relay(notifiers=[])
         assert relay.listener_config is not None
         self.assertIsNotNone(relay.listener_config.health_check)
+
+    def test_timezone_required_when_flex_configured(self) -> None:
+        with patch.dict(os.environ, {"IBKR_ACCOUNT_TIMEZONE": ""}), \
+             self.assertRaises(SystemExit) as cm:
+            build_relay(notifiers=[])
+        self.assertIn("IBKR_ACCOUNT_TIMEZONE must be set", str(cm.exception))
+
+    def test_timezone_required_for_secondary_query_only(self) -> None:
+        env = {
+            "IBKR_ACCOUNT_TIMEZONE": "", "IBKR_FLEX_TOKEN": "", "IBKR_FLEX_QUERY_ID": "",
+            "IBKR_FLEX_QUERY_ID_2": "789", "IBKR_FLEX_TOKEN_2": "tok2",
+        }
+        with patch.dict(os.environ, env), self.assertRaises(SystemExit) as cm:
+            build_relay(notifiers=[])
+        self.assertIn("IBKR_ACCOUNT_TIMEZONE must be set", str(cm.exception))
+
+    def test_timezone_optional_for_listener_only(self) -> None:
+        env = {"IBKR_ACCOUNT_TIMEZONE": "", "IBKR_FLEX_TOKEN": "", "IBKR_FLEX_QUERY_ID": ""}
+        with patch.dict(os.environ, env):
+            relay = build_relay(notifiers=[])
+        self.assertEqual(relay.poller_configs, [])
+        self.assertIsNotNone(relay.listener_config)
+
+    def test_timezone_optional_when_poller_disabled(self) -> None:
+        env = {"IBKR_ACCOUNT_TIMEZONE": "", "IBKR_POLLER_ENABLED": "false"}
+        with patch.dict(os.environ, env):
+            relay = build_relay(notifiers=[])
+        self.assertEqual(relay.poller_configs, [])
 
     def test_listener_none_when_disabled(self) -> None:
         with patch.dict(os.environ, {"IBKR_LISTENER_ENABLED": "false"}):

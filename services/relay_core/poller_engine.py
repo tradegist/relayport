@@ -7,6 +7,7 @@ mark-after-notify.  Zero broker knowledge.
 
 import logging
 import sqlite3
+import statistics
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,7 @@ from relay_core.context import get_relay
 from relay_core.dedup import (
     DEFAULT_RETENTION_DAYS,
     consume_book_trade_keys,
+    get_fill_times,
     get_processed_ids,
     get_recently_processed_order_ids,
     mark_book_trade_keys,
@@ -33,6 +35,11 @@ from shared import Fill, RelayName, Trade, aggregate_fills, to_epoch
 log = logging.getLogger(__name__)
 
 WATERMARK_KEY_SUFFIX = "last_poll_ts"
+
+# How far the poller's timestamp for an execution may drift from the
+# listener's before it is flagged. Same execution, so the true gap is
+# seconds; a wrong timezone is off by 30 minutes or more.
+TIMESTAMP_MISMATCH_TOLERANCE_S = 300
 BRIDGE_SEQ_KEY_SUFFIX = "bridge_last_seq"
 BRIDGE_ID_KEY_SUFFIX = "bridge_id"
 
@@ -242,6 +249,45 @@ def prune_old(dedup_conn: sqlite3.Connection, days: int = DEFAULT_RETENTION_DAYS
 
 # ── Poll cycle ───────────────────────────────────────────────────────
 
+def _check_listener_timestamps(
+    relay_log: logging.Logger,
+    relay_name: RelayName,
+    dedup_conn: sqlite3.Connection,
+    fills: list[Fill],
+) -> None:
+    """Warn when this poller's fill times disagree with the listener's.
+
+    Both paths can report the same execution under the same exec id. The
+    listener's feed is real time, so a gap beyond
+    ``TIMESTAMP_MISMATCH_TOLERANCE_S`` means the poller path reads the
+    broker's timestamps in the wrong zone — e.g. a wrong
+    ``IBKR_ACCOUNT_TIMEZONE``, since IBKR Flex times carry none.
+    Diagnostic only: logs, never raises, never blocks the poll.
+    """
+    try:
+        listener_times = get_fill_times(
+            dedup_conn, _prefix_id_set(relay_name, {f.execId for f in fills}),
+        )
+        offsets = [
+            to_epoch(f.timestamp) - listener_times[key]
+            for f in fills
+            if (key := f"{relay_name}:{f.execId}") in listener_times
+        ]
+    except (sqlite3.Error, ValueError):
+        relay_log.exception("Timestamp cross-check against the listener failed — skipped")
+        return
+    mismatched = [o for o in offsets if abs(o) > TIMESTAMP_MISMATCH_TOLERANCE_S]
+    if not mismatched:
+        return
+    relay_log.warning(
+        "Timestamp mismatch: %d of %d fill(s) the listener also delivered are"
+        " %+.2f h off on this poller (median) — its broker timestamps are"
+        " probably read in the wrong timezone; check %s_ACCOUNT_TIMEZONE",
+        len(mismatched), len(offsets), statistics.median(mismatched) / 3600,
+        relay_name.upper(),
+    )
+
+
 def poll_once(
     relay_name: RelayName,
     poller_index: int = 0,
@@ -282,6 +328,7 @@ def poll_once(
 
         all_fills, parse_errors = config.parse(raw_data)
         relay_log.info("Parsed %d individual fill(s)", len(all_fills))
+        _check_listener_timestamps(relay_log, relay_name, dedup_conn, all_fills)
 
         if parse_errors:
             for err in parse_errors:

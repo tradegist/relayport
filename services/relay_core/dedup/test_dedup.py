@@ -11,6 +11,7 @@ from relay_core.dedup import (
     BOOK_TRADE_WINDOW_SECONDS,
     DEFAULT_RETENTION_DAYS,
     consume_book_trade_keys,
+    get_fill_times,
     get_processed_ids,
     get_processed_rows,
     get_recently_processed_order_ids,
@@ -32,7 +33,8 @@ class TestDedup(unittest.TestCase):
             "CREATE TABLE IF NOT EXISTS processed_fills ("
             "  exec_id TEXT PRIMARY KEY,"
             "  order_id TEXT,"
-            "  processed_at TEXT DEFAULT (datetime('now'))"
+            "  processed_at TEXT DEFAULT (datetime('now')),"
+            "  fill_ts INTEGER"
             ")"
         )
         self.conn.commit()
@@ -126,7 +128,8 @@ class TestMarkProcessedBatchWithOrders(unittest.TestCase):
             "CREATE TABLE IF NOT EXISTS processed_fills ("
             "  exec_id TEXT PRIMARY KEY,"
             "  order_id TEXT,"
-            "  processed_at TEXT DEFAULT (datetime('now'))"
+            "  processed_at TEXT DEFAULT (datetime('now')),"
+            "  fill_ts INTEGER"
             ")"
         )
         self.conn.commit()
@@ -153,6 +156,42 @@ class TestMarkProcessedBatchWithOrders(unittest.TestCase):
         assert count[0] == 1
 
 
+class TestFillTimes(unittest.TestCase):
+    """``fill_ts`` written by the listener, read by the poller's cross-check."""
+
+    def setUp(self) -> None:
+        self.conn = init_db(":memory:")
+
+    def tearDown(self) -> None:
+        self.conn.close()
+
+    def test_stores_fill_times_given(self) -> None:
+        mark_processed_batch_with_orders(
+            self.conn,
+            [("ibkr:E1", "O1"), ("ibkr:E1.alias", "O1"), ("ibkr:E2", "O1")],
+            {"ibkr:E1": 100, "ibkr:E1.alias": 100},
+        )
+        assert get_fill_times(self.conn, {"ibkr:E1", "ibkr:E1.alias", "ibkr:E2"}) == {
+            "ibkr:E1": 100, "ibkr:E1.alias": 100,
+        }
+
+    def test_without_fill_epochs_stores_none(self) -> None:
+        mark_processed_batch_with_orders(self.conn, [("ibkr:E1", "O1")])
+        assert get_fill_times(self.conn, {"ibkr:E1"}) == {}
+
+    def test_poller_rows_have_no_fill_time(self) -> None:
+        mark_processed_batch(self.conn, ["ibkr:P1"])
+        assert get_fill_times(self.conn, {"ibkr:P1"}) == {}
+
+    def test_insert_or_ignore_keeps_first_row(self) -> None:
+        mark_processed_batch(self.conn, ["ibkr:E1"])
+        mark_processed_batch_with_orders(self.conn, [("ibkr:E1", "O1")], {"ibkr:E1": 100})
+        assert get_fill_times(self.conn, {"ibkr:E1"}) == {}
+
+    def test_empty_lookup(self) -> None:
+        assert get_fill_times(self.conn, set()) == {}
+
+
 class TestGetProcessedRows(unittest.TestCase):
     """``get_processed_rows`` maps stored exec_ids to their order_id."""
 
@@ -162,7 +201,8 @@ class TestGetProcessedRows(unittest.TestCase):
             "CREATE TABLE IF NOT EXISTS processed_fills ("
             "  exec_id TEXT PRIMARY KEY,"
             "  order_id TEXT,"
-            "  processed_at TEXT DEFAULT (datetime('now'))"
+            "  processed_at TEXT DEFAULT (datetime('now')),"
+            "  fill_ts INTEGER"
             ")"
         )
         self.conn.commit()
@@ -195,7 +235,8 @@ class TestGetRecentlyProcessedOrderIds(unittest.TestCase):
             "CREATE TABLE IF NOT EXISTS processed_fills ("
             "  exec_id TEXT PRIMARY KEY,"
             "  order_id TEXT,"
-            "  processed_at TEXT DEFAULT (datetime('now'))"
+            "  processed_at TEXT DEFAULT (datetime('now')),"
+            "  fill_ts INTEGER"
             ")"
         )
         self.conn.commit()
@@ -275,10 +316,45 @@ class TestInitDbMigration(unittest.TestCase):
                     )
                 ]
                 assert "order_id" in cols
+                assert "fill_ts" in cols
                 rows = migrated.execute(
-                    "SELECT exec_id, order_id FROM processed_fills",
+                    "SELECT exec_id, order_id, fill_ts FROM processed_fills",
                 ).fetchall()
-                assert rows == [("LEGACY", None)]
+                assert rows == [("LEGACY", None, None)]
+            finally:
+                migrated.close()
+
+    def test_adds_fill_ts_to_order_id_era_schema(self) -> None:
+        """Databases deployed before fill_ts (order_id present) gain it in place."""
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "order_id_era.db"
+            conn = sqlite3.connect(str(db))
+            conn.execute(
+                "CREATE TABLE processed_fills ("
+                "  exec_id TEXT PRIMARY KEY,"
+                "  order_id TEXT,"
+                "  processed_at TEXT DEFAULT (datetime('now'))"
+                ")"
+            )
+            conn.execute(
+                "INSERT INTO processed_fills (exec_id, order_id) VALUES ('ibkr:E1', 'O1')",
+            )
+            conn.commit()
+            conn.close()
+
+            migrated = init_db(db)
+            try:
+                rows = migrated.execute(
+                    "SELECT exec_id, order_id, fill_ts FROM processed_fills",
+                ).fetchall()
+                assert rows == [("ibkr:E1", "O1", None)]
+                # The migrated table accepts the new write path.
+                mark_processed_batch_with_orders(
+                    migrated, [("ibkr:E2", "O2")], {"ibkr:E2": 1_700_000_000},
+                )
+                assert get_fill_times(migrated, {"ibkr:E1", "ibkr:E2"}) == {
+                    "ibkr:E2": 1_700_000_000,
+                }
             finally:
                 migrated.close()
 
@@ -368,7 +444,8 @@ class TestRecentlyProcessedTimeBoundary(unittest.TestCase):
                 "CREATE TABLE processed_fills ("
                 "  exec_id TEXT PRIMARY KEY,"
                 "  order_id TEXT,"
-                "  processed_at TEXT DEFAULT (datetime('now'))"
+                "  processed_at TEXT DEFAULT (datetime('now')),"
+                "  fill_ts INTEGER"
                 ")"
             )
             # Insert with an explicit 5-seconds-ago timestamp so the
@@ -404,7 +481,8 @@ class TestBookTradeDedup(unittest.TestCase):
             "CREATE TABLE processed_fills ("
             "  exec_id TEXT PRIMARY KEY,"
             "  order_id TEXT,"
-            "  processed_at TEXT DEFAULT (datetime('now'))"
+            "  processed_at TEXT DEFAULT (datetime('now')),"
+            "  fill_ts INTEGER"
             ")"
         )
         self.conn.commit()

@@ -9,11 +9,17 @@ fills already dispatched in real time, even when the broker returns a
 different identifier on the REST path (e.g. Kraken issues a fresh
 consolidated ``txid`` for multi-match orders that does not match the
 per-match ``exec_id`` emitted via the WebSocket).
+
+The ``fill_ts`` column is also listener-only: the fill's execution time
+(epoch seconds) as the real-time feed reported it. The poller compares its
+own timestamps for the same execution against it (``get_fill_times``) to
+catch a poller path reading the broker's times in the wrong timezone.
 """
 
 import contextlib
 import logging
 import sqlite3
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
@@ -140,6 +146,14 @@ def mark_book_trade_keys(
     conn.commit()
 
 
+# Columns added after the table's first release, in the order they were
+# added. Constants only — the names are interpolated into DDL.
+_MIGRATED_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("order_id", "TEXT"),
+    ("fill_ts", "INTEGER"),
+)
+
+
 def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     """Open (or create) the dedup database and return a connection."""
     path = Path(db_path) if db_path else Path(DEDUP_DB_PATH)
@@ -150,10 +164,11 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
         "CREATE TABLE IF NOT EXISTS processed_fills ("
         "  exec_id TEXT PRIMARY KEY,"
         "  order_id TEXT,"
-        "  processed_at TEXT DEFAULT (datetime('now'))"
+        "  processed_at TEXT DEFAULT (datetime('now')),"
+        "  fill_ts INTEGER"
         ")"
     )
-    # Migrate databases created before order_id existed. ``init_db`` is
+    # Migrate databases created before a column existed. ``init_db`` is
     # called on every connection open (one per listener flush), so we
     # check the schema with a cheap read-only PRAGMA before attempting
     # the DDL — otherwise the post-migration steady state would issue
@@ -164,13 +179,16 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     # process-wide: on first deploy the listener and poller can both
     # observe a missing column before either commits the ADD COLUMN,
     # and the loser of the writer-lock race then raises
-    # ``OperationalError("duplicate column name: order_id")``. The
-    # suppress only matters during that one-time race window — by the
-    # next caller the PRAGMA gate fires and the ALTER is skipped.
+    # ``OperationalError("duplicate column name: ...")``. The suppress
+    # only matters during that one-time race window — by the next caller
+    # the PRAGMA gate fires and the ALTER is skipped.
     cols = {row[1] for row in conn.execute("PRAGMA table_info(processed_fills)")}
-    if "order_id" not in cols:
-        with contextlib.suppress(sqlite3.OperationalError):
-            conn.execute("ALTER TABLE processed_fills ADD COLUMN order_id TEXT")
+    for column, sql_type in _MIGRATED_COLUMNS:
+        if column not in cols:
+            with contextlib.suppress(sqlite3.OperationalError):
+                conn.execute(
+                    f"ALTER TABLE processed_fills ADD COLUMN {column} {sql_type}"
+                )
     conn.commit()
     return conn
 
@@ -239,19 +257,43 @@ def mark_processed_batch(conn: sqlite3.Connection, exec_ids: list[str]) -> None:
 
 
 def mark_processed_batch_with_orders(
-    conn: sqlite3.Connection, items: list[tuple[str, str]],
+    conn: sqlite3.Connection,
+    items: list[tuple[str, str]],
+    fill_epochs: Mapping[str, int] | None = None,
 ) -> None:
     """Record (exec_id, order_id) pairs as processed (idempotent).
 
     Used by the listener so the poller can recognise multi-match fills
     already dispatched in real time, even when the broker returns a
     consolidated identifier on the REST path.
+
+    *fill_epochs* maps an exec_id to its fill's execution time (epoch
+    seconds), stored as ``fill_ts`` for :func:`get_fill_times`. Exec ids
+    missing from it are stored without one.
     """
+    epochs = fill_epochs or {}
     conn.executemany(
-        "INSERT OR IGNORE INTO processed_fills (exec_id, order_id) VALUES (?, ?)",
-        items,
+        "INSERT OR IGNORE INTO processed_fills (exec_id, order_id, fill_ts)"
+        " VALUES (?, ?, ?)",
+        [(exec_id, order_id, epochs.get(exec_id)) for exec_id, order_id in items],
     )
     conn.commit()
+
+
+def get_fill_times(conn: sqlite3.Connection, exec_ids: set[str]) -> dict[str, int]:
+    """Return ``{exec_id: fill_ts}`` for stored rows that carry a fill time.
+
+    Only listener-written rows have one, recorded from the real-time feed.
+    """
+    if not exec_ids:
+        return {}
+    placeholders = ",".join("?" for _ in exec_ids)
+    rows = conn.execute(
+        f"SELECT exec_id, fill_ts FROM processed_fills "
+        f"WHERE fill_ts IS NOT NULL AND exec_id IN ({placeholders})",
+        list(exec_ids),
+    ).fetchall()
+    return {r[0]: int(r[1]) for r in rows}
 
 
 def get_recently_processed_order_ids(
