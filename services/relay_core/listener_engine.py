@@ -996,7 +996,9 @@ async def _listen_loop(
     flush_tasks: set[asyncio.Task[None]] = set()
 
     while True:
-        down_reason = "WebSocket closed"
+        # Every path to the state update below must assign `down_reason`.
+        # mypy's possibly-undefined check (pyproject.toml) enforces it —
+        # a bare `down_reason: str` here would silence that check.
         try:
             async with aiohttp.ClientSession() as session:
                 log.info("[%s] Connecting to WS", relay_name)
