@@ -11,6 +11,7 @@ services:
       RELAYS: ibkr
       IBKR_FLEX_TOKEN: test-flex-token
       IBKR_FLEX_QUERY_ID: "000000"
+      IBKR_ACCOUNT_TIMEZONE: America/New_York
       API_TOKEN: test-token
       API_PORT: "8000"
       DEBUG_WEBHOOK_PATH: test-debug-path

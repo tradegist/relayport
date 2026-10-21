@@ -184,8 +184,8 @@ def parse_fills(
     """Parse Flex XML into individual Fill objects.
 
     *tz* is the IANA timezone to interpret IBKR's naive ``dateTime``
-    values in (typically the account base tz from ``IBKR_ACCOUNT_TIMEZONE``).
-    Defaults to UTC when omitted.
+    values in (``IBKR_ACCOUNT_TIMEZONE``, required whenever Flex polling
+    is configured). Defaults to UTC when omitted.
 
     Returns ``(fills, errors)`` where *errors* contains warnings about
     unknown attributes and any per-row parse problems.  Parsing never

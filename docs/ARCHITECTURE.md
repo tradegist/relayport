@@ -120,7 +120,7 @@ terraform/                 # Infrastructure as code (DigitalOcean)
 
   Nothing stays buffered until the next reconnect. Registers orderIds in `inflight.py`'s `INFLIGHT_ORDERS` for the notify+mark span so the poller defers them (one-directional by design — see the `inflight.py` module docstring). Honours the relay's optional `BrokerRelay.dedup_aliases` hook: alias keys are marked alongside real exec IDs on notify, and a fill is treated as seen when a poller-written (NULL-`order_id`) alias row exists — reconciles brokers whose two feeds render the same execution under different IDs (IBKR combo legs).
 - **`health.py`** — `OutageTracker`, one per poller and per listener. A failure streak longer than `OUTAGE_ALERT_MINUTES` emails the operator (reminders per `ALERT_COOLDOWN_MINUTES`, recovery email when it clears). Pollers report each cycle — `FetchError` is a failure, `FetchConfigError` (broker rejected the configuration: expired token, invalid query) alerts on the first failure, a notify failure is not counted. Listeners report every minute from a watchdog — WS state plus the adapter's optional `ListenerConfig.health_check` (IBKR probes ibkr_bridge's `GET /health`, because a logged-out IB Gateway leaves the relay's WS open).
-- **`dedup/__init__.py`** — owns the SQLite schema. Three columns on `processed_fills`: `exec_id` (PK), `order_id`, `processed_at`. Idempotent `ALTER TABLE` migration on `init_db`.
+- **`dedup/__init__.py`** — owns the SQLite schema. Four columns on `processed_fills`: `exec_id` (PK), `order_id`, `processed_at`, `fill_ts` (listener-written execution time, read by the poller's timestamp cross-check). Idempotent `ALTER TABLE` migrations on `init_db`.
 - **`relay_models.py`** — re-export shim for notifier payload contracts + relay-specific API types (`RunPollResponse`, `HealthResponse`). Listed in `schema_gen.py:SCHEMA_MODELS` under `"relay_core.relay_models"`.
 - **`routes/__init__.py`** — `GET /health` (unauthenticated) and `POST /relays/{relay_name}/poll/{poll_idx}` (authenticated, 1-based index).
 - **`env.py`** — `get_env(var, prefix, suffix, default)` and `get_env_int(...)`. Resolution order: `{prefix}{var}{suffix}` → `{var}{suffix}` → `default`.
@@ -139,7 +139,7 @@ Each adapter is a small package that wires broker-specific logic into the generi
 
 ## Dedup package
 
-- `processed_fills` schema: `exec_id TEXT PRIMARY KEY`, `order_id TEXT` (NULL for poller-written rows; populated for listener-written rows), `processed_at`.
+- `processed_fills` schema: `exec_id TEXT PRIMARY KEY`, `order_id TEXT` (NULL for poller-written rows; populated for listener-written rows), `processed_at`, `fill_ts INTEGER` (listener-written only — the real-time execution time the poller compares its own timestamps against).
 - Write paths: `mark_processed_batch` (exec_id only, poller) and `mark_processed_batch_with_orders` (listener).
 - Read paths: `get_processed_ids` (exec_id set lookup, poller), `get_processed_rows` (exec_id → `order_id` mapping — the listener uses the NULL/non-NULL distinction to gate dedup-alias hits), and `get_recently_processed_order_ids` (relay-prefixed + time-windowed, ignores NULL-order_id rows).
 - Dedup key priority: `ibExecId → transactionId → tradeID`, resolved in `services/relays/ibkr/flex_parser.py` at parse time.

@@ -23,6 +23,7 @@ _TEST_ENV = {
     "IBKR_BRIDGE_WS_URL": "ws://bridge:5000/ibkr/ws/events",
     "IBKR_BRIDGE_API_TOKEN": "bridge-token",
     "IBKR_LISTENER_ENABLED": "true",
+    "IBKR_ACCOUNT_TIMEZONE": "America/New_York",
 }
 
 

@@ -145,21 +145,22 @@ def _is_exec_events_enabled() -> bool:
     return val not in ("0", "false", "no", "")
 
 
-def _get_account_timezone() -> ZoneInfo:
-    """Return the IANA tz for IBKR timestamps (defaults to UTC).
+def _get_account_timezone() -> ZoneInfo | None:
+    """Return the IANA tz of IBKR's naive timestamps, or None when unset.
 
-    IBKR reports every trade timestamp (both Flex XML and ib_async bridge
-    events) in the account's base timezone with no tz label. Without
-    this hint, naive timestamps get treated as UTC — fine if the account
-    is actually UTC, wrong otherwise. Setting ``IBKR_ACCOUNT_TIMEZONE``
-    to a valid IANA zone (e.g. ``America/New_York``) makes the engine
-    convert the broker's local time to UTC before storing.
+    Flex writes execution times with no tz label, and IBKR does not
+    document which zone it uses. On the one account verified (US-listed
+    instruments) it was US Eastern on every exchange, but other accounts
+    (regions, IBKR entities) may differ — so there is no safe default:
+    ``_build_poller_configs`` requires the value whenever Flex polling is
+    configured. Bridge timestamps carry their own UTC offset and do not
+    need it.
 
     Validated fail-fast at boot: an invalid value raises ``SystemExit``.
     """
     raw = os.environ.get("IBKR_ACCOUNT_TIMEZONE", "").strip()
     if not raw:
-        return ZoneInfo("UTC")
+        return None
     try:
         return parse_timezone(raw)
     except ValueError as exc:
@@ -193,15 +194,32 @@ def _build_parse(tz: ZoneInfo) -> Callable[[str], tuple[list[Fill], list[str]]]:
     return parse
 
 
-def _build_poller_configs(tz: ZoneInfo) -> list[PollerConfig]:
+_TIMEZONE_REQUIRED = (
+    "IBKR_ACCOUNT_TIMEZONE must be set when Flex polling is configured. Flex"
+    " reports execution times without a timezone and IBKR does not document"
+    " which one: on the account verified so far (US-listed instruments) it was"
+    " US Eastern, i.e. America/New_York. Confirm it for your account (README:"
+    " 'Verifying IBKR_ACCOUNT_TIMEZONE') and set the IANA zone in .env.relays."
+)
+
+
+def _build_poller_configs(tz: ZoneInfo | None) -> list[PollerConfig]:
     """Build PollerConfig(s) from env vars.
 
     Detects IBKR_FLEX_QUERY_ID_2 etc. for multi-account support.
     Returns an empty list when polling is disabled or no Flex
     credentials are configured (listener-only mode).
+
+    Raises:
+        SystemExit: When any Flex credential is set but *tz* is None —
+            a guessed timezone would silently shift every polled fill.
     """
     if not is_poller_enabled("ibkr"):
         return []
+    if not (_get_flex_token() or _get_flex_query_id() or _get_flex_query_id("_2")):
+        return []
+    if tz is None:
+        raise SystemExit(_TIMEZONE_REQUIRED)
 
     configs: list[PollerConfig] = []
     interval = get_poll_interval("ibkr")
@@ -799,14 +817,17 @@ def _dedup_aliases(exec_id: str) -> list[str]:
 
 def build_relay(notifiers: list[BaseNotifier]) -> BrokerRelay:
     """Build a fully configured IBKR relay instance."""
-    # Validate IBKR_ACCOUNT_TIMEZONE fail-fast at boot — if the user set
-    # a malformed value we want the container to exit immediately rather
-    # than silently defaulting or failing per-fill.
+    # Validate IBKR_ACCOUNT_TIMEZONE fail-fast at boot — a malformed value,
+    # or a missing one with Flex polling configured, exits immediately
+    # rather than silently defaulting or failing per-fill.
     tz = _get_account_timezone()
-    log.info("IBKR account timezone: %s", tz.key)
+    log.info("IBKR account timezone: %s", tz.key if tz else "not set")
 
     poller_configs = _build_poller_configs(tz)
-    listener_config = _build_listener_config(tz)
+    # Bridge times carry their own UTC offset; the zone only applies to
+    # the bridge's legacy naive format, which falls back to UTC when no
+    # zone is set (listener-only deployments need not set one).
+    listener_config = _build_listener_config(tz or ZoneInfo("UTC"))
 
     if not poller_configs and listener_config is None:
         raise SystemExit(

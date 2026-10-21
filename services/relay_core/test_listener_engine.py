@@ -18,6 +18,7 @@ import httpx
 from relay_core import BrokerRelay, ListenerConfig, OnMessageResult
 from relay_core.context import _reset, get_relay, init_relays
 from relay_core.dedup import (
+    get_fill_times,
     get_processed_ids,
     get_processed_rows,
     init_db,
@@ -29,6 +30,7 @@ from relay_core.inflight import INFLIGHT_ORDERS
 from relay_core.listener_engine import (
     DebounceBuffer,
     FatalListenerError,
+    _fill_epochs,
     _handle_event,
     _listen,
     _listen_loop,
@@ -523,6 +525,26 @@ class TestSendAndMarkDedupAliases(unittest.TestCase):
             conn.close()
 
     @patch("relay_core.listener_engine.notify")
+    def test_listener_records_fill_time_for_exec_and_alias(
+        self, mock_notify: MagicMock,
+    ) -> None:
+        """The poller's timestamp cross-check finds the time under either ID."""
+        fill = _make_fill(exec_id=self._TWS_ID, timestamp="2026-10-13T14:08:38")
+        _send_and_mark("ibkr", [fill], self._db_path)
+
+        conn = init_db(Path(self._db_path))
+        try:
+            times = get_fill_times(
+                conn, {f"ibkr:{self._TWS_ID}", f"ibkr:{self._FLEX_ID}"},
+            )
+        finally:
+            conn.close()
+        epoch = to_epoch("2026-10-13T14:08:38")
+        self.assertEqual(times, {
+            f"ibkr:{self._TWS_ID}": epoch, f"ibkr:{self._FLEX_ID}": epoch,
+        })
+
+    @patch("relay_core.listener_engine.notify")
     def test_without_hook_poller_lookup_misses(
         self, mock_notify: MagicMock,
     ) -> None:
@@ -569,6 +591,22 @@ class TestSendAndMarkDedupAliases(unittest.TestCase):
 
 
 # ── _send_no_mark tests ─────────────────────────────────────────────
+
+
+class TestFillEpochs(unittest.TestCase):
+    def test_maps_exec_and_alias_keys(self) -> None:
+        fill = _make_fill(exec_id="A.B.01.01.01", timestamp="2026-10-13T14:08:38")
+        epochs = _fill_epochs("ibkr", [fill], {"A.B.01.01.01": ["A.B.01.01"]})
+        epoch = to_epoch("2026-10-13T14:08:38")
+        self.assertEqual(epochs, {"ibkr:A.B.01.01.01": epoch, "ibkr:A.B.01.01": epoch})
+
+    def test_skips_unreadable_and_empty_timestamps(self) -> None:
+        bad = _make_fill(exec_id="BAD", timestamp="not-a-time")
+        empty = _make_fill(exec_id="EMPTY", timestamp="")
+        good = _make_fill(exec_id="GOOD", timestamp="2026-10-13T14:08:38")
+        with self.assertLogs("relay_core.listener_engine", level="WARNING"):
+            epochs = _fill_epochs("ibkr", [bad, empty, good], {})
+        self.assertEqual(set(epochs), {"ibkr:GOOD"})
 
 
 class TestSendNoMark(unittest.TestCase):

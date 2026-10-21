@@ -9,6 +9,7 @@ import pytest
 
 from relay_core.context import get_relay
 from relay_core.dedup import (
+    get_fill_times,
     get_processed_ids,
     mark_book_trade_keys,
     mark_processed_batch,
@@ -65,7 +66,8 @@ def dedup_db() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS processed_fills (
             exec_id TEXT PRIMARY KEY,
             order_id TEXT,
-            processed_at TEXT DEFAULT (datetime('now'))
+            processed_at TEXT DEFAULT (datetime('now')),
+            fill_ts INTEGER
         )
     """)
     conn.commit()
@@ -280,6 +282,76 @@ class TestPruneOld:
 # ═════════════════════════════════════════════════════════════════════
 #  poll_once() — generic engine
 # ═════════════════════════════════════════════════════════════════════
+
+class TestListenerTimestampCrossCheck:
+    """poll_once warns when its fill times disagree with the listener's."""
+
+    LISTENER_TS = "2026-10-13T14:08:38"
+
+    def _listener_marked(self, dedup_db: sqlite3.Connection, exec_id: str) -> None:
+        mark_processed_batch_with_orders(
+            dedup_db, [(f"ibkr:{exec_id}", "O1")],
+            {f"ibkr:{exec_id}": to_epoch(self.LISTENER_TS)},
+        )
+        assert get_fill_times(dedup_db, {f"ibkr:{exec_id}"})
+
+    def _poll(
+        self, dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
+        fills: list[Fill],
+    ) -> None:
+        _set_poller(_MockPollerConfig(parse=lambda _raw: (fills, [])))
+        poll_once("ibkr", dedup_conn=dedup_db, meta_conn=meta_db)
+
+    def test_warns_on_wrong_timezone(
+        self, dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        self._listener_marked(dedup_db, "E1")
+        # Flex read as UTC while it was US Eastern: 4 h early.
+        fill = _make_fill(execId="E1", timestamp="2026-10-13T10:08:38")
+        with caplog.at_level("WARNING", logger="poller.ibkr"):
+            self._poll(dedup_db, meta_db, [fill])
+        warnings = [r.getMessage() for r in caplog.records if "Timestamp mismatch" in r.getMessage()]
+        assert len(warnings) == 1
+        assert "1 of 1 fill(s)" in warnings[0]
+        assert "-4.00 h" in warnings[0]
+        assert "IBKR_ACCOUNT_TIMEZONE" in warnings[0]
+
+    def test_silent_within_tolerance(
+        self, dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        self._listener_marked(dedup_db, "E1")
+        fill = _make_fill(execId="E1", timestamp="2026-10-13T14:08:40")
+        with caplog.at_level("WARNING", logger="poller.ibkr"):
+            self._poll(dedup_db, meta_db, [fill])
+        assert "Timestamp mismatch" not in caplog.text
+
+    def test_silent_without_listener_times(
+        self, dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        mark_processed_batch(dedup_db, ["ibkr:E1"])  # poller-written: no time
+        fill = _make_fill(execId="E1", timestamp="2026-10-13T10:08:38")
+        with caplog.at_level("WARNING", logger="poller.ibkr"):
+            self._poll(dedup_db, meta_db, [fill])
+        assert "Timestamp mismatch" not in caplog.text
+
+    @patch("relay_core.poller_engine.notify")
+    def test_db_error_is_logged_and_poll_continues(
+        self, mock_notify: MagicMock,
+        dedup_db: sqlite3.Connection, meta_db: sqlite3.Connection,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        fill = _make_fill(execId="NEW", timestamp="2026-10-13T10:08:38")
+        with patch(
+            "relay_core.poller_engine.get_fill_times",
+            side_effect=sqlite3.OperationalError("database is locked"),
+        ), caplog.at_level("ERROR", logger="poller.ibkr"):
+            self._poll(dedup_db, meta_db, [fill])
+        assert "Timestamp cross-check against the listener failed" in caplog.text
+        mock_notify.assert_called_once()
+
 
 class TestPollOnce:
     @patch("relay_core.poller_engine.notify")

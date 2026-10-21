@@ -198,6 +198,33 @@ def _prefix_ids(relay_name: str, fills: list[Fill]) -> set[str]:
 
 # ── Dispatch helpers (blocking IO — run in asyncio.to_thread) ────────
 
+def _fill_epochs(
+    relay_name: RelayName, fills: list[Fill], aliases: dict[str, list[str]],
+) -> dict[str, int]:
+    """Map each fill's relay-prefixed exec id (and alias keys) to its epoch time.
+
+    Stored with the dedup rows so the poller can check its own timestamps
+    for the same executions (``dedup.get_fill_times``). A fill whose
+    timestamp cannot be read is left out: this runs on the notify/mark
+    path and must never raise.
+    """
+    epochs: dict[str, int] = {}
+    for f in fills:
+        try:
+            epoch = to_epoch(f.timestamp)
+        except ValueError:
+            log.warning(
+                "[%s] Cannot record the fill time of execId=%s (%r)",
+                relay_name, f.execId, f.timestamp,
+            )
+            continue
+        if not epoch:  # to_epoch("") is 0 — no time to record
+            continue
+        for key in (f.execId, *aliases.get(f.execId, [])):
+            epochs[f"{relay_name}:{key}"] = epoch
+    return epochs
+
+
 def _send_and_mark(
     relay_name: RelayName,
     fills: list[Fill],
@@ -311,6 +338,9 @@ def _send_and_mark(
         # are registered in the in-flight registry — a concurrent poll
         # cycle defers them instead of sending a duplicate webhook.
         payload = WebhookPayloadTrades(relay=relay_name, data=trades, errors=all_errors)
+        # Fill times for the poller's timestamp cross-check — computed
+        # before notify so a bad timestamp cannot break the mark below.
+        fill_epochs = _fill_epochs(relay_name, new_fills, aliases)
         in_flight_orders = {t.orderId for t in trades}
         INFLIGHT_ORDERS.register(relay_name, in_flight_orders)
         try:
@@ -336,7 +366,7 @@ def _send_and_mark(
                     for eid in t.execIds
                     for key in (eid, *(alias_fn(eid) if alias_fn else []))
                 ]
-                mark_processed_batch_with_orders(conn, items)
+                mark_processed_batch_with_orders(conn, items, fill_epochs)
                 fill_count = sum(len(t.execIds) for t in trades)
                 log.info("Marked %d fill(s) as processed", fill_count)
             if bt_keys:
