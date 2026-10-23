@@ -902,6 +902,8 @@ To add Kraken as a relay:
 
 The Kraken poller calls the `TradesHistory` REST endpoint at the configured interval (default: 600s). Override with `KRAKEN_POLL_INTERVAL` in `.env.relays`.
 
+> **Errors that need action.** Kraken errors no retry can fix send an immediate "needs action" [outage alert](#operational-alerts) and pause the poller for 2 hours between attempts: `EAPI:Invalid key`, `EAPI:Invalid signature`, `EGeneral:Permission denied` (the key lacks *Query Closed Orders & Trades* / *Query Funds*), `EAccount:Invalid permissions`, `EAuth:Account temporary disabled`, `EAuth:Account unconfirmed`, `EGeneral:Temporary lockout` (repeated invalid-key requests), and `EGeneral:Invalid arguments` / `ETrade:Invalid request` (a malformed request — please report it). Maintenance (`EService:*`), internal errors, rate limits and `EAPI:Invalid nonce` are treated as transient and alert after `OUTAGE_ALERT_MINUTES`. The listener stops on the credential errors in that list instead of reconnecting.
+
 ### Kraken real-time listener
 
 Enable the WebSocket v2 listener for near-instant fill delivery:

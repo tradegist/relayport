@@ -10,6 +10,8 @@ from unittest.mock import MagicMock, patch
 import httpx
 
 from relay_core import (
+    FatalListenerError,
+    FetchConfigError,
     FetchError,
     OnMessageResult,
     get_debounce_ms,
@@ -17,6 +19,7 @@ from relay_core import (
     is_listener_enabled,
 )
 from relays.kraken import (
+    _build_connect,
     _build_fetch,
     _build_listener_config,
     _build_parse,
@@ -32,6 +35,7 @@ from relays.kraken import (
 from shared import BuySell
 
 from .kraken_types import KrakenRestTrade
+from .rest_client import KrakenAPIError
 
 # ── Env var setup ─────────────────────────────────────────────────────────────
 
@@ -687,6 +691,36 @@ class TestBuildFetchPagination(unittest.TestCase):
         with self.assertRaisesRegex(FetchError, "502 Bad Gateway"):
             fetch()
 
+    def test_needs_action_errors_raise_config_error(self) -> None:
+        for code in (
+            "EAPI:Invalid key", "EAPI:Invalid signature", "EGeneral:Permission denied",
+            "EAccount:Invalid permissions", "EAuth:Account temporary disabled",
+            "EAuth:Account unconfirmed", "EGeneral:Temporary lockout",
+            "EGeneral:Invalid arguments:Index unavailable", "ETrade:Invalid request",
+        ):
+            with self.subTest(code=code):
+                client = MagicMock()
+                client.get_trades_history = MagicMock(
+                    side_effect=KrakenAPIError("/0/private/TradesHistory", [code]),
+                )
+                with self.assertRaises(FetchConfigError) as ctx:
+                    _build_fetch(client, lookback_days=30)()
+                self.assertIn(code, str(ctx.exception))
+
+    def test_transient_api_errors_are_not_config_errors(self) -> None:
+        for code in (
+            "EService:Unavailable", "EService:Deadline elapsed", "EGeneral:Internal error",
+            "EAPI:Rate limit exceeded", "EAuth:Too many requests", "EAPI:Invalid nonce",
+        ):
+            with self.subTest(code=code):
+                client = MagicMock()
+                client.get_trades_history = MagicMock(
+                    side_effect=KrakenAPIError("/0/private/TradesHistory", [code]),
+                )
+                with self.assertRaises(FetchError) as ctx:
+                    _build_fetch(client, lookback_days=30)()
+                self.assertNotIsInstance(ctx.exception, FetchConfigError)
+
     def test_unexpected_exception_propagates(self) -> None:
         """Programming errors keep their type (and traceback) — not a broker outage."""
         client = MagicMock()
@@ -757,3 +791,26 @@ class TestBuildFetchLookback(unittest.TestCase):
 
         expected_start = call_time - days * 86400
         client.get_trades_history.assert_called_once_with(start=expected_start, ofs=0)
+
+
+class TestConnectRejectedKey(unittest.IsolatedAsyncioTestCase):
+    """The listener stops (instead of reconnecting forever) on a rejected key."""
+
+    async def test_credential_error_is_fatal(self) -> None:
+        for code in ("EAPI:Invalid key", "EAPI:Invalid signature", "EGeneral:Permission denied"):
+            with self.subTest(code=code):
+                client = MagicMock()
+                client.get_ws_token = MagicMock(
+                    side_effect=KrakenAPIError("/0/private/GetWebSocketsToken", [code]),
+                )
+                with self.assertRaises(FatalListenerError) as ctx:
+                    await _build_connect(client)(MagicMock())
+                self.assertIn(code, str(ctx.exception))
+
+    async def test_transient_error_is_reraised_for_reconnect(self) -> None:
+        client = MagicMock()
+        client.get_ws_token = MagicMock(
+            side_effect=KrakenAPIError("/0/private/GetWebSocketsToken", ["EService:Unavailable"]),
+        )
+        with self.assertRaises(KrakenAPIError):
+            await _build_connect(client)(MagicMock())

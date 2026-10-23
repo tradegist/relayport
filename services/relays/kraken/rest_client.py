@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 import urllib.parse
+from collections.abc import Iterable
 from typing import Any
 
 import httpx
@@ -14,6 +15,28 @@ import httpx
 log = logging.getLogger(__name__)
 
 _BASE_URL = "https://api.kraken.com"
+
+
+class KrakenAPIError(RuntimeError):
+    """Kraken answered with error codes in its ``error`` array.
+
+    *errors* holds them verbatim (``"EAPI:Invalid key"``,
+    ``"EGeneral:Invalid arguments:Index unavailable"``) so callers classify
+    by code rather than by parsing the message. A RuntimeError subclass, so
+    handlers written before it existed still catch it.
+    """
+
+    def __init__(self, urlpath: str, errors: list[str]) -> None:
+        super().__init__(f"Kraken API error on {urlpath}: {errors}")
+        self.errors = errors
+
+    def has_any(self, codes: Iterable[str]) -> bool:
+        """True when any returned error is one of *codes*, ignoring trailing detail."""
+        return any(
+            error == code or error.startswith(f"{code}:")
+            for error in self.errors
+            for code in codes
+        )
 
 
 class KrakenClient:
@@ -93,7 +116,7 @@ class KrakenClient:
 
         errors = body.get("error", [])
         if errors:
-            raise RuntimeError(f"Kraken API error on {urlpath}: {errors}")
+            raise KrakenAPIError(urlpath, [str(e) for e in errors])
 
         result = body.get("result", {})
         if not isinstance(result, dict):

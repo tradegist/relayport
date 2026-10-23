@@ -32,7 +32,7 @@ A regression here is invisible to mypy and to buy-only testing — the two IBKR 
 
 ## Fetch error convention
 
-A poller's `fetch` raises `relay_core.FetchError` on failure (never returns `None`), with a credential-free message naming the step and the broker's error. Raise the subclass `FetchConfigError` when the broker rejects the configuration itself (expired or invalid credentials, invalid query, IP restriction): the poller then alerts the operator on the first failure instead of after `OUTAGE_ALERT_MINUTES`. Classify from the broker's documented error codes, not message text — IBKR keeps its list in `_NEEDS_ACTION_CODES` (`flex_fetch.py`). Kraken does not classify yet: all its fetch failures wait for the threshold.
+A poller's `fetch` raises `relay_core.FetchError` on failure (never returns `None`), with a credential-free message naming the step and the broker's error. Raise the subclass `FetchConfigError` when the broker rejects the configuration itself (expired or invalid credentials, invalid query, IP restriction): the poller then alerts the operator on the first failure instead of after `OUTAGE_ALERT_MINUTES`. Classify from the broker's documented error codes, not message text — IBKR keeps its list in `_NEEDS_ACTION_CODES` (`flex_fetch.py`), Kraken in `_NEEDS_ACTION_ERRORS` (`relays/kraken/__init__.py`).
 
 ## Fee normalisation convention
 

@@ -5,7 +5,7 @@ import unittest
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from .rest_client import KrakenClient
+from .rest_client import KrakenAPIError, KrakenClient
 
 # base64.b64encode(b"test-secret") -> "dGVzdC1zZWNyZXQ="
 _KEY = "test-api-key"
@@ -156,3 +156,30 @@ class TestRequestSerialization(unittest.TestCase):
                 "nonces must be strictly increasing in the order httpx.post receives them",
             )
             self.assertEqual(max_concurrent_in_post, 1, "serialization must hold throughout")
+
+
+class TestKrakenAPIError(unittest.TestCase):
+    def _post_returning(self, body: dict[str, Any]) -> MagicMock:
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.status_code = 200
+        resp.json.return_value = body
+        return resp
+
+    def test_error_array_raises_with_codes(self) -> None:
+        client = _make_client()
+        body = {"error": ["EAPI:Invalid key"], "result": {}}
+        with patch(
+            "relays.kraken.rest_client.httpx.post", return_value=self._post_returning(body),
+        ), self.assertRaises(KrakenAPIError) as ctx:
+            client._request("/0/private/TradesHistory")
+        self.assertEqual(ctx.exception.errors, ["EAPI:Invalid key"])
+        self.assertIn("Kraken API error on /0/private/TradesHistory", str(ctx.exception))
+        # Still a RuntimeError for handlers written before the subclass.
+        self.assertIsInstance(ctx.exception, RuntimeError)
+
+    def test_has_any_matches_code_and_detail_suffix(self) -> None:
+        exc = KrakenAPIError("/x", ["EGeneral:Invalid arguments:Index unavailable"])
+        self.assertTrue(exc.has_any({"EGeneral:Invalid arguments"}))
+        self.assertFalse(exc.has_any({"EGeneral:Invalid"}))
+        self.assertFalse(exc.has_any({"EAPI:Invalid key"}))
