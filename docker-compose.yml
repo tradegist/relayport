@@ -41,6 +41,9 @@ services:
     volumes:
       - dedup-data:/data/dedup
       - relay-meta:/data/meta
+      # Fill audit log (relay_core/notifier/audit.py) — a named volume so the
+      # 30-day history survives deploys, which recreate the container.
+      - relay-logs:/data/logs
 
   market_data:
     build:
@@ -76,6 +79,7 @@ services:
 volumes:
   dedup-data:
   relay-meta:
+  relay-logs:
   caddy-data:
   caddy-config:
 

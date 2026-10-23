@@ -15,7 +15,7 @@ from . import BrokerRelay, StartupContext
 from .alerter import send_alert
 from .context import init_relays
 from .dedup import get_retention_days
-from .health import OutageAlert, OutageTracker
+from .health import OutageAlert, OutageTracker, format_duration
 from .listener_engine import start_listener
 from .notifier import NotificationError
 from .poller_engine import (
@@ -29,6 +29,13 @@ from .registry import load_relays
 from .routes import start_api_server
 
 log = logging.getLogger("relays")
+
+# After a fetch the broker rejected outright (FetchConfigError: expired
+# token, invalid query), wait this long instead of the poll interval. More
+# failed attempts cannot succeed and can arm broker lockouts — IBKR answers
+# [1025] after ~10 consecutive failures, which then masks a fixed token.
+# A redeploy with the fix restarts the poller immediately.
+NEEDS_ACTION_PAUSE_S = 2 * 3600
 
 
 def configure_logging() -> None:
@@ -68,6 +75,7 @@ async def _poll_loop(
 
     while True:
         alert: OutageAlert | None
+        delay = config.interval
         try:
             async with poll_lock:
                 await asyncio.to_thread(
@@ -77,8 +85,17 @@ async def _poll_loop(
                 )
         except FetchError as exc:
             relay_log.error("Poll fetch failed: %s", exc)
+            needs_action = isinstance(exc, FetchConfigError)
+            if needs_action:
+                delay = max(config.interval, NEEDS_ACTION_PAUSE_S)
+                relay_log.warning(
+                    "Broker rejected the configuration — pausing this poller for %s"
+                    " (redeploy with the fix to resume at once)",
+                    format_duration(delay),
+                )
             alert = outage.record_failure(
-                str(exc), needs_action=isinstance(exc, FetchConfigError),
+                str(exc), needs_action=needs_action,
+                retry_in_s=delay if needs_action else None,
             )
         except NotificationError:
             # The broker fetch worked — delivery failures are alerted by
@@ -99,8 +116,8 @@ async def _poll_loop(
                 send_alert, subject=alert.subject, body=alert.body, key=alert.key,
             )
 
-        relay_log.debug("Next poll in %ds", config.interval)
-        await asyncio.sleep(config.interval)
+        relay_log.debug("Next poll in %ds", delay)
+        await asyncio.sleep(delay)
 
 
 async def _run_listener(relay: BrokerRelay) -> None:

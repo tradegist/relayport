@@ -1,4 +1,4 @@
-"""Fill audit logger — rotating JSONL file with 7-day retention.
+"""Fill audit logger — rotating JSONL file with 30-day retention.
 
 Writes two event types:
   fills_received  — individual fills before dedup/aggregation (listener + poller)
@@ -8,7 +8,9 @@ Enabled automatically when /data/logs/ is writable; disabled with a
 warning when the directory or log file cannot be created (e.g. unit-test
 environments or read-only mounts).
 
-Override the log path via FILL_AUDIT_LOG_PATH env var.
+Override the log path via FILL_AUDIT_LOG_PATH env var. In production the
+default directory is the ``relay-logs`` named volume, so the history
+survives container recreation (every deploy).
 """
 
 import functools
@@ -27,7 +29,8 @@ from shared import Fill
 _module_log = logging.getLogger(__name__)
 
 _DEFAULT_PATH = "/data/logs/fills_audit.jsonl"
-_BACKUP_COUNT = 7
+# Daily files kept after rotation — the audit history spans ~30 days.
+_BACKUP_COUNT = 30
 
 
 def _get_path() -> str:
@@ -70,7 +73,7 @@ def _init() -> logging.Logger | None:
             return None
         handler.setFormatter(logging.Formatter("%(message)s"))
         logger.addHandler(handler)
-        _module_log.info("Fill audit log: %s (7-day rotation)", path)
+        _module_log.info("Fill audit log: %s (%d-day retention)", path, _BACKUP_COUNT)
 
     return logger
 

@@ -64,8 +64,13 @@ def format_duration(seconds: float) -> str:
     return f"{minutes}m"
 
 
-def _reminder_cadence() -> str:
-    """How often reminders arrive — ``send_alert``'s cooldown sets the pace."""
+def _reminder_cadence(retry_in_s: int | None = None) -> str:
+    """How often reminders arrive.
+
+    A reminder needs a failed check *and* an expired ``send_alert``
+    cooldown, so the slower of the two sets the pace: the cooldown, or
+    *retry_in_s* when the caller checks less often than that.
+    """
     try:
         minutes = get_cooldown_minutes()
     except SystemExit as exc:
@@ -73,9 +78,22 @@ def _reminder_cadence() -> str:
         # why), so this text never reaches anyone — any wording will do.
         log.debug("Cannot render the reminder cadence: %s", exc)
         return "periodically"
+    if retry_in_s is not None and retry_in_s > minutes * 60:
+        return f"about every {format_duration(retry_in_s)}"
     if minutes == 0:
         return "on every failed check"
     return f"about every {minutes} minute{'' if minutes == 1 else 's'}"
+
+
+def _pause_note(retry_in_s: int | None) -> str:
+    """Paragraph explaining a slowed-down retry, or "" when there is none."""
+    if retry_in_s is None:
+        return ""
+    return (
+        f"To avoid triggering a broker lockout with repeated failed attempts, "
+        f"it now retries only every {format_duration(retry_in_s)}. Redeploying "
+        f"with a fixed configuration restarts it at once.\n\n"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,13 +132,18 @@ class OutageTracker:
         self._alerted = False
 
     def record_failure(
-        self, reason: str, *, needs_action: bool = False,
+        self, reason: str, *, needs_action: bool = False, retry_in_s: int | None = None,
     ) -> OutageAlert | None:
         """Count a failed check; return an alert once the streak is long enough.
 
         *needs_action* marks a failure no retry can fix (expired token,
         invalid query): it alerts at once instead of after ``alert_after_s``,
         unless outage alerts are disabled (``alert_after_s == 0``).
+
+        *retry_in_s* is how long the caller waits before checking again,
+        when that differs from its usual interval (the poller pauses after
+        a needs-action failure); the email states it and paces the
+        reminder cadence it promises accordingly.
 
         *reason* goes into the email verbatim — it must not contain
         secrets, account ids or raw payloads.
@@ -156,8 +179,9 @@ class OutageTracker:
                     f"(e.g. renew the API token) and redeploy. Failing since "
                     f"{since} ({failures} failed check{'' if failures == 1 else 's'}"
                     f" in a row).\n\n"
+                    f"{_pause_note(retry_in_s)}"
                     f"Fills that depend on it are not being relayed until it "
-                    f"recovers. You will get a reminder {_reminder_cadence()} "
+                    f"recovers. You will get a reminder {_reminder_cadence(retry_in_s)} "
                     f"while it keeps failing, and an email when it recovers.\n"
                 ),
                 key=self._key,
