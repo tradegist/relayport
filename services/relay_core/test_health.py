@@ -181,6 +181,29 @@ class TestOutageTracker:
         assert "Retrying will not fix this" in alert.body
         assert "(1 failed check in a row)" in alert.body
 
+    def test_needs_action_with_pause_states_it_and_paces_reminders(self) -> None:
+        tracker, _ = _tracker(alert_after_s=900)
+        with patch.dict(os.environ, {}, clear=True):  # default 60-minute cooldown
+            alert = tracker.record_failure("expired", needs_action=True, retry_in_s=7200)
+        assert alert is not None
+        assert "it now retries only every 2h 00m" in alert.body
+        assert "You will get a reminder about every 2h 00m" in alert.body
+
+    def test_needs_action_without_pause_keeps_cooldown_cadence(self) -> None:
+        tracker, _ = _tracker(alert_after_s=900)
+        with patch.dict(os.environ, {}, clear=True):
+            alert = tracker.record_failure("expired", needs_action=True)
+        assert alert is not None
+        assert "retries only every" not in alert.body
+        assert "You will get a reminder about every 60 minutes" in alert.body
+
+    def test_retry_shorter_than_cooldown_keeps_cooldown_cadence(self) -> None:
+        tracker, _ = _tracker(alert_after_s=900)
+        with patch.dict(os.environ, {}, clear=True):
+            alert = tracker.record_failure("expired", needs_action=True, retry_in_s=600)
+        assert alert is not None
+        assert "You will get a reminder about every 60 minutes" in alert.body
+
     def test_needs_action_keeps_alerting_with_same_key(self) -> None:
         """Reminders share the key, so send_alert's cooldown throttles them."""
         tracker, clock = _tracker(alert_after_s=900)

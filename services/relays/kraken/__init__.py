@@ -19,6 +19,7 @@ from relay_core import (
     BaseNotifier,
     BrokerRelay,
     FatalListenerError,
+    FetchConfigError,
     FetchError,
     ListenerConfig,
     OnMessageResult,
@@ -35,7 +36,7 @@ from shared import BuySell, Fill
 
 from .currency import resolve_fx_currency
 from .kraken_types import KrakenRestTrade, KrakenWsMessage
-from .rest_client import KrakenClient
+from .rest_client import KrakenAPIError, KrakenClient
 from .ws_parser import normalize_order_type, parse_executions
 
 log = logging.getLogger("relays.kraken")
@@ -115,11 +116,38 @@ def _parse_rest_trade(txid: str, data: KrakenRestTrade) -> Fill:
     )
 
 
+# Kraken error codes no retry can fix: the API key is invalid, wrongly
+# signed or under-privileged, or the account is disabled or unconfirmed.
+# The listener stops on these (FatalListenerError); the poller raises
+# FetchConfigError, which alerts at once and pauses retries.
+# Reference: docs.kraken.com/api/docs/guides/spot-errors
+_CREDENTIAL_ERRORS = frozenset({
+    "EAPI:Invalid key",
+    "EAPI:Invalid signature",
+    "EGeneral:Permission denied",
+    "EAccount:Invalid permissions",
+    "EAuth:Account temporary disabled",
+    "EAuth:Account unconfirmed",
+})
+
+# Poller-side additions. "Temporary lockout" is Kraken's answer to repeated
+# invalid-key requests — the key needs fixing first. "Invalid arguments" /
+# "Invalid request" mean the relay built a bad request (a bug): retrying the
+# same request cannot succeed. Everything else (EService:*, EGeneral:Internal
+# error, rate limits, EAPI:Invalid nonce, HTTP/network errors) is transient.
+_NEEDS_ACTION_ERRORS = _CREDENTIAL_ERRORS | {
+    "EGeneral:Temporary lockout",
+    "EGeneral:Invalid arguments",
+    "ETrade:Invalid request",
+}
+
+
 def _build_fetch(client: KrakenClient, lookback_days: int) -> Callable[[], str]:
     """Return a fetch callable for the generic poller engine.
 
-    Returns a JSON string of the raw trades dict; raises ``FetchError``
-    on any API, network or response-shape failure.
+    Returns a JSON string of the raw trades dict. Raises
+    ``FetchConfigError`` for the errors in ``_NEEDS_ACTION_ERRORS`` and
+    ``FetchError`` on any other API, network or response-shape failure.
     """
 
     def fetch() -> str:
@@ -166,9 +194,12 @@ def _build_fetch(client: KrakenClient, lookback_days: int) -> Callable[[], str]:
                     "count": total_count if total_count is not None else len(all_trades),
                 }
             )
-        except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+        except KrakenAPIError as exc:
             # Credentials travel in headers, never in the URL, so the
             # message is safe to log and to email.
+            error_type = FetchConfigError if exc.has_any(_NEEDS_ACTION_ERRORS) else FetchError
+            raise error_type(f"Kraken TradesHistory fetch failed: {exc}") from exc
+        except (httpx.HTTPError, RuntimeError, ValueError) as exc:
             raise FetchError(f"Kraken TradesHistory fetch failed: {exc}") from exc
 
     return fetch
@@ -328,10 +359,12 @@ def _build_connect(client: KrakenClient) -> Callable[[aiohttp.ClientSession], Aw
         import asyncio
         try:
             token = await asyncio.to_thread(client.get_ws_token)
-        except RuntimeError as exc:
-            if "Permission denied" in str(exc):
+        except KrakenAPIError as exc:
+            # Reconnecting cannot fix a rejected key — stop (and alert) instead.
+            if exc.has_any(_CREDENTIAL_ERRORS):
                 raise FatalListenerError(
-                    f"Kraken API key lacks permission — check key scopes: {exc}"
+                    f"Kraken rejected the API key — check the key, its secret and"
+                    f" its permissions: {exc}"
                 ) from exc
             raise
 
